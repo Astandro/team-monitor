@@ -14,7 +14,7 @@ export function parseArgs(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (parseTeamArg(arg, argv[i + 1], team)) {
-      if (arg !== '--remote') i++
+      if (arg !== '--remote' && arg !== '--ingest') i++
     } else if ((arg === '--port' || arg === '-p') && argv[i + 1]) {
       const n = parseInt(argv[i + 1], 10)
       if (!isNaN(n) && n > 0 && n < 65536) port = n
@@ -39,13 +39,14 @@ Team monitor:
   --bind <mode>        With --remote: "tailscale" (Tailscale IPv4) or "loopback" (behind tailscale serve)
   --host-allow <name>  With --remote: extra accepted Host name (repeatable)
   --tailscale-bin <p>  Path to the tailscale CLI
+  --ingest             Hub intake for cloud sessions on /api/ingest (token in ~/.team-monitor/ingest-token)
   wait-answer ...      Wait for a decision answer or a chat message (see docs/coordinator.md)
   ask ...              Add an open decision D<n> to state.json, optionally --wait for it
 
 Setup (see docs/setup.md):
   project add <path> [--name <n>] | project remove <id> | project list
-  service install [--port <n>] [--remote --bind loopback] [--host-allow <name>] | service status|restart|uninstall
-  doctor               Check build, service, projects, tailscale serve, token, hooks (exit 0 = all good)
+  service install [--port <n>] [--remote --bind loopback] [--host-allow <name>] [--ingest] | service status|restart|uninstall
+  doctor [--ingest]    Check build, service, projects, tailscale serve/funnel, tokens, hooks (exit 0 = all good)
 `)
       process.exit(0)
     }
@@ -57,6 +58,7 @@ Setup (see docs/setup.md):
 /** Team monitor flags. True when `arg` was one of them (`next` is consumed, except for --remote). */
 export function parseTeamArg(arg: string, next: string | undefined, team: TeamCliOptions): boolean {
   if (arg === '--remote') { team.remote = true; return true }
+  if (arg === '--ingest') { team.ingest = true; return true }
   if (next === undefined) return false
   if (arg === '--project') { team.projects.push(next); return true }
   if (arg === '--bind') { team.bind = next; return true }

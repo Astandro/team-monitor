@@ -6,6 +6,7 @@ import type * as http from 'http'
 import { LoginLimiter, loadOrCreateToken, SessionStore } from './auth'
 import { buildRegistry, ensureHome, readAutoOffboardMinutes, readConfigProjects, teamHome } from './config'
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
+import { INGEST_TOKEN_FILE, IngestService } from './ingest'
 import { OffboardStore } from './offboard'
 import { defaultTailscaleBin, makeTailscaleRunner, resolveRemoteConfig, TailscaleRunner } from './remote'
 
@@ -15,11 +16,15 @@ export interface TeamCliOptions {
   bind?: string
   hostAllow: string[]
   tailscaleBin?: string
+  /** Hub intake for cloud sources (`--ingest`); off by default. */
+  ingest?: boolean
 }
 
 export interface TeamSetup {
   team: TeamService
   remote: RemoteAccess | null
+  /** Hub intake (`--ingest`), or null when off. server.ts attaches the relay to it. */
+  ingest: IngestService | null
   /** Address to listen on: 127.0.0.1, or the Tailscale IPv4 in remote mode. */
   listenHost: string
   /** Token file path when the token was created in this run, else null. */
@@ -72,12 +77,29 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
   team.autoOffboardMinutes = readAutoOffboardMinutes(home, warn)
   if (projects.length) log(`Team projects: ${projects.map((p) => p.id).join(', ')}`)
 
+  let ingest: IngestService | null = null
+  if (opts.ingest) {
+    const tok = loadOrCreateToken(home, INGEST_TOKEN_FILE)
+    if (tok.created) {
+      log(`Ingest token for cloud sources (shown only this once, saved in ${tok.file}):\n\n  ${tok.token}\n`)
+      log('Save it as the network secret of the cloud environment. To see it again later, read that file on this machine.\n')
+    }
+    const service = new IngestService({ home, token: tok.token, team, log: warn })
+    const { removed, restored } = service.start()
+    if (removed.length) log(`Removed ${removed.length} cloud mirror(s) idle for more than 7 days: ${removed.join(', ')}`)
+    if (restored.length) log(`Cloud sources (stale until they report): ${restored.join(', ')}`)
+    log('Hub intake on: /api/ingest/v1/* (ingest token required).')
+    team.onDispose(() => service.dispose())
+    ingest = service
+  }
+
   return {
     team,
     remote,
+    ingest,
     listenHost,
     tokenFile,
-    createHandler: (fallback) => createRequestHandler({ team, remote, fallback }),
+    createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest }),
     dispose: () => team.dispose(),
   }
 }

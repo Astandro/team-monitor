@@ -34,6 +34,24 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
    `tailscale serve` mapping (prints the exact command if missing; `--https-port <p>` if not 8443), token file
    0600, hooks. Exit 0 = all good. It changes nothing.
 
+## Hub intake for cloud sessions (`--ingest`)
+
+Off by default. With `--ingest` (also `tm service install ... --ingest`, which writes the flag into the service) the
+monitor accepts relay messages and team state from cloud containers on `/api/ingest/v1/*` and shows them as cloud
+sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; the hub side in short:
+
+- Token: `~/.team-monitor/ingest-token` (64 hex, 0600), created at the first start with `--ingest` and printed only
+  then. Every ingest request needs `Authorization: Bearer <it>`, also from loopback. The login token and the
+  session cookie do not open ingest routes; the ingest token opens nothing else. Wrong tokens: 401, then 429.
+- Routes: `POST /api/ingest/v1/events` (512 KB, 500 messages), `PUT /api/ingest/v1/state` (1 MB),
+  `GET /api/ingest/v1/outbox?sourceId=&after=&wait=0-25` (long poll for answers and chat messages).
+- Mirrors: `~/.team-monitor/remote/<sourceId>/.agent-team/`, registered at runtime as project `cloud-<sourceId>`
+  (never written to `config.json`). A source silent for 60 s is `stale`; mirrors idle for 7 days are removed at start.
+- Funnel: expose only `/api/ingest`, on a port the UI does not use:
+  `tailscale funnel --bg --https=443 --set-path /api/ingest http://127.0.0.1:3002/api/ingest`. The UI and login
+  stay on `tailscale serve` (8443, tailnet only). `tm doctor` (or `tm doctor --ingest` without a service) checks the
+  token file and the Funnel mapping, and fails if Funnel would also make the UI public.
+
 ## Service commands
 
 | Command | What it does |

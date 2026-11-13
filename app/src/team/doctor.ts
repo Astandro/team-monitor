@@ -20,6 +20,10 @@ export interface DoctorDeps extends ServiceDeps {
   /** ~/.claude/settings.json (read only). */
   settingsFile?: string
   httpsPort?: number
+  /** Run the hub intake checks even when the installed service has no --ingest (`doctor --ingest`). */
+  ingest?: boolean
+  /** Monitor port for the intake checks when no service is installed (`doctor --port`). */
+  port?: number
 }
 
 const DEFAULT_HTTPS_PORT = 8443
@@ -43,6 +47,76 @@ export function serveMappings(statusJson: string, port: number): string[] {
   }
   walk(data, null)
   return [...found]
+}
+
+export const INGEST_MOUNT = '/api/ingest'
+const FUNNEL_PORTS = [443, 8443, 10000]
+
+export interface FunnelEntry {
+  /** `<host>:<https port>` key of the serve config. */
+  hostPort: string
+  /** AllowFunnel is on for it (public internet). */
+  funnel: boolean
+  /** It has a /api/ingest handler proxying to this monitor. */
+  ingest: boolean
+  /** Its other mount paths (anything else on a Funnel port is public too). */
+  others: string[]
+}
+
+/** Per https host:port of `tailscale serve status --json`: Funnel on or off, the ingest mount, other mounts. */
+export function funnelEntries(statusJson: string, port: number): FunnelEntry[] {
+  let data: { Web?: Record<string, { Handlers?: Record<string, { Proxy?: unknown }> }>; AllowFunnel?: Record<string, unknown> }
+  try { data = JSON.parse(statusJson) } catch { return [] }
+  if (!data || typeof data !== 'object') return []
+  const targetRe = new RegExp(`^(?:https?://)?(?:127\\.0\\.0\\.1|localhost):${port}(?:/api/ingest)?/?$`)
+  const out: FunnelEntry[] = []
+  for (const [hostPort, web] of Object.entries(data.Web ?? {})) {
+    const handlers = web && typeof web === 'object' && web.Handlers && typeof web.Handlers === 'object' ? web.Handlers : {}
+    let ingest = false
+    const others: string[] = []
+    for (const [mount, h] of Object.entries(handlers)) {
+      const proxy = h && typeof h.Proxy === 'string' ? h.Proxy.trim() : ''
+      if (mount.replace(/\/$/, '') === INGEST_MOUNT && targetRe.test(proxy)) ingest = true
+      else others.push(mount)
+    }
+    out.push({ hostPort, funnel: data.AllowFunnel?.[hostPort] === true, ingest, others })
+  }
+  return out
+}
+
+/** Doctor checks for the hub intake: ingest token file 0600, and a Funnel mapping that exposes only /api/ingest. */
+export function ingestChecks(home: string, port: number, uiHttpsPort: number, bin: string, run: TailscaleRunner): Check[] {
+  const checks: Check[] = []
+  const tokenFile = path.join(home, 'ingest-token')
+  const m = modeOf(tokenFile)
+  if (m === null) checks.push({ level: 'fail', what: `ingest token file ${tokenFile} missing`, fix: 'it is created when the monitor starts with --ingest: team-monitor service restart' })
+  else if ((m & 0o077) !== 0) checks.push({ level: 'fail', what: `ingest token file is ${m.toString(8)}, should be 600`, fix: `chmod 600 "${tokenFile}"` })
+  else checks.push({ level: 'ok', what: 'ingest token file is 600' })
+
+  const funnelPort = FUNNEL_PORTS.find((p) => p !== uiHttpsPort) ?? 10000
+  const quoted = bin.includes(' ') ? `"${bin}"` : bin
+  const cmd = `${quoted} funnel --bg --https=${funnelPort} --set-path ${INGEST_MOUNT} http://127.0.0.1:${port}${INGEST_MOUNT}`
+  let entries: FunnelEntry[]
+  try {
+    entries = funnelEntries(run(['serve', 'status', '--json']), port)
+  } catch (e) {
+    checks.push({ level: 'fail', what: `cannot read tailscale serve status (${(e as Error).message.split('\n')[0]})`, fix: `is Tailscale up? then: ${cmd}` })
+    return checks
+  }
+  const exposed = entries.filter((e) => e.funnel && e.ingest)
+  if (!exposed.length) {
+    checks.push({ level: 'fail', what: `no tailscale funnel mapping for ${INGEST_MOUNT} to 127.0.0.1:${port}`, fix: cmd })
+  } else {
+    checks.push({ level: 'ok', what: `tailscale funnel exposes ${INGEST_MOUNT} on ${exposed.map((e) => e.hostPort).join(', ')}` })
+  }
+  for (const e of entries.filter((x) => x.funnel && x.others.length)) {
+    checks.push({
+      level: 'fail',
+      what: `tailscale funnel makes ${e.others.join(', ')} on ${e.hostPort} public (the UI and login must stay tailnet-only)`,
+      fix: `serve the UI on a port without Funnel (e.g. "${quoted} serve --bg --https=${uiHttpsPort} http://127.0.0.1:${port}") and keep only ${INGEST_MOUNT} on the Funnel port`,
+    })
+  }
+  return checks
 }
 
 /** The `ask-hook.js` path inside a hook command (quoted or not), or null. */
@@ -178,7 +252,14 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<Check[]> {
     else checks.push({ level: 'ok', what: 'token file is 600' })
   }
 
-  // 8. Claude Code hooks (read only).
+  // 8. Hub intake (--ingest on the service, or doctor --ingest): token file and the Funnel mapping.
+  if (record?.ingest || deps.ingest) {
+    const port = record?.port ?? deps.port ?? 3002
+    const bin = record?.tailscaleBin || defaultTailscaleBin(env)
+    checks.push(...ingestChecks(home, port, deps.httpsPort ?? DEFAULT_HTTPS_PORT, bin, deps.runTailscale ?? makeTailscaleRunner(bin)))
+  }
+
+  // 9. Claude Code hooks (read only).
   checks.push(...checkHooks(deps.settingsFile ?? path.join(homedir, '.claude', 'settings.json')))
   return checks
 }
@@ -187,15 +268,22 @@ export async function runDoctorCli(argv: string[], deps: DoctorDeps = {}): Promi
   const out = deps.out ?? console.log
   const err = deps.err ?? console.error
   let httpsPort = deps.httpsPort
+  let ingest = deps.ingest
+  let port = deps.port
+  const portArg = (v: string | undefined) => /^\d+$/.test(v ?? '') && Number(v) >= 1 && Number(v) <= 65535
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--https-port' && /^\d+$/.test(argv[i + 1] ?? '') && Number(argv[i + 1]) <= 65535) {
+    if (argv[i] === '--https-port' && portArg(argv[i + 1])) {
       httpsPort = Number(argv[++i])
+    } else if (argv[i] === '--port' && portArg(argv[i + 1])) {
+      port = Number(argv[++i])
+    } else if (argv[i] === '--ingest') {
+      ingest = true
     } else {
-      err('Usage: team-monitor doctor [--https-port <port for tailscale serve, default 8443>]')
+      err('Usage: team-monitor doctor [--https-port <port for tailscale serve, default 8443>] [--ingest [--port <monitor port>]]')
       return 2
     }
   }
-  const checks = await runDoctor({ ...deps, httpsPort })
+  const checks = await runDoctor({ ...deps, httpsPort, ingest, port })
   for (const c of checks) {
     out(`${c.level === 'ok' ? 'OK  ' : c.level === 'warn' ? 'WARN' : 'FAIL'}  ${c.what}`)
     if (c.fix && c.level !== 'ok') out(`      fix: ${c.fix}`)

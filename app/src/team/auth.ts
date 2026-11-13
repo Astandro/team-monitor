@@ -24,8 +24,8 @@ export interface TokenResult { token: string; created: boolean; file: string }
  * Load the token, creating it on first run. Tightens wider permissions to 0600
  * and refuses (throws TokenError) when that is not possible.
  */
-export function loadOrCreateToken(home: string): TokenResult {
-  const file = path.join(home, 'token')
+export function loadOrCreateToken(home: string, fileName = 'token'): TokenResult {
+  const file = path.join(home, fileName)
   let st: fs.Stats | null = null
   try { st = fs.lstatSync(file) } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new TokenError(`cannot read ${file}: ${(e as Error).message}`)

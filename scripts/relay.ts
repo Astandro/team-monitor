@@ -424,6 +424,129 @@ function scanForActiveSessions(targets: WatchedProject[]) {
   }
 }
 
+// ─── Cloud sessions (hub intake, `--ingest`) ────────────────────────────────
+
+/**
+ * A session received from a cloud container (a "source") through the hub intake. Its events go through the same
+ * buffer, offboarding and auto offboarding as a local session's; it is never watched on disk here.
+ */
+interface CloudSession {
+  id: string
+  sourceId: string
+  /** Hub registry id of the source's mirrored project. */
+  projectId: string
+  label: string
+  prompt?: string
+  coordinator?: CoordinatorInfo
+  status: 'active' | 'completed'
+  startTime: number
+  lastActivityTime: number
+}
+
+/** Messages the intake hands over, already shape-checked and capped by the caller (app/src/team/ingest.ts). */
+export type CloudMessage =
+  | { type: 'session-started'; session: { id: string; label: string; status: 'active' | 'completed'; startTime: number; lastActivityTime: number; prompt?: string; coordinator?: CoordinatorInfo } }
+  | { type: 'session-updated'; sessionId: string; label: string; prompt?: string; coordinator?: CoordinatorInfo }
+  | { type: 'session-ended'; sessionId: string }
+  | { type: 'agent-event'; event: AgentEvent & { sessionId: string } }
+  | { type: 'agent-event-batch'; events: Array<AgentEvent & { sessionId: string }> }
+
+/** Upper bound on cloud sessions kept in memory (each keeps up to MAX_EVENT_BUFFER events). */
+export const MAX_CLOUD_SESSIONS = 200
+
+const cloudSessions = new Map<string, CloudSession>()
+const staleSources = new Set<string>()
+
+function cloudView(s: CloudSession): SessionInfo {
+  return {
+    id: s.id, label: s.label, status: s.status, startTime: s.startTime, lastActivityTime: s.lastActivityTime,
+    projectId: s.projectId,
+    ...(s.prompt !== undefined ? { prompt: s.prompt } : {}),
+    ...(s.coordinator ? { coordinator: { ...s.coordinator } } : {}),
+    origin: 'cloud', sourceId: s.sourceId, stale: staleSources.has(s.sourceId),
+  }
+}
+
+function broadcastCloudUpdated(s: CloudSession) {
+  const { id, status: _status, startTime: _start, lastActivityTime: _last, ...rest } = cloudView(s)
+  broadcast(JSON.stringify({ type: 'session-updated', sessionId: id, ...rest }))
+}
+
+/**
+ * The cloud session `sessionId` of `sourceId`, created (and announced) on first sight. Null when the id belongs to
+ * a local session or to another source, or when the cap is reached: such messages are dropped.
+ */
+function claimCloudSession(sessionId: string, sourceId: string, projectId: string, now: number): CloudSession | null {
+  if (sessions.has(sessionId)) return null
+  const existing = cloudSessions.get(sessionId)
+  if (existing) return existing.sourceId === sourceId ? existing : null
+  if (cloudSessions.size >= MAX_CLOUD_SESSIONS) return null
+  const s: CloudSession = {
+    id: sessionId, sourceId, projectId, label: `Session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`,
+    status: 'active', startTime: now, lastActivityTime: now,
+  }
+  cloudSessions.set(sessionId, s)
+  return s
+}
+
+/** Apply one source's messages in order. Returns how many were applied and how many were dropped. */
+function applyCloudMessages(sourceId: string, projectId: string, messages: CloudMessage[]): { applied: number; ignored: number } {
+  let applied = 0
+  let ignored = 0
+  for (const m of messages) {
+    const now = Date.now()
+    if (m.type === 'session-started') {
+      const isNew = !cloudSessions.has(m.session.id)
+      const s = claimCloudSession(m.session.id, sourceId, projectId, now)
+      if (!s) { ignored++; continue }
+      s.label = m.session.label
+      s.prompt = m.session.prompt
+      s.coordinator = m.session.coordinator
+      s.status = m.session.status
+      if (isNew) s.startTime = m.session.startTime
+      s.lastActivityTime = now
+      broadcast(JSON.stringify({ type: 'session-started', session: cloudView(s) }))
+      applied++
+    } else if (m.type === 'session-updated') {
+      const isNew = !cloudSessions.has(m.sessionId)
+      const s = claimCloudSession(m.sessionId, sourceId, projectId, now)
+      if (!s) { ignored++; continue }
+      s.label = m.label
+      s.prompt = m.prompt
+      s.coordinator = m.coordinator
+      if (isNew) broadcast(JSON.stringify({ type: 'session-started', session: cloudView(s) }))
+      else broadcastCloudUpdated(s)
+      applied++
+    } else if (m.type === 'session-ended') {
+      const s = cloudSessions.get(m.sessionId)
+      if (!s || s.sourceId !== sourceId) { ignored++; continue }
+      s.status = 'completed'
+      broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
+      applied++
+    } else {
+      const events = m.type === 'agent-event' ? [m.event] : m.events
+      for (const event of events) {
+        const isNew = !cloudSessions.has(event.sessionId)
+        const s = claimCloudSession(event.sessionId, sourceId, projectId, now)
+        if (!s) { ignored++; continue }
+        // A session that was only seen through its events (e.g. the hub restarted) is announced first.
+        if (isNew) broadcast(JSON.stringify({ type: 'session-started', session: cloudView(s) }))
+        s.lastActivityTime = now
+        broadcastEvent(event)
+        applied++
+      }
+    }
+  }
+  return { applied, ignored }
+}
+
+function setCloudSourceStale(sourceId: string, stale: boolean): void {
+  if (staleSources.has(sourceId) === stale) return
+  if (stale) staleSources.add(sourceId)
+  else staleSources.delete(sourceId)
+  for (const s of cloudSessions.values()) if (s.sourceId === sourceId) broadcastCloudUpdated(s)
+}
+
 // ─── Discovery file ─────────────────────────────────────────────────────────
 
 function normalizePath(p: string): string {
@@ -458,8 +581,22 @@ export interface Relay {
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
   /** Agents per Claude session, for the offboard endpoints (spec offboard-names item 1) and auto offboarding. */
   graph: AutoOffboardGraph
+  /** Hub intake (`--ingest`): sessions received from cloud containers. */
+  cloud: CloudIntake
   /** Clean up all resources */
   dispose: () => void
+}
+
+/** What the hub intake (app/src/team/ingest.ts) uses to put cloud sessions on the graph. */
+export interface CloudIntake {
+  /** Feed one source's relay messages, in order. Messages about a local session or another source's are dropped. */
+  apply(sourceId: string, projectId: string, messages: CloudMessage[]): { applied: number; ignored: number }
+  /** Mark a source stale (or live again): its sessions get a `session-updated` with the new `stale`. */
+  setStale(sourceId: string, stale: boolean): void
+  /** The source a cloud session came from, or null (local or unknown session). */
+  sourceOf(sessionId: string): string | null
+  /** Tell open graph streams that GET /api/team/projects changed (`projects-changed`). */
+  announceProjectsChanged(): void
 }
 
 export type RelayRuntimeMode = 'claude' | 'codex' | 'auto'
@@ -607,6 +744,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
+      for (const s of cloudSessions.values()) sessionList.push(cloudView(s))
       if (sessionList.length > 0) {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
@@ -629,14 +767,21 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     },
 
     graph: {
-      agents: (sessionId) => (sessions.has(sessionId) ? graphAgents.agents(sessionId) : null),
-      sessionProject: (sessionId) => sessionProjects.get(sessionId)?.id || null,
+      agents: (sessionId) => (sessions.has(sessionId) || cloudSessions.has(sessionId) ? graphAgents.agents(sessionId) : null),
+      sessionProject: (sessionId) => sessionProjects.get(sessionId)?.id || cloudSessions.get(sessionId)?.projectId || null,
       announceOffboarded,
-      sessions: () => [...sessions.keys()],
+      sessions: () => [...sessions.keys(), ...cloudSessions.keys()],
       onAgentsChanged: (listener) => {
         agentsChangedListeners.add(listener)
         return () => { agentsChangedListeners.delete(listener) }
       },
+    },
+
+    cloud: {
+      apply: applyCloudMessages,
+      setStale: setCloudSourceStale,
+      sourceOf: (sessionId) => cloudSessions.get(sessionId)?.sourceId ?? null,
+      announceProjectsChanged: () => broadcast(JSON.stringify({ type: 'projects-changed' })),
     },
 
     dispose() {

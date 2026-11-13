@@ -53,6 +53,8 @@ export interface ServiceSpec {
   bind?: 'loopback' | 'tailscale'
   hostAllow: string[]
   tailscaleBin?: string
+  /** Hub intake for cloud sources (`--ingest`). */
+  ingest?: boolean
   workingDirectory: string
   /** HOME and TEAM_MONITOR_HOME written into the service environment. */
   home: string
@@ -65,6 +67,7 @@ export function programArguments(s: ServiceSpec): string[] {
   if (s.remote) args.push('--remote', '--bind', s.bind ?? 'loopback')
   for (const h of s.hostAllow) args.push('--host-allow', h)
   if (s.tailscaleBin) args.push('--tailscale-bin', s.tailscaleBin)
+  if (s.ingest) args.push('--ingest')
   return args
 }
 
@@ -185,6 +188,8 @@ export interface ServiceRecord {
   listenHost: string
   hostAllow: string[]
   tailscaleBin?: string
+  /** Installed with `--ingest` (hub intake); doctor then checks the ingest token and the Funnel mapping. */
+  ingest?: boolean
   appJs: string
   node: string
   logFile: string
@@ -375,6 +380,7 @@ export interface InstallOptions {
   label?: string
   workspace?: string
   logFile?: string
+  ingest?: boolean
 }
 
 /** First registered project that exists, else the team home. Hooks forward events only for sessions under it. */
@@ -449,6 +455,7 @@ export function buildSpec(opts: InstallOptions, deps: ServiceDeps = {}): { spec:
     bind,
     hostAllow,
     tailscaleBin: opts.tailscaleBin ? path.resolve(expandHome(opts.tailscaleBin)) : undefined,
+    ...(opts.ingest ? { ingest: true } : {}),
     workingDirectory: opts.workspace ? path.resolve(expandHome(opts.workspace)) : defaultWorkspace(ctx.teamHome),
     home: ctx.homedir,
     teamHome: ctx.teamHome,
@@ -495,7 +502,7 @@ export async function installService(opts: InstallOptions, deps: ServiceDeps = {
 
   const record: ServiceRecord = {
     platform: spec.platform, label: spec.label, file, port: spec.port, remote: spec.remote, bind: spec.bind,
-    listenHost, hostAllow: spec.hostAllow, tailscaleBin: spec.tailscaleBin, appJs: spec.appJs, node: spec.node, logFile: spec.logFile,
+    listenHost, hostAllow: spec.hostAllow, tailscaleBin: spec.tailscaleBin, ...(spec.ingest ? { ingest: true } : {}), appJs: spec.appJs, node: spec.node, logFile: spec.logFile,
     installedAt: new Date().toISOString(),
   }
   writeFileAtomic(serviceRecordFile(ctx.teamHome), JSON.stringify(record, null, 2) + '\n', 0o600)
@@ -595,7 +602,7 @@ export async function uninstallService(deps: ServiceDeps = {}, labelOverride?: s
 
 const USAGE = `Usage:
   team-monitor service install [--port ${APP_DEFAULT_PORT}] [--remote --bind loopback|tailscale] [--host-allow <name>]...
-                               [--tailscale-bin <path>] [--label <label>] [--workspace <path>] [--log <file>]
+                               [--tailscale-bin <path>] [--label <label>] [--workspace <path>] [--log <file>] [--ingest]
   team-monitor service status
   team-monitor service restart
   team-monitor service uninstall [--label <label>]`
@@ -606,6 +613,7 @@ export function parseInstallArgs(argv: string[]): InstallOptions | string {
     const a = argv[i]
     const v = argv[i + 1]
     if (a === '--remote') { o.remote = true; continue }
+    if (a === '--ingest') { o.ingest = true; continue }
     if (v === undefined) return `${a} needs a value`
     if (a === '--port') {
       const n = Number(v)
@@ -632,7 +640,7 @@ export async function runServiceCli(argv: string[], deps: ServiceDeps = {}): Pro
       if (typeof opts === 'string') { ctx.err(`${opts}\n${USAGE}`); return 2 }
       const rec = await installService(opts, deps)
       ctx.out(`Installed ${rec.label}: ${rec.file}`)
-      ctx.out(`Runs: ${rec.node} ${rec.appJs} (port ${rec.port}${rec.remote ? `, remote, bind ${rec.bind}` : ''}${rec.hostAllow.length ? `, host-allow ${rec.hostAllow.join(' ')}` : ''})`)
+      ctx.out(`Runs: ${rec.node} ${rec.appJs} (port ${rec.port}${rec.remote ? `, remote, bind ${rec.bind}` : ''}${rec.hostAllow.length ? `, host-allow ${rec.hostAllow.join(' ')}` : ''}${rec.ingest ? ', ingest' : ''})`)
       ctx.out('Projects come from config.json (team-monitor project add <path>).')
       if (rec.platform === 'linux') {
         ctx.out('Hint: to start it at boot without a login, run once: loginctl enable-linger "$USER"')
