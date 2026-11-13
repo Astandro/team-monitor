@@ -37,9 +37,11 @@ import { setCanvasCoordinator } from "./canvas/identity"
 
 const postFetch: PostFetch = (url, init) => fetch(url, init)
 
-export function AgentVisualizer({ projectId = null }: {
+export function AgentVisualizer({ projectId = null, active = true }: {
   /** Team project chosen in the panel's switcher: only its sessions are shown (sessions without a project stay). */
   projectId?: string | null
+  /** The graph is on screen (false behind the phone's Tim tab): the canvas stops drawing while it is not. */
+  active?: boolean
 } = {}) {
   const bridge = useVSCodeBridge()
   // Re-render the chrome (inline styles read COLORS) when the page theme switches
@@ -402,6 +404,7 @@ export function AgentVisualizer({ projectId = null }: {
         onDiscoveryClick={selection.handleDiscoveryClick}
         selectedDiscoveryId={selection.selectedDiscoveryId}
         showCostOverlay={showCostOverlay}
+        active={active}
       />
 
       {/* Phones and tablets: one bottom sheet (detail, transcript one tap away); desktop: floating card + chat panel */}

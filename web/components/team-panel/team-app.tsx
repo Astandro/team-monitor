@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ChatSectionHandle } from './chat-section'
 import { AgentVisualizer } from '@/components/agent-visualizer'
 import { applyGraphTheme } from '@/lib/colors'
+import { graphPaneVisible } from '@/lib/frame-rate'
 import { isPanelToggleKey, PANEL_HIDDEN_KEY, parsePanelHidden, storePanelHidden } from '@/lib/team/sections'
 import { nextThemePref, parseThemePref, resolveTheme, type ThemePref } from '@/lib/team/session'
 import { readStored, writeStored } from './storage'
@@ -25,6 +26,18 @@ function useSystemDark(): boolean {
   return dark
 }
 
+/** >= 1024 px: panel column and graph side by side, both always on screen. */
+function useDesktop(): boolean {
+  const [desk, setDesk] = useState(() => window.matchMedia('(min-width:1024px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width:1024px)')
+    const on = (e: MediaQueryListEvent) => setDesk(e.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return desk
+}
+
 /**
  * Standalone app shell: team panel next to the agent graph.
  * >= 1024px: panel column on the left, graph fills the rest.
@@ -36,6 +49,9 @@ export function TeamApp() {
   const systemDark = useSystemDark()
   const [theme, setTheme] = useState<ThemePref>(() => parseThemePref(readStored('tm-theme')))
   const [pane, setPane] = useState<Pane>('tim')
+  const desktop = useDesktop()
+  // Behind the phone's Tim tab the graph stops drawing (web/lib/frame-rate.ts); its simulation keeps running.
+  const graphOnScreen = graphPaneVisible(pane, desktop)
 
   const cycleTheme = useCallback(() => setTheme((t) => nextThemePref(t)), [])
   // remembered after the state changed, not inside the state updaters
@@ -113,7 +129,7 @@ export function TeamApp() {
           />
         </main>
         <section className="tm-pane tm-pane-graph" id="tm-panel-grafik" data-active={pane === 'grafik'} aria-label="Grafik">
-          <AgentVisualizer projectId={model.selectedId} />
+          <AgentVisualizer projectId={model.selectedId} active={graphOnScreen} />
           {/* Desktop with the panel hidden: a slim tab on the left edge brings it back; it carries the open-decision
               count so a waiting decision is not missed while the panel is away. */}
           {panelHidden && (
