@@ -10,17 +10,19 @@ import { exec, execFile } from 'child_process'
 import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
 import { serveStatic } from './static'
-import { isLoopbackHost } from '../../extension/src/request-guard'
+import { listenErrorMessage, TeamSetup } from './team'
 
 interface ServerOptions {
   port: number
   openBrowser: boolean
   workspace: string
   verbose?: boolean
+  /** Built by app.ts before ensureSetup(), so a refused remote setup writes nothing. */
+  teamSetup: TeamSetup
 }
 
 export async function startServer(options: ServerOptions) {
-  const { port, openBrowser, workspace } = options
+  const { port, openBrowser, workspace, teamSetup } = options
 
   const configDir = path.join(os.homedir(), '.agent-flow')
   const telemetry = createTelemetryClient({
@@ -31,14 +33,9 @@ export async function startServer(options: ServerOptions) {
 
   const relay = await createRelay({ workspace, verbose: options.verbose, telemetry })
 
-  const server = http.createServer((req, res) => {
-    // Reject DNS-rebinding requests, which reach 127.0.0.1 under a foreign Host.
-    if (!isLoopbackHost(req.headers.host)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' })
-      res.end('Forbidden')
-      return
-    }
-
+  // The team handler runs the Host check first (loopback only, as upstream, or
+  // the remote allow-list), then login and /api/team/*, then this fallback.
+  const server = http.createServer(teamSetup.createHandler((req, res) => {
     // SSE endpoint
     if (req.url === '/events') {
       return relay.handleSSE(req, res)
@@ -51,11 +48,24 @@ export async function startServer(options: ServerOptions) {
 
     res.writeHead(404)
     res.end('Not found')
+  }))
+
+  // Port taken or address not on this machine: one plain line, no stack.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    console.error(listenErrorMessage(err, teamSetup.listenHost, port, teamSetup.tokenFile))
+    teamSetup.dispose()
+    relay.dispose()
+    process.exit(1)
   })
 
-  server.listen(port, '127.0.0.1', () => {
-    const url = `http://127.0.0.1:${port}`
+  server.listen(port, teamSetup.listenHost, () => {
+    const url = `http://${teamSetup.listenHost}:${port}`
     console.log(`Server running at ${url}`)
+    if (teamSetup.remote?.config.bindMode === 'loopback') {
+      console.log(`Remote mode behind tailscale serve: run "tailscale serve --bg ${port}" and open https://${teamSetup.remote.config.dnsName ?? '<machine>.ts.net'}/login`)
+    } else if (teamSetup.remote) {
+      console.log(`Remote mode: open http://${teamSetup.remote.config.dnsName ?? teamSetup.listenHost}:${port}/login on your phone`)
+    }
     console.log('Waiting for agent events...\n')
 
     if (openBrowser) {
@@ -71,6 +81,7 @@ export async function startServer(options: ServerOptions) {
     if (shuttingDown) return
     shuttingDown = true
     server.close()
+    teamSetup.dispose()
     relay.dispose()
     void telemetry.dispose().finally(() => process.exit(0))
   }
