@@ -128,14 +128,29 @@ export function disintegrationLook(id: string, progress: number, reducedMotion: 
 /** Small tag next to a disintegrating name (graph label and panel card). */
 export const DISINTEGRATING_TAG = 'disintegrating'
 
-/** Seconds between nebula explosions: one every 14 s at the start of the hour, one every 5 s near the end. */
+/*
+ * Owner feedback 13 Nov (calmer nebula): with several nodes leaving at once the four-cloud bursts were crowded.
+ * Now two smaller clouds per burst at about half the strength, a slower swell and longer gaps; still slow and epic.
+ */
+
+/** Seconds between nebula explosions: one every 22 s at the start of the hour, one every 10 s near the end. */
 export function burstPeriod(progress: number): number {
   const p = Math.min(1, Math.max(0, progress))
-  return 14 - 9 * p
+  return 22 - 12 * p
 }
 
-/** Seconds one nebula explosion takes to swell and fade (slow, a few seconds). */
-export const BURST_LIFE = 4
+/** Seconds one nebula explosion takes to swell and fade (slow). */
+export const BURST_LIFE = 6
+
+/** Share of an explosion spent swelling in, before the long fade. */
+export const NEBULA_SWELL = 0.35
+
+/** Gas clouds per explosion; each explosion takes a different pair of the colours. */
+export const NEBULA_CLOUDS = 2
+
+/** Peak alpha at a cloud's centre, and of the bright core. */
+export const NEBULA_PEAK_ALPHA = 0.2
+export const NEBULA_CORE_ALPHA = 0.45
 
 /** Nebula gas colours (dark sky); the core is a warm white. */
 export const NEBULA_COLORS = ['#E35BD6', '#8E6CFF', '#2FD3C4', '#F5C451'] as const
@@ -176,21 +191,24 @@ export function burstAt(id: string, progress: number, time: number, reducedMotio
   if (into >= BURST_LIFE) return null
   const phase = into / BURST_LIFE
   const grow = easeOut(phase)
-  // swell in over the first fifth, then a long fade
-  const env = phase < 0.2 ? phase / 0.2 : 1 - (phase - 0.2) / 0.8
+  // slow swell in, then a long fade
+  const env = phase < NEBULA_SWELL ? phase / NEBULA_SWELL : 1 - (phase - NEBULA_SWELL) / (1 - NEBULA_SWELL)
   const core = {
-    radius: r * (0.5 + 0.9 * easeOut(Math.min(1, phase / 0.35))),
-    alpha: phase < 0.06 ? 0.9 * (phase / 0.06) : Math.max(0, 0.9 * (1 - (phase - 0.06) / 0.4)),
+    radius: r * (0.5 + 0.6 * easeOut(Math.min(1, phase / 0.4))),
+    alpha: phase < 0.12 ? NEBULA_CORE_ALPHA * (phase / 0.12) : Math.max(0, NEBULA_CORE_ALPHA * (1 - (phase - 0.12) / 0.45)),
   }
-  const clouds: NebulaCloud[] = NEBULA_COLORS.map((color, k) => {
-    const angle = (unitHash(id, 300 + cycle * 7 + k) + k / NEBULA_COLORS.length) * Math.PI * 2
-    const reach = r * (0.4 + 1.1 * grow) * (0.7 + 0.6 * unitHash(id, 400 + cycle * 5 + k))
+  // a different pair of colours each explosion (opposite ones on the colour list), per node
+  const first = Math.floor(unitHash(id, 600 + cycle) * NEBULA_COLORS.length)
+  const clouds: NebulaCloud[] = Array.from({ length: NEBULA_CLOUDS }, (_, k) => {
+    const color = NEBULA_COLORS[(first + k * 2) % NEBULA_COLORS.length]
+    const angle = (unitHash(id, 300 + cycle * 7 + k) * 0.5 + k / NEBULA_CLOUDS) * Math.PI * 2
+    const reach = r * (0.3 + 0.8 * grow) * (0.7 + 0.6 * unitHash(id, 400 + cycle * 5 + k))
     return {
       dx: Math.cos(angle) * reach,
       dy: Math.sin(angle) * reach,
-      radius: r * (0.8 + (2.2 + unitHash(id, 500 + k)) * grow),
+      radius: r * (0.7 + (1.4 + 0.6 * unitHash(id, 500 + k)) * grow),
       color,
-      alpha: 0.42 * env,
+      alpha: NEBULA_PEAK_ALPHA * env,
     }
   })
   return { phase, core, clouds }

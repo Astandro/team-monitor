@@ -8,7 +8,7 @@ import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, NEBULA_COLORS, NEBULA_CORE, tagPulse, type Burst, type Fragment } from '@/lib/disintegration'
-import { ALERT_TOKENS, mixHex } from '@/lib/alert-tag'
+import { ALERT_TOKENS, mixHex, WARNING_ICON } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
 
 let _claudeSparkPath: Path2D | null = null
@@ -339,8 +339,9 @@ function drawNebula(ctx: CanvasRenderingContext2D, agent: Agent, b: Burst) {
 }
 
 /**
- * The "disintegrating" alert tag under a leaving node's name and role (item 4a): a red pill with a matching border and
- * readable text; the pill pulses (stronger tint plus a soft ring), the text does not. Static under reduced motion.
+ * The "disintegrating" alert tag under a leaving node's name and role (item 4a): a see-through red pill with a matching
+ * border, a warning triangle and readable text; the pill pulses (stronger tint plus a soft ring), the text does not.
+ * Static under reduced motion.
  */
 function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number) {
   const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
@@ -353,15 +354,19 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   const lines = wrapTextCanvas(ctx, id.name, maxLabelW).length + (id.role ? wrapTextCanvas(ctx, id.role, maxLabelW).length : 0)
   const t = ALERT_TOKENS[getGraphTheme() === 'dark' ? 'dark' : 'light']
   ctx.font = 'bold 9px sans-serif'
-  const w = ctx.measureText(DISINTEGRATING_TAG).width + 10
+  const icon = 9
+  const textW = ctx.measureText(DISINTEGRATING_TAG).width
+  const w = textW + icon + 3 + 9
   const h = 13
   const x = agent.x - w / 2
   const y = agent.y + top + lines * AGENT_DRAW.labelLineHeight + 2
   if (pulse > 0) {
+    // the ring is a stroke outside the pill, so the see-through tint does not darken under it
     ctx.beginPath()
-    ctx.roundRect(x - 2.5, y - 2.5, w + 5, h + 5, 6)
-    ctx.fillStyle = t.line + alphaHex(0.3 * pulse)
-    ctx.fill()
+    ctx.roundRect(x - 1.5, y - 1.5, w + 3, h + 3, 5.5)
+    ctx.strokeStyle = t.line + alphaHex(0.35 * pulse)
+    ctx.lineWidth = 3
+    ctx.stroke()
   }
   ctx.beginPath()
   ctx.roundRect(x, y, w, h, 4)
@@ -370,10 +375,29 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   ctx.strokeStyle = t.line
   ctx.lineWidth = 1
   ctx.stroke()
+  drawWarningIcon(ctx, x + 4, y + (h - icon) / 2, icon, t.ink)
   ctx.fillStyle = t.ink
-  ctx.textAlign = 'center'
+  ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(DISINTEGRATING_TAG, agent.x, y + h / 2 + 0.5)
+  ctx.fillText(DISINTEGRATING_TAG, x + 4 + icon + 3, y + h / 2 + 0.5)
+}
+
+/** The tag's warning triangle (same shape as the panel's inline SVG, WARNING_ICON). */
+function drawWarningIcon(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.scale(size / 12, size / 12)
+  ctx.strokeStyle = color
+  ctx.fillStyle = color
+  ctx.lineWidth = 1.4
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+  ctx.stroke(new Path2D(WARNING_ICON.triangle))
+  ctx.stroke(new Path2D(WARNING_ICON.mark))
+  ctx.beginPath()
+  ctx.arc(WARNING_ICON.dot.cx, WARNING_ICON.dot.cy, WARNING_ICON.dot.r, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
 }
 
 function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {

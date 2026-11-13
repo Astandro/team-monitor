@@ -8,7 +8,7 @@
   --bg:#F4F7FC; --surface:#FFFFFF; --sunk:#EAF0F8; --ink:#16202F; --muted:#506079; --line:#D9E1EE;
   --accent:#1E5FD0; --accent-soft:rgba(30,95,208,.12); --done:#1F7046; --review:#8A5A0B; --blocked:#B3261E;
   --opus:#F2E6D6; --sonnet:#DCEBDF; --lead:#DCE7F8;
-  --alert-ink:#9B1C14; --alert-bg:#FBE3E1; --alert-bg-hi:#F6C9C4; --alert-line:#B3261E; --alert-group:#FCEDEB;
+  --alert-ink:#9B1C14; --alert-bg:#B3261E29; --alert-bg-hi:#B3261E42; --alert-line:#B3261E; --alert-group:#FCEDEB;
   --radius:12px; --shadow:0 1px 0 rgba(22,32,47,.04),0 4px 14px -8px rgba(22,32,47,.18);
   color-scheme:light;
   font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -18,7 +18,7 @@
   --bg:#05060A; --surface:#16171D; --sunk:#1E2026; --ink:#ECEEF2; --muted:#A2A8B4; --line:#2D3038;
   --accent:#79AEFF; --accent-soft:rgba(121,174,255,.14); --done:#6FCF97; --review:#EDBB5C; --blocked:#F4897E;
   --opus:#3A3024; --sonnet:#22332A; --lead:#232E45;
-  --alert-ink:#FFD7D2; --alert-bg:#4A1B17; --alert-bg-hi:#6B2620; --alert-line:#F4897E; --alert-group:#2A1A1A;
+  --alert-ink:#FFD7D2; --alert-bg:#F4897E33; --alert-bg-hi:#F4897E52; --alert-line:#F4897E; --alert-group:#2A1A1A;
   --shadow:0 1px 0 rgba(0,0,0,.4);
   color-scheme:dark;
 }
@@ -193,16 +193,18 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-member.leaving .nm{font-weight:600}
 /* Item 4 (owner correction 13 Nov): the "disintegrating" tag is an alert (red tint, matching border, readable text)
    and it is the tag that pulses (flickerPeriod(), faster near the deadline); the name stays steady. The avatar gets a
-   slow nebula: soft magenta/violet/teal/gold clouds and a warm core that swell and fade over 4 s, repeating every
-   burstPeriod() seconds (14 s down to 5 s). Reduced motion: static alert tag, no nebula, plain fade. */
-.tm-alert-tag{display:inline-flex;align-items:center;font-size:11px;font-weight:700;line-height:1.3;padding:0 7px;margin-left:6px;border-radius:6px;vertical-align:1px;white-space:nowrap;color:var(--alert-ink);background:var(--alert-bg);border:1px solid var(--alert-line)}
+   slow nebula (calmer since the owner's second pass): two soft clouds and a faint warm core that swell slowly and
+   fade, repeating every burstPeriod() seconds (22 s down to 10 s). The tag is a see-through tint with a warning
+   triangle in front. Reduced motion: static alert tag, no nebula, plain fade. */
+.tm-alert-tag{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;line-height:1.3;padding:0 7px 0 5px;margin-left:6px;border-radius:6px;vertical-align:1px;white-space:nowrap;color:var(--alert-ink);background:var(--alert-bg);border:1px solid var(--alert-line)}
+.tm-alert-tag svg{flex:none;width:11px;height:11px}
 .tm-alert-tag.blink{animation:tm-alert-pulse var(--tm-flicker,3s) ease-in-out infinite}
 @keyframes tm-alert-pulse{0%,100%{background:var(--alert-bg);box-shadow:0 0 0 0 transparent}50%{background:var(--alert-bg-hi);box-shadow:0 0 0 3px color-mix(in srgb,var(--alert-line) 35%,transparent)}}
-.tm-av.leaving.bursting::before,.tm-av.leaving.bursting::after{content:"";position:absolute;inset:-14px;border-radius:50%;pointer-events:none;opacity:0;z-index:-1;animation:tm-nebula var(--tm-burst,10s) ease-out infinite}
-.tm-av.leaving.bursting::before{background:radial-gradient(circle at 35% 40%,rgba(227,91,214,.55),transparent 55%),radial-gradient(circle at 68% 62%,rgba(47,211,196,.5),transparent 55%)}
-.tm-av.leaving.bursting::after{background:radial-gradient(circle at 50% 50%,rgba(255,244,220,.9),transparent 22%),radial-gradient(circle at 62% 30%,rgba(142,108,255,.5),transparent 55%),radial-gradient(circle at 30% 70%,rgba(245,196,81,.45),transparent 55%);animation-delay:calc(var(--tm-burst,10s) * -0.02)}
-/* swell in, long fade, then rest until the next one: the 4 s explosion is the first 4/period of the cycle */
-@keyframes tm-nebula{0%{opacity:0;transform:scale(.4)}6%{opacity:1;transform:scale(.8)}30%{opacity:.7;transform:scale(1.25)}40%{opacity:0;transform:scale(1.45)}100%{opacity:0;transform:scale(1.45)}}
+.tm-av.leaving.bursting::before,.tm-av.leaving.bursting::after{content:"";position:absolute;inset:-10px;border-radius:50%;pointer-events:none;opacity:0;z-index:-1;animation:tm-nebula var(--tm-burst,16s) ease-in-out infinite}
+.tm-av.leaving.bursting::before{background:radial-gradient(circle at 35% 40%,rgba(227,91,214,.28),transparent 55%),radial-gradient(circle at 66% 62%,rgba(47,211,196,.25),transparent 55%)}
+.tm-av.leaving.bursting::after{background:radial-gradient(circle at 50% 50%,rgba(255,244,220,.45),transparent 22%);animation-delay:calc(var(--tm-burst,16s) * -0.02)}
+/* slow swell in, long fade, then rest until the next one (most of the cycle is quiet) */
+@keyframes tm-nebula{0%{opacity:0;transform:scale(.5)}14%{opacity:.9;transform:scale(.9)}32%{opacity:.5;transform:scale(1.15)}42%{opacity:0;transform:scale(1.25)}100%{opacity:0;transform:scale(1.25)}}
 .tm-av.leaving{isolation:isolate}
 @media (prefers-reduced-motion:reduce){.tm-themed .tm-alert-tag.blink{animation:none!important}.tm-themed .tm-av.leaving::before,.tm-themed .tm-av.leaving::after{display:none}}
 /* Groups in the tree (owner feedback 13 Nov): Aktif, Siaga, then Disintegrating on its own tint at the bottom */
