@@ -1,7 +1,7 @@
 import { Agent, NODE, ANIM } from '@/lib/agent-types'
 import { COLORS, getStateColor, contextSegments } from '@/lib/colors'
 import {
-  AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY,
+  AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY, COMPLETED_SUBAGENT_OPACITY,
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { agentDisplayName } from '@/lib/readable-labels'
@@ -382,7 +382,11 @@ export function drawAgents(
       drawWaitingRipples(ctx, agent, r, color, time)
     }
 
+    // A finished sub-agent's node is dimmed, but its name stays readable (muted text at full strength): the owner
+    // wants to see who was on the team, and a dimmed label failed contrast on the light canvas.
+    if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) ctx.globalAlpha = 1
     drawAgentLabel(ctx, agent, r, isHovered)
+    ctx.globalAlpha = agent.opacity
 
     // Context composition — ring for main agent, bar for sub-agents
     if (agent.state !== 'complete' || agent.opacity > 0.5) {

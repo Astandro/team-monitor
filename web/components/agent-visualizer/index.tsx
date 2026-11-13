@@ -25,9 +25,24 @@ import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar, type TopBarLayout } from "./top-bar"
 import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
+import { useGraphTheme } from "@/hooks/use-graph-theme"
+import { sessionsForProject, sessionToShow } from "@/lib/session-filter"
 
-export function AgentVisualizer() {
+export function AgentVisualizer({ projectId = null }: {
+  /** Team project chosen in the panel's switcher: only its sessions are shown (sessions without a project stay). */
+  projectId?: string | null
+} = {}) {
   const bridge = useVSCodeBridge()
+  // Re-render the chrome (inline styles read COLORS) when the page theme switches
+  useGraphTheme()
+
+  const visibleSessions = useMemo(() => sessionsForProject(bridge.sessions, projectId), [bridge.sessions, projectId])
+  // Keep the shown session inside the chosen project: switch to its most recent one when needed
+  const { selectedSessionId, selectSession } = bridge
+  useEffect(() => {
+    const next = sessionToShow(visibleSessions, selectedSessionId)
+    if (next && next !== selectedSessionId) selectSession(next)
+  }, [visibleSessions, selectedSessionId, selectSession])
 
   const {
     frameRef,
@@ -285,9 +300,9 @@ export function AgentVisualizer() {
       {/* Empty state when no demo and no live data */}
       {isEmpty && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-          <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
-            <div className="text-sm" style={{ color: '#66ccff80' }}>Menunggu sesi agent</div>
-            <div className="mt-2 text-xs" style={{ color: '#66ccff40' }}>Mulai sesi Claude Code, aktivitasnya akan muncul di sini.</div>
+          <div className="text-center px-4">
+            <div className="text-base font-semibold" style={{ color: COLORS.textPrimary }}>Menunggu sesi agent</div>
+            <div className="mt-2 text-sm" style={{ color: COLORS.textMuted }}>Mulai sesi Claude Code, aktivitasnya akan muncul di sini.</div>
           </div>
         </div>
       )}
@@ -417,7 +432,7 @@ export function AgentVisualizer() {
 
       {/* Top bar: session tabs + info/controls */}
       <TopBar
-        sessions={bridge.sessions}
+        sessions={visibleSessions}
         selectedSessionId={bridge.selectedSessionId}
         sessionsWithActivity={bridge.sessionsWithActivity}
         onSelectSession={bridge.selectSession}

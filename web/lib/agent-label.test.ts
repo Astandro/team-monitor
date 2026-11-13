@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { agentLabelBottom } from './agent-label'
 
 test('a short name needs one line below the hexagon', () => {
-  const b = agentLabelBottom('Sesi utama', 28, false)
+  const b = agentLabelBottom('Orchestrator', 28, false)
   assert.equal(b, 28 + 8 + 12)
 })
 

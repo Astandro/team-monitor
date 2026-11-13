@@ -2,7 +2,8 @@
 
 import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { TimelineEntry, Z } from '@/lib/agent-types'
-import { COLORS } from '@/lib/colors'
+import { COLORS, liveColor } from '@/lib/colors'
+import { useGraphTheme } from '@/hooks/use-graph-theme'
 import { formatTimelineModels } from '@/lib/timeline-models'
 import { wrapText } from '@/lib/wrap-text'
 import { agentDisplayName } from '@/lib/readable-labels'
@@ -28,7 +29,8 @@ const MODEL_FONT = '8px monospace'
 
 // ─── Legend (static DOM, no perf cost) ──────────────────────────────────────
 
-const LEGEND_ITEMS = [
+// A function, not a constant: the colours follow the page theme.
+const legendItems = () => [
   { color: COLORS.idle, label: 'Diam' },
   { color: COLORS.thinking, label: 'Berpikir' },
   { color: COLORS.tool, label: 'Pakai alat' },
@@ -198,13 +200,14 @@ function drawTimeline(
       const x = LABEL_WIDTH + blockStart
 
       // Block fill
+      const blockColor = liveColor(block.color)
       ctx.globalAlpha = 0.3
-      ctx.fillStyle = block.color
+      ctx.fillStyle = blockColor
       ctx.fillRect(x, trackY + 1, blockW, trackH - 2)
 
       // Block border
       ctx.globalAlpha = 0.2
-      ctx.strokeStyle = block.color
+      ctx.strokeStyle = blockColor
       ctx.lineWidth = 1
       ctx.strokeRect(x, trackY + 1, blockW, trackH - 2)
 
@@ -217,8 +220,8 @@ function drawTimeline(
         ctx.beginPath()
         ctx.rect(x, trackY, blockW, trackH)
         ctx.clip()
-        ctx.fillStyle = block.color
-        ctx.globalAlpha = 0.8
+        ctx.fillStyle = blockColor
+        ctx.globalAlpha = 1
         ctx.textAlign = 'left'
         ctx.fillText(block.label, x + 4, trackY + trackH / 2 + 3)
         ctx.restore()
@@ -242,6 +245,7 @@ function drawTimeline(
 export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }: TimelinePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rangeRef = useRef<TimeRange | null>(null)
+  const themeVersion = useGraphTheme()
 
   const sortedEntries = useMemo(() => {
     if (!visible) return []
@@ -301,7 +305,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
 
     rangeRef.current = drawTimeline(ctx, sortedEntries, layout, currentTime, width, canvasHeight, dpr, LABEL_WIDTH)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw on every prop change (component only re-renders on data/time updates)
-  }, [visible, sortedEntries, layout, currentTime, canvasHeight, LABEL_WIDTH, panelWidth])
+  }, [visible, sortedEntries, layout, currentTime, canvasHeight, LABEL_WIDTH, panelWidth, themeVersion])
 
   if (!visible) return null
 
@@ -329,7 +333,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
         <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
           {panelWidth >= 480 && <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {LEGEND_ITEMS.map(item => (
+            {legendItems().map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />
                 <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>

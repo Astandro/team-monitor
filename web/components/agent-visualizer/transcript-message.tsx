@@ -127,7 +127,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
       const isBash = message.toolName === 'Bash'
       return (
         <div
-          className="rounded px-2.5 py-1 text-[9px] font-mono"
+          className="tm-code rounded px-2.5 py-1 text-[9px] font-mono"
           style={{
             background: isBash ? COLORS.bashResultBg : COLORS.toolResultBg,
             border: `1px solid ${isBash ? COLORS.bashResultBorder : COLORS.toolResultBorder}`,

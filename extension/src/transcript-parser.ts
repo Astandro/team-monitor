@@ -137,6 +137,11 @@ export class TranscriptParser {
 
   constructor(private delegate: TranscriptParserDelegate) {}
 
+  /** True while a background Agent/Task launch is still waiting for its <task-notification>. */
+  isBackgroundSubagentRunning(toolUseId: string): boolean {
+    return this.backgroundSubagents.has(toolUseId)
+  }
+
   /** Clean up state associated with a completed session to prevent unbounded Map growth.
    *  Pass the session's pending tool_use_ids so we can remove orphaned entries. */
   clearSessionState(pendingToolUseIds: Iterable<string>, sessionId?: string): void {

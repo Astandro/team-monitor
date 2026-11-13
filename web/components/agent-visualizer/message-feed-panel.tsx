@@ -197,7 +197,7 @@ export function MessageFeedPanel({
       >
         <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 'min(320px, 100%)' }} title="Buka daftar pesan">
           <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
-          <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: 190 }}>
+          <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: 190, flexShrink: 0 }}>
             {agentName}
           </span>
           <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>

@@ -50,10 +50,10 @@ test('toolCallLine joins label and args; hasDistinctToolName flags renamed tools
   assert.equal(hasDistinctToolName(''), false)
 })
 
-test('the main agent protocol name reads as plain Indonesian, other names pass through', () => {
-  assert.equal(agentDisplayName('orchestrator'), 'Sesi utama')
-  assert.equal(agentDisplayName(''), 'Sesi utama')
-  assert.equal(agentDisplayName(undefined), 'Sesi utama')
+test('the main agent reads as "Orchestrator" (owner override, 13 Nov), other names pass through', () => {
+  assert.equal(agentDisplayName('orchestrator'), 'Orchestrator')
+  assert.equal(agentDisplayName(''), 'Orchestrator')
+  assert.equal(agentDisplayName(undefined), 'Orchestrator')
   assert.equal(agentDisplayName('Perbaiki label grafik'), 'Perbaiki label grafik')
   assert.equal(agentDisplayName('orchestrator-2'), 'orchestrator-2')
 })

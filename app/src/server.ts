@@ -31,7 +31,11 @@ export async function startServer(options: ServerOptions) {
   })
   await telemetry.init()
 
-  const relay = await createRelay({ workspace, verbose: options.verbose, telemetry })
+  // The graph follows the registered projects, not only the start folder (spec graph-theme item 3)
+  const relay = await createRelay({
+    workspace, verbose: options.verbose, telemetry,
+    projects: () => teamSetup.team.graphProjects(),
+  })
 
   // The team handler runs the Host check first (loopback only, as upstream, or
   // the remote allow-list), then login and /api/team/*, then this fallback.

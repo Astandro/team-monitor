@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
+import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
@@ -70,7 +71,7 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
     <span className="flex items-center gap-1.5">
       <span
         className="w-1.5 h-1.5 rounded-full"
-        style={{ background: color, boxShadow: `0 0 4px ${color}` }}
+        style={{ background: color }}
       />
       {label}
     </span>
@@ -124,6 +125,7 @@ export const TopBar = memo(function TopBar({
   onTogglePanel, onToggleTimeline, onToggleMute,
   onLayout, children,
 }: TopBarProps) {
+  useGraphTheme()
   const rootRef = useRef<HTMLDivElement>(null)
   const barsRef = useRef<HTMLDivElement>(null)
 

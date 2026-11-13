@@ -11,8 +11,8 @@ import * as os from 'os'
 import { HookServer } from '../extension/src/hook-server'
 import { AgentEvent, SessionInfo, WatchedSession } from '../extension/src/protocol'
 import { TranscriptParser } from '../extension/src/transcript-parser'
-import { readNewFileLines, foldPathCase } from '../extension/src/fs-utils'
-import { scanSubagentsDir, readSubagentNewLines, newestSubagentMtime } from '../extension/src/subagent-watcher'
+import { readNewFileLines } from '../extension/src/fs-utils'
+import { scanSubagentsDir, rebuildSubagentsOnAttach, readSubagentNewLines, newestSubagentMtime } from '../extension/src/subagent-watcher'
 import { followSession } from '../extension/src/session-relocation'
 import { handlePermissionDetection } from '../extension/src/permission-detection'
 import { CodexSessionWatcher } from '../extension/src/codex-session-watcher'
@@ -22,6 +22,7 @@ import {
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
+import { matchProjectDir, projectSessionLabel, watchTargets, type WatchedProject } from './session-projects'
 import type { TelemetryClient } from './telemetry'
 
 const MAX_EVENT_BUFFER = 5000
@@ -101,16 +102,26 @@ function broadcastEvent(event: AgentEvent) {
   broadcast(JSON.stringify({ type: 'agent-event', event }))
 }
 
+/** Project of each watched Claude session (spec graph-theme items 3-4). Codex sessions are not in here. */
+const sessionProjects = new Map<string, WatchedProject>()
+
+/** What a viewer reads for a session: its project title or folder name. The first prompt is kept as `prompt`. */
+function sessionView(sessionId: string, fallbackLabel: string): { label: string; projectId?: string; prompt?: string } {
+  const project = sessionProjects.get(sessionId)
+  if (!project) return { label: fallbackLabel }
+  return { label: projectSessionLabel(project), projectId: project.id || undefined, prompt: sessions.get(sessionId)?.label }
+}
+
 function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string) {
   if (type === 'started') {
     broadcast(JSON.stringify({
       type: 'session-started',
-      session: { id: sessionId, label, status: 'active', startTime: Date.now(), lastActivityTime: Date.now() } as SessionInfo,
+      session: { id: sessionId, ...sessionView(sessionId, label), status: 'active', startTime: Date.now(), lastActivityTime: Date.now() } as SessionInfo,
     }))
   } else if (type === 'ended') {
     broadcast(JSON.stringify({ type: 'session-ended', sessionId }))
   } else if (type === 'updated') {
-    broadcast(JSON.stringify({ type: 'session-updated', sessionId, label }))
+    broadcast(JSON.stringify({ type: 'session-updated', sessionId, ...sessionView(sessionId, label) }))
   }
 }
 
@@ -252,7 +263,9 @@ function watchSession(sessionId: string, filePath: string) {
   }, POLL_FALLBACK_MS)
 
   session.subagentsDir = path.join(path.dirname(filePath), sessionId, 'subagents')
-  scanSubagentsDir(watcherDelegate, parser, sessionId)
+  // Every subagent already on disk gets its node (finished ones dimmed), so a
+  // server restart or a late page load shows the whole team, not just the Orchestrator.
+  rebuildSubagentsOnAttach(watcherDelegate, parser, sessionId)
   resetInactivityTimer(sessionId)
 
   log(`[session] Watching ${sessionId.slice(0, SESSION_ID_DISPLAY)} — "${session.label}"`)
@@ -277,32 +290,46 @@ function readNewLines(sessionId: string) {
 
 // ─── Session scanner ────────────────────────────────────────────────────────
 
-function scanForActiveSessions(workspace: string) {
+/** Folders under ~/.claude/projects being watched for new transcripts, and where the current targets come from. */
+const projectDirWatchers = new Map<string, fs.FSWatcher>()
+let currentTargets: () => WatchedProject[] = () => []
+
+function watchProjectDir(dirPath: string) {
+  if (projectDirWatchers.has(dirPath)) return
+  try {
+    projectDirWatchers.set(dirPath, fs.watch(dirPath, (_eventType, filename) => {
+      if (filename?.endsWith('.jsonl')) scanForActiveSessions(currentTargets())
+    }))
+  } catch { /* the periodic scan still finds new sessions */ }
+}
+
+/**
+ * Watch every recent session whose folder is one of the targets (the registered projects, or the start folder
+ * when none are registered). Also refreshes the labels of watched sessions when a project title changed.
+ */
+function scanForActiveSessions(targets: WatchedProject[]) {
+  for (const [sessionId, old] of sessionProjects) {
+    const now = targets.find((t) => t.path === old.path)
+    if (now && projectSessionLabel(now) !== projectSessionLabel(old)) {
+      sessionProjects.set(sessionId, now)
+      broadcastSessionLifecycle('updated', sessionId, sessions.get(sessionId)?.label ?? '')
+    }
+  }
+
   if (!fs.existsSync(CLAUDE_DIR)) return
 
-  let resolved = workspace
-  try { resolved = fs.realpathSync(resolved) } catch {}
-  const encoded = resolved.replace(/[^a-zA-Z0-9]/g, '-')
-
-  const dirsToScan: string[] = []
-  // Case-folded on Windows — VS Code/shells report `c:\...` while Claude Code
-  // encodes `C--...`, so exact string matching never found the project dir there.
-  const encodedFolded = foldPathCase(encoded)
+  // Case-folded inside matchProjectDir: VS Code/shells on Windows report `c:\...` while Claude Code encodes `C--...`.
+  const dirsToScan: Array<{ dirPath: string; project: WatchedProject }> = []
   try {
     for (const dir of fs.readdirSync(CLAUDE_DIR, { withFileTypes: true })) {
       if (!dir.isDirectory()) continue
-      const nameFolded = foldPathCase(dir.name)
-      if (nameFolded === encodedFolded || nameFolded.startsWith(encodedFolded + '-')) {
-        dirsToScan.push(path.join(CLAUDE_DIR, dir.name))
-      }
+      const project = matchProjectDir(dir.name, targets)
+      if (project) dirsToScan.push({ dirPath: path.join(CLAUDE_DIR, dir.name), project })
     }
-  } catch {
-    // readdir failed — fall back to the exact-match dir if it exists
-    const projectDir = path.join(CLAUDE_DIR, encoded)
-    if (fs.existsSync(projectDir)) dirsToScan.push(projectDir)
-  }
+  } catch { /* readdir failed; try again on the next scan */ }
 
-  for (const dirPath of dirsToScan) {
+  for (const { dirPath, project } of dirsToScan) {
+    watchProjectDir(dirPath)
     try {
       for (const file of fs.readdirSync(dirPath)) {
         if (!file.endsWith('.jsonl')) continue
@@ -321,6 +348,7 @@ function scanForActiveSessions(workspace: string) {
 
         const ageSeconds = (Date.now() - newestMtime) / 1000
         if (ageSeconds <= ACTIVE_SESSION_AGE_S && !sessions.has(sessionId)) {
+          sessionProjects.set(sessionId, project)
           watchSession(sessionId, filePath)
         }
       }
@@ -374,6 +402,9 @@ export interface RelayOptions {
    *  Mirrors the extension's `agentVisualizer.runtime` setting so users of the
    *  dev relay and `npx agent-flow-app` have a way to opt out of one runtime. */
   runtime?: RelayRuntimeMode
+  /** Registered team projects (read on every scan). When it returns any, the graph shows the sessions of all of
+   *  them instead of only the start folder's (spec graph-theme item 3). */
+  projects?: () => WatchedProject[]
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -400,7 +431,6 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
   let hookServer: HookServer | null = null
   let scanInterval: NodeJS.Timeout | null = null
-  let projectDirWatcher: fs.FSWatcher | null = null
 
   if (wantClaude) {
     hookServer = new HookServer()
@@ -415,19 +445,14 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
     writeDiscoveryFile(hookPort, workspace)
 
-    scanForActiveSessions(workspace)
-    scanInterval = setInterval(() => scanForActiveSessions(workspace), SCAN_INTERVAL_MS)
-
-    const resolved = (() => { try { return fs.realpathSync(workspace) } catch { return workspace } })()
-    const encoded = resolved.replace(/[^a-zA-Z0-9]/g, '-')
-    const projectDir = path.join(CLAUDE_DIR, encoded)
-    if (fs.existsSync(projectDir)) {
-      try {
-        projectDirWatcher = fs.watch(projectDir, (_eventType, filename) => {
-          if (filename?.endsWith('.jsonl')) scanForActiveSessions(workspace)
-        })
-      } catch {}
+    const registered = options.projects ?? (() => [])
+    currentTargets = () => {
+      let list: WatchedProject[] = []
+      try { list = registered() } catch (e) { log('[relay] project list failed:', e) }
+      return watchTargets(list, workspace)
     }
+    scanForActiveSessions(currentTargets())
+    scanInterval = setInterval(() => scanForActiveSessions(currentTargets()), SCAN_INTERVAL_MS)
   }
 
   // ─── Codex runtime ────────────────────────────────────────────────────────
@@ -497,7 +522,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       for (const session of sessions.values()) {
         if (!session.sessionDetected) continue
         sessionList.push({
-          id: session.sessionId, label: session.label,
+          id: session.sessionId, ...sessionView(session.sessionId, session.label),
           status: session.sessionCompleted ? 'completed' : 'active',
           startTime: session.sessionStartTime, lastActivityTime: session.lastActivityTime,
         })
@@ -507,15 +532,16 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
 
-      // Replay buffered events for the most recent active session
+      // Replay buffered events for every session (the client keeps them per session, so switching tabs or
+      // projects shows the full team), the most recent active session last.
       const sorted = [...sessionList].sort((a, b) => {
         const aActive = a.status === 'active' ? 1 : 0
         const bActive = b.status === 'active' ? 1 : 0
-        if (aActive !== bActive) return bActive - aActive
-        return b.lastActivityTime - a.lastActivityTime
+        if (aActive !== bActive) return aActive - bActive
+        return a.lastActivityTime - b.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
+      for (const s of sorted) {
+        const buffered = eventBuffer.get(s.id)
         if (buffered) {
           sendSSE(res, { type: 'agent-event-batch', events: buffered })
         }
@@ -541,7 +567,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         removeDiscoveryFile()
         hookServer?.dispose()
         if (scanInterval) clearInterval(scanInterval)
-        projectDirWatcher?.close()
+        for (const w of projectDirWatchers.values()) w.close()
+        projectDirWatchers.clear()
         for (const session of sessions.values()) {
           session.fileWatcher?.close()
           if (session.pollTimer) clearInterval(session.pollTimer)

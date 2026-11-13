@@ -12,7 +12,7 @@ import { TranscriptParser } from './transcript-parser'
 import { readNewFileLines, foldPathCase } from './fs-utils'
 import { followSession } from './session-relocation'
 import { handlePermissionDetection } from './permission-detection'
-import { scanSubagentsDir, readSubagentNewLines, newestSubagentMtime } from './subagent-watcher'
+import { scanSubagentsDir, rebuildSubagentsOnAttach, readSubagentNewLines, newestSubagentMtime } from './subagent-watcher'
 import { createLogger } from './logger'
 
 const log = createLogger('SessionWatcher')
@@ -124,6 +124,7 @@ export class SessionWatcher implements AgentSessionWatcher {
           const model = session.modelDetectedAgents.get(sub.agentName)
           this.emit({ time: 0, type: 'subagent_dispatch', payload: { parent: ORCHESTRATOR_NAME, child: sub.agentName, task: sub.agentName } }, sessionId)
           this.emit({ time: 0, type: 'agent_spawn', payload: { name: sub.agentName, parent: ORCHESTRATOR_NAME, task: sub.agentName, ...(model ? { model } : {}) } }, sessionId)
+          if (sub.completed) this.emit({ time: 0, type: 'agent_complete', payload: { name: sub.agentName } }, sessionId)
         }
         sub.spawnEmitted = false
       }
@@ -477,7 +478,7 @@ export class SessionWatcher implements AgentSessionWatcher {
 
     // Track subagents directory for this session
     session.subagentsDir = path.join(path.dirname(filePath), sessionId, 'subagents')
-    scanSubagentsDir(this.selfDelegate, this.parser, sessionId)
+    rebuildSubagentsOnAttach(this.selfDelegate, this.parser, sessionId)
 
     // Start inactivity timer so the session completes if no new content arrives
     this.resetInactivityTimer(sessionId)

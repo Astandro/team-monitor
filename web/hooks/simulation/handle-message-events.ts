@@ -1,6 +1,6 @@
 import type { ContextBreakdown } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
-import { appendConversation, asString, asNumber, LABEL_LEN_NAME, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
+import { appendConversation, asString, asNumber, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
 
 export function handleMessage(
@@ -18,12 +18,13 @@ export function handleMessage(
     role === 'thinking' ? 'thinking' :
     'assistant'
 
-  // Rename main agent to the first user message (more recognizable than "orchestrator")
+  // The main node keeps its name ("Orchestrator", owner override 13 Nov). Upstream renamed it to the first user
+  // message, which left the owner's prompt drawn under the node for good; the prompt now only becomes the node's
+  // task (shown in the detail card) and a normal message bubble that fades after BUBBLE_VISIBLE_S.
   if (role === 'user') {
-    const msgAgentForName = state.agents.get(agentName)
-    if (msgAgentForName && msgAgentForName.isMain && msgAgentForName.name === agentName) {
-      const shortName = content.slice(0, LABEL_LEN_NAME).replace(/\n/g, ' ').trim()
-      state.agents.set(agentName, { ...msgAgentForName, name: shortName || agentName, task: content.slice(0, LABEL_LEN_TASK) })
+    const main = state.agents.get(agentName)
+    if (main && main.isMain) {
+      state.agents.set(agentName, { ...main, task: content.slice(0, LABEL_LEN_TASK) })
     }
   }
 
