@@ -23,16 +23,20 @@ export interface WaitOptions {
   pollMs?: number
   /** Report answers already on disk for decisions still open in state.json. Default true. */
   includePending?: boolean
+  /** Only these decision ids (e.g. "D7") wake the wait; undefined means any decision. */
+  ids?: ReadonlySet<string>
 }
 
 export interface WaitResult { name: string; file: string; content: string }
 
-function listAnswers(answersDir: string): Map<string, string> {
+function listAnswers(answersDir: string, ids?: ReadonlySet<string>): Map<string, string> {
   const out = new Map<string, string>()
   let names: string[]
   try { names = fs.readdirSync(answersDir) } catch { return out }
   for (const name of names.sort()) {
-    if (!ANSWER_FILE_RE.test(name)) continue
+    const m = ANSWER_FILE_RE.exec(name)
+    if (!m) continue
+    if (ids && !ids.has(m[1])) continue
     try {
       const file = path.join(answersDir, name)
       const st = fs.lstatSync(file)
@@ -62,7 +66,7 @@ export function waitForAnswer(opts: WaitOptions): Promise<WaitResult | null> {
   const pollMs = opts.pollMs ?? 500
 
   const baseline = new Map<string, string>()
-  const initial = listAnswers(answersDir)
+  const initial = listAnswers(answersDir, opts.ids)
   for (const [name, content] of initial) baseline.set(name, hash(content))
 
   if (opts.includePending !== false) {
@@ -91,7 +95,7 @@ export function waitForAnswer(opts: WaitOptions): Promise<WaitResult | null> {
 
     const check = () => {
       if (finished) return
-      for (const [name, content] of listAnswers(answersDir)) {
+      for (const [name, content] of listAnswers(answersDir, opts.ids)) {
         if (baseline.get(name) !== hash(content)) {
           finish({ name, file: path.join(answersDir, name), content })
           return

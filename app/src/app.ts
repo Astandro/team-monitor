@@ -14,12 +14,19 @@ import { ensureSetup } from '../../scripts/setup'
 import { startServer } from './server'
 import { setupTeam, TeamSetup } from './team'
 import { runWaitAnswerCli } from './team/wait-answer'
+import { runAskCli } from './team/ask'
 
-if (process.argv[2] === 'wait-answer') {
-  // Coordinator helper: no hooks setup, no server.
-  runWaitAnswerCli(process.argv.slice(3)).then(
+const subcommands: Record<string, (argv: string[]) => Promise<number>> = {
+  'wait-answer': runWaitAnswerCli,
+  'ask': runAskCli,
+}
+const sub = subcommands[process.argv[2]]
+
+if (sub) {
+  // Coordinator helpers: no hooks setup, no server.
+  sub(process.argv.slice(3)).then(
     (code) => process.exit(code),
-    (e) => { console.error(e); process.exit(2) },
+    (e) => { console.error((e as Error).message ?? e); process.exit(2) },
   )
 } else {
   const args = parseArgs(process.argv.slice(2))
