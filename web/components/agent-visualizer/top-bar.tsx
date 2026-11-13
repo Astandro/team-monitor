@@ -32,16 +32,19 @@ function UnmutedIcon() {
 
 // ─── Toggle Button ──────────────────────────────────────────────────────────
 
-function ToggleButton({ active, onClick, children, style, activeColor }: {
+function ToggleButton({ active, onClick, children, style, activeColor, title }: {
   active: boolean
   onClick: () => void
   children: React.ReactNode
   style?: React.CSSProperties
   activeColor?: { bg: string; text: string }
+  title?: string
 }) {
   return (
     <button
       onClick={onClick}
+      title={title}
+      aria-pressed={active}
       className="px-1.5 py-0.5 rounded transition-all"
       style={{
         background: active ? (activeColor?.bg ?? COLORS.toggleActive) : COLORS.toggleInactive,
@@ -60,8 +63,8 @@ function ToggleButton({ active, onClick, children, style, activeColor }: {
 function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const color = status === 'watching' ? COLORS.complete
     : status === 'connected' ? COLORS.idle : COLORS.error
-  const label = status === 'watching' ? 'LIVE'
-    : status === 'connected' ? 'CONNECTED' : 'OFFLINE'
+  const label = status === 'watching' ? 'LANGSUNG'
+    : status === 'connected' ? 'TERHUBUNG' : 'PUTUS'
 
   return (
     <span className="flex items-center gap-1.5">
@@ -109,10 +112,10 @@ export const TopBar = memo(function TopBar({
   onTogglePanel, onToggleTimeline, onToggleMute,
 }: TopBarProps) {
   return (
-    <div className="absolute top-3 left-3 right-3 flex items-center gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
+    <div className="absolute top-3 left-3 right-3 flex items-start gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
       {/* Session tabs — scrollable, takes available space */}
       {sessions.length > 1 && (
-        <div className="min-w-0 flex-shrink overflow-x-auto scrollbar-hide">
+        <div className="min-w-0 flex-shrink">
           <SessionTabs
             sessions={sessions}
             selectedSessionId={selectedSessionId}
@@ -129,7 +132,7 @@ export const TopBar = memo(function TopBar({
       {/* Right-side info/controls */}
       <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
-        <span>{agentCount} agents</span>
+        <span>{agentCount} agent</span>
         <span>
           {formatTokens(totalTokens)} tokens
           <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
@@ -142,21 +145,22 @@ export const TopBar = memo(function TopBar({
           background: COLORS.holoBg03,
           border: `1px solid ${COLORS.holoBorder06}`,
         }}>
-          <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
-          <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
+          <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} title="File yang paling banyak dibaca atau diubah" style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>File</ToggleButton>
+          <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} title="Riwayat obrolan sesi ini" style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Obrolan</ToggleButton>
           <ToggleButton
             active={showCostOverlay}
             onClick={() => onTogglePanel('cost')}
+            title="Perkiraan biaya per agent dan per alat"
             activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
             style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
           >
-            $Cost
+            Biaya
           </ToggleButton>
         </div>
 
         {/* Independent toggles */}
-        <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
-        <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
+        <ToggleButton active={showTimeline} onClick={onToggleTimeline} title="Linimasa kerja tiap agent">Linimasa</ToggleButton>
+        <ToggleButton active={!isMuted} onClick={onToggleMute} title={isMuted ? 'Nyalakan suara' : 'Matikan suara'} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
         </ToggleButton>
       </div>

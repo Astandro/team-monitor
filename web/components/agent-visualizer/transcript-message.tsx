@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { COLORS } from '@/lib/colors'
+import { toolLabel } from '@/lib/readable-labels'
 import { ToolContentRenderer } from './tool-content-renderer'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 
@@ -34,7 +35,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
             border: `1px solid ${COLORS.userMsgBorder}`,
           }}
         >
-          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.userLabel }}>USER</div>
+          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.userLabel }}>PENGGUNA</div>
           <div style={{ color: COLORS.userText }} className="whitespace-pre-wrap break-words">
             <HighlightText text={message.content} query={searchQuery} />
           </div>
@@ -68,7 +69,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
           onClick={() => setExpanded(!expanded)}
         >
           <div className="flex items-center gap-1.5">
-            <span className="text-[9px] font-semibold tracking-wider" style={{ color: COLORS.thinkingLabel }}>THINKING</span>
+            <span className="text-[9px] font-semibold tracking-wider" style={{ color: COLORS.thinkingLabel }}>BERPIKIR</span>
             <span className="text-[9px]" style={{ color: COLORS.thinkingArrow }}>{expanded ? '▾' : '▸'}</span>
             {!expanded && (
               <span className="text-[9px] font-mono truncate opacity-50" style={{ color: COLORS.thinkingPreview }}>
@@ -98,8 +99,12 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
         >
           <div className="flex items-center gap-1.5 mb-1">
             <span className="text-[9px]" style={{ color: COLORS.userLabel }}>⚙</span>
-            <span className="text-[9px] font-mono font-semibold" style={{ color: COLORS.tool_calling }}>
-              {message.toolName || 'Tool'}
+            <span
+              className="text-[9px] font-mono font-semibold"
+              style={{ color: COLORS.tool_calling }}
+              title={message.toolName ? `Nama alat asli: ${message.toolName}` : undefined}
+            >
+              {toolLabel(message.toolName)}
             </span>
           </div>
           {message.inputData ? (
@@ -132,7 +137,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
           <div className="flex items-center gap-1.5 mb-0.5">
             <span className="text-[9px] opacity-50">{isBash ? '$' : '✓'}</span>
             {message.toolName && (
-              <span className="text-[9px] opacity-60">{message.toolName}</span>
+              <span className="text-[9px] opacity-60" title={`Nama alat asli: ${message.toolName}`}>{toolLabel(message.toolName)}</span>
             )}
           </div>
           <div className={isBash ? 'whitespace-pre-wrap leading-relaxed' : ''}>

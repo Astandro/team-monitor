@@ -4,7 +4,7 @@ import {
   AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY,
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
-import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
+import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 
 let _claudeSparkPath: Path2D | null = null
@@ -311,9 +311,17 @@ function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
   ctx.font = '10px monospace'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  const maxLabelW = r * AGENT_DRAW.labelWidthMultiplier
-  const agentLabel = truncateText(ctx, agent.name, maxLabelW)
-  ctx.fillText(agentLabel, agent.x, agent.y + r + AGENT_DRAW.labelYOffset)
+  const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
+  // Agent names carry task titles: wrap them, never cut them. When the context
+  // bar is drawn under the hexagon the name starts below it so they never overlap.
+  const hasBar = agent.tokensUsed > 0
+  const top = hasBar
+    ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
+    : r + AGENT_DRAW.labelYOffset
+  const lines = wrapTextCanvas(ctx, agent.name, maxLabelW)
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], agent.x, agent.y + top + i * AGENT_DRAW.labelLineHeight)
+  }
 }
 
 function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
@@ -329,7 +337,7 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   ctx.font = `${STATS_OVERLAY.fontSize}px monospace`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  ctx.fillText(`${agent.toolCalls} tools \u00B7 ${agent.timeAlive.toFixed(1)}s`, agent.x, sy + STATS_OVERLAY.textPaddingY)
+  ctx.fillText(`${agent.toolCalls} alat \u00B7 ${agent.timeAlive.toFixed(1)} dtk`, agent.x, sy + STATS_OVERLAY.textPaddingY)
 }
 
 export function drawAgents(

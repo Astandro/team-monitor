@@ -1,6 +1,7 @@
 import { ToolCallNode } from '@/lib/agent-types'
 import { COLORS, withAlpha } from '@/lib/colors'
 import { TOOL_MAX_CARD_W, TOOL_DRAW } from '@/lib/canvas-constants'
+import { toolCallLine, toolLabel } from '@/lib/readable-labels'
 import { truncateText } from './draw-misc'
 import { measureTextCached } from './render-cache'
 
@@ -19,8 +20,10 @@ export function drawToolCalls(
     ctx.globalAlpha = tool.opacity
 
     ctx.font = `${TOOL_DRAW.fontSize}px monospace`
-    const toolLabel = `${tool.toolName}: ${tool.args}`
-    const label = truncateText(ctx, toolLabel, TOOL_MAX_CARD_W - 12)
+    // Compact card by design (owner request O3): readable label, args may be cut.
+    // The full text is one tap away in the tool detail popup.
+    const fullLabel = toolCallLine(tool.toolName, tool.args)
+    const label = truncateText(ctx, fullLabel, TOOL_MAX_CARD_W - 12)
     const textWidth = Math.min(measureTextCached(ctx, label) + 12, TOOL_MAX_CARD_W)
     const cardW = Math.max(60, textWidth)
     const cardH = (!isRunning && (tool.tokenCost || isError)) ? TOOL_DRAW.expandedHeight : TOOL_DRAW.collapsedHeight
@@ -73,7 +76,7 @@ export function drawToolCalls(
       ctx.restore()
     }
 
-    const truncatedLabel = truncateText(ctx, toolLabel, cardW - 8)
+    const truncatedLabel = truncateText(ctx, fullLabel, cardW - 8)
 
     ctx.font = `${TOOL_DRAW.fontSize}px monospace`
     ctx.textAlign = 'center'
@@ -84,7 +87,7 @@ export function drawToolCalls(
       ctx.fillText(truncatedLabel, tool.x, tool.y)
     } else if (isError) {
       ctx.fillStyle = COLORS.error
-      ctx.fillText(truncateText(ctx, `${tool.toolName}: FAILED`, cardW - 8), tool.x, tool.y - TOOL_DRAW.twoLineOffset)
+      ctx.fillText(truncateText(ctx, `${toolLabel(tool.toolName)}: gagal`, cardW - 8), tool.x, tool.y - TOOL_DRAW.twoLineOffset)
       ctx.font = `${TOOL_DRAW.errorFontSize}px monospace`
       ctx.fillStyle = COLORS.error + 'aa'
       ctx.fillText(truncateText(ctx, tool.errorMessage || tool.result || '', cardW - 8), tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
@@ -96,7 +99,7 @@ export function drawToolCalls(
         // Token cost as dim text below
         ctx.fillStyle = COLORS.tool + '90'
         ctx.font = `${TOOL_DRAW.tokenFontSize}px monospace`
-        ctx.fillText(`${tool.tokenCost} tok`, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
+        ctx.fillText(`${tool.tokenCost} token`, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
       }
     }
 

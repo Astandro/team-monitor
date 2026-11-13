@@ -2,7 +2,8 @@ import { Agent, ToolCallNode, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { COST_RATE, MODEL_FAMILY_COST, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
-import { truncateText } from './draw-misc'
+import { toolLabel } from '@/lib/readable-labels'
+import { wrapTextCanvas } from './draw-misc'
 
 /** Blended $/M-token rate for a model ID — first matching family wins,
  *  unknown models fall back to the Sonnet-class rate. */
@@ -167,7 +168,17 @@ export function drawCostSummaryPanel(
   const sectionGap = COST_PANEL.sectionGap
   const agentRows = Math.min(agentBreakdown.length, COST_PANEL.maxRows)
   const toolRows = Math.min(toolList.length, COST_PANEL.maxRows)
-  const panelH = headerH + (agentRows * lineH) + sectionGap + (toolRows > 0 ? 14 + toolRows * lineH : 0) + 12
+  const barW = panelW - COST_PANEL.contentPadding * 2
+
+  // Names are wrapped, never cut (owner request O3): each row grows with its lines.
+  ctx.font = '8px monospace'
+  const nameW = barW - 56
+  const rowHeight = (lines: string[]) => Math.max(lineH, lines.length * COST_PANEL.nameLineHeight + 6)
+  const agentLines = agentBreakdown.slice(0, agentRows).map(a => wrapTextCanvas(ctx, a.name, nameW))
+  const toolLines = toolList.slice(0, toolRows).map(t => wrapTextCanvas(ctx, toolLabel(t.name), nameW))
+  const agentBlockH = agentLines.reduce((s, l) => s + rowHeight(l), 0)
+  const toolBlockH = toolLines.reduce((s, l) => s + rowHeight(l), 0)
+  const panelH = headerH + agentBlockH + sectionGap + (toolRows > 0 ? 14 + toolBlockH : 0) + 12
 
   ctx.save()
 
@@ -196,15 +207,15 @@ export function drawCostSummaryPanel(
   y += headerH
 
   // Per-agent breakdown
-  const barW = panelW - COST_PANEL.contentPadding * 2
   for (let i = 0; i < agentRows; i++) {
     const a = agentBreakdown[i]
+    const rowH = rowHeight(agentLines[i])
 
     // Mini bar background
     const ratio = totalCost > 0 ? a.cost / totalCost : 0
     ctx.fillStyle = COLORS.holoBorder06
     ctx.beginPath()
-    ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW, lineH - 3, COST_PANEL.barRadius)
+    ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW, rowH - 3, COST_PANEL.barRadius)
     ctx.fill()
 
     // Bar fill
@@ -212,21 +223,23 @@ export function drawCostSummaryPanel(
       ? COLORS.barFillMain
       : COLORS.barFillSub
     ctx.beginPath()
-    ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW * ratio, lineH - 3, COST_PANEL.barRadius)
+    ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW * ratio, rowH - 3, COST_PANEL.barRadius)
     ctx.fill()
 
-    // Agent name
+    // Agent name (wrapped)
     ctx.font = '8px monospace'
     ctx.fillStyle = COLORS.textPrimary
     ctx.textAlign = 'left'
-    ctx.fillText(truncateText(ctx, a.name, barW - 50), panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3)
+    agentLines[i].forEach((line, li) => {
+      ctx.fillText(line, panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3 + li * COST_PANEL.nameLineHeight)
+    })
 
     // Cost
     ctx.textAlign = 'right'
     ctx.fillStyle = COLORS.costText
     ctx.fillText(`$${a.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
 
-    y += lineH
+    y += rowH
   }
 
   // Per-tool-type breakdown
@@ -236,39 +249,42 @@ export function drawCostSummaryPanel(
     ctx.font = '8px monospace'
     ctx.fillStyle = COLORS.textMuted
     ctx.textAlign = 'left'
-    ctx.fillText('BY TOOL', panelX + COST_PANEL.contentPadding, y)
+    ctx.fillText('PER ALAT', panelX + COST_PANEL.contentPadding, y)
     y += 14
 
     for (let i = 0; i < toolRows; i++) {
       const t = toolList[i]
+      const rowH = rowHeight(toolLines[i])
       const ratio = totalCost > 0 ? t.cost / totalCost : 0
 
       // Background
       ctx.fillStyle = COLORS.panelSeparator
       ctx.beginPath()
-      ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW, lineH - 3, COST_PANEL.barRadius)
+      ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW, rowH - 3, COST_PANEL.barRadius)
       ctx.fill()
 
       // Fill
       ctx.fillStyle = toolTypeColor(t.name)
       ctx.globalAlpha = 0.2
       ctx.beginPath()
-      ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW * ratio, lineH - 3, COST_PANEL.barRadius)
+      ctx.roundRect(panelX + COST_PANEL.contentPadding, y + 1, barW * ratio, rowH - 3, COST_PANEL.barRadius)
       ctx.fill()
       ctx.globalAlpha = 1
 
-      // Tool name
+      // Tool name (plain label, wrapped)
       ctx.font = '8px monospace'
       ctx.fillStyle = toolTypeColor(t.name)
       ctx.textAlign = 'left'
-      ctx.fillText(truncateText(ctx, t.name, barW - 50), panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3)
+      toolLines[i].forEach((line, li) => {
+        ctx.fillText(line, panelX + COST_PANEL.contentPadding + COST_PANEL.barInset, y + 3 + li * COST_PANEL.nameLineHeight)
+      })
 
       // Cost
       ctx.textAlign = 'right'
       ctx.fillStyle = COLORS.costTextDim
       ctx.fillText(`$${t.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
 
-      y += lineH
+      y += rowH
     }
   }
 

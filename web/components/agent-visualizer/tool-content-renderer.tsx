@@ -56,7 +56,7 @@ function FilePath({ path: filePath }: { path: string }) {
       className={`text-[9px] mb-1 truncate ${openFile ? 'hover:underline' : ''}`}
       style={{ color: openFile ? COLORS.filePathActive : COLORS.filePathInactive, cursor: openFile ? 'pointer' : undefined }}
       onClick={openFile ? () => openFile(filePath) : undefined}
-      title={openFile ? filePath : undefined}
+      title={filePath}
     >
       {short}
     </div>
@@ -185,7 +185,7 @@ function ReadContent({ data }: { data: Record<string, unknown> }) {
       <FilePath path={filePath} />
       {(offset != null || limit != null) && (
         <div className="text-[9px] opacity-50" style={{ color: COLORS.assistantText }}>
-          {offset ? `from line ${offset}` : ''}{offset && limit ? ', ' : ''}{limit ? `${limit} lines` : ''}
+          {offset ? `mulai baris ${offset}` : ''}{offset && limit ? ', ' : ''}{limit ? `${limit} baris` : ''}
         </div>
       )}
     </div>
@@ -200,7 +200,7 @@ function GrepContent({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="text-[9px] font-mono">
       <span style={{ color: COLORS.tool_calling }}>{pattern}</span>
-      {searchPath && <span className="opacity-55 ml-1">in {truncatePath(searchPath, 2)}</span>}
+      {searchPath && <span className="opacity-55 ml-1" title={searchPath}>di {truncatePath(searchPath, 2)}</span>}
       {glob && <span className="opacity-55 ml-1">({glob})</span>}
     </div>
   )
@@ -213,7 +213,7 @@ function GlobContent({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="text-[9px] font-mono">
       <span style={{ color: COLORS.tool_calling }}>{pattern}</span>
-      {searchPath && <span className="opacity-55 ml-1">in {truncatePath(searchPath, 2)}</span>}
+      {searchPath && <span className="opacity-55 ml-1" title={searchPath}>di {truncatePath(searchPath, 2)}</span>}
     </div>
   )
 }

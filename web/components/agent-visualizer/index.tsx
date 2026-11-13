@@ -237,13 +237,13 @@ export function AgentVisualizer() {
   // Context menu items
   const contextMenuItems = selection.contextMenu ? (
     selection.contextMenu.agentId ? [
-      { label: '📊  Toggle Stats', onClick: () => setShowStats(prev => !prev) },
+      { label: 'Tampilkan atau sembunyikan statistik', onClick: () => setShowStats(prev => !prev) },
     ] : [
-      { label: '🔍  Zoom to Fit', onClick: () => setZoomToFitTrigger(n => n + 1) },
-      { label: '📊  Toggle Stats', onClick: () => setShowStats(prev => !prev) },
-      { label: '⬡  Toggle Grid', onClick: () => setShowHexGrid(prev => !prev) },
+      { label: 'Pas-kan ke layar', onClick: () => setZoomToFitTrigger(n => n + 1) },
+      { label: 'Tampilkan atau sembunyikan statistik', onClick: () => setShowStats(prev => !prev) },
+      { label: 'Tampilkan atau sembunyikan kisi', onClick: () => setShowHexGrid(prev => !prev) },
       { label: '', onClick: () => {}, separator: true },
-      { label: '⟲  Restart', onClick: restart },
+      { label: 'Ulangi dari awal', onClick: restart },
     ]
   ) : []
 
@@ -271,8 +271,8 @@ export function AgentVisualizer() {
       {isEmpty && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
-            <div className="text-sm" style={{ color: '#66ccff80' }}>WAITING FOR AGENT SESSION</div>
-            <div className="mt-2 text-xs" style={{ color: '#66ccff40' }}>Start a Claude Code session to see activity</div>
+            <div className="text-sm" style={{ color: '#66ccff80' }}>Menunggu sesi agent</div>
+            <div className="mt-2 text-xs" style={{ color: '#66ccff40' }}>Mulai sesi Claude Code, aktivitasnya akan muncul di sini.</div>
           </div>
         </div>
       )}

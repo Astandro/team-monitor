@@ -18,8 +18,7 @@ interface MessageFeedPanelProps {
 const TEXT_TYPES = new Set(['assistant', 'user', 'thinking'])
 
 // Truncation limits for compact display
-const COLLAPSED_AGENT_NAME_MAX = 12
-const TAB_AGENT_NAME_MAX = 14
+// Agent names are never cut (owner request O3); only message previews are.
 const PREVIEW_MAX = 50
 const MESSAGE_TRUNCATE_MAX = 120
 
@@ -195,10 +194,10 @@ export function MessageFeedPanel({
         style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
         onClick={() => setExpanded(true)}
       >
-        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }}>
+        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }} title="Buka daftar pesan">
           <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
-          <span className="text-[9px] font-mono font-semibold shrink-0" style={{ color: COLORS.textPrimary }}>
-            {agentName.length > COLLAPSED_AGENT_NAME_MAX ? agentName.slice(0, COLLAPSED_AGENT_NAME_MAX) + '..' : agentName}
+          <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: 190 }}>
+            {agentName}
           </span>
           <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
             {preview}{latestMessage.content.length > PREVIEW_MAX ? '...' : ''}
@@ -221,10 +220,12 @@ export function MessageFeedPanel({
         {/* Header */}
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
-            MESSAGES
+            PESAN
           </span>
           <button
             onClick={() => setExpanded(false)}
+            title="Ciutkan daftar pesan"
+            aria-label="Ciutkan daftar pesan"
             className="text-[9px] transition-colors"
             style={{ color: COLORS.textMuted }}
           >
@@ -234,9 +235,9 @@ export function MessageFeedPanel({
 
         {/* Agent Tabs (hidden when only 1 agent) */}
         {agentsWithMessages.length > 1 && (
-        <div className="flex gap-0.5 px-2 pb-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+        <div className="flex flex-wrap gap-0.5 px-2 pb-1.5">
           <TabButton
-            label="All"
+            label="Semua"
             active={activeTab === 'all'}
             onClick={() => setActiveTab('all')}
             color={COLORS.holoBase}
@@ -248,7 +249,7 @@ export function MessageFeedPanel({
             return (
               <TabButton
                 key={agentId}
-                label={name.length > TAB_AGENT_NAME_MAX ? name.slice(0, TAB_AGENT_NAME_MAX) + '..' : name}
+                label={name}
                 active={activeTab === agentId}
                 onClick={() => setActiveTab(agentId)}
                 color={color}
@@ -269,7 +270,7 @@ export function MessageFeedPanel({
           {messages.length === 0 ? (
             <div className="flex items-center justify-center py-6">
               <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
-                No messages yet
+                Belum ada pesan
               </span>
             </div>
           ) : (
@@ -313,8 +314,10 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
   return (
     <button
       onClick={onClick}
-      className="px-2 py-0.5 rounded text-[9px] font-mono transition-all shrink-0 relative"
+      className="px-2 py-0.5 rounded text-[9px] font-mono transition-all relative text-left"
       style={{
+        maxWidth: 280,
+        overflowWrap: 'anywhere',
         background: active ? color + '20' : 'transparent',
         color: active ? color : COLORS.textMuted,
         border: active ? `1px solid ${color}30` : '1px solid transparent',
@@ -384,7 +387,7 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
           style={{ color: COLORS.textMuted }}
           onClick={(e) => { e.stopPropagation(); setExpanded(prev => !prev) }}
         >
-          {expanded ? '▴ less' : '▾ more'}
+          {expanded ? '▴ ringkas' : '▾ selengkapnya'}
         </button>
       )}
     </div>

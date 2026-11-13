@@ -107,7 +107,7 @@ export function handleAgentSpawn(
     blocks: [],
     ...(previousModels ? { models: previousModels } : {}),
   }
-  pushTimelineBlock(timelineEntry, currentTime, { type: 'idle', label: 'Starting', color: COLORS.idle }, ctx)
+  pushTimelineBlock(timelineEntry, currentTime, { type: 'idle', label: 'Mulai', color: COLORS.idle }, ctx)
   state.timelineEntries.set(name, timelineEntry)
   if (model) recordTimelineModel(state, name, model)
 
@@ -131,7 +131,7 @@ export function handleAgentComplete(
 
     const entry = state.timelineEntries.get(name)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'complete', label: 'Done', color: COLORS.complete, endTime: currentTime }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'complete', label: 'Selesai', color: COLORS.complete, endTime: currentTime }, ctx)
       entry.endTime = currentTime
     }
 
@@ -142,7 +142,7 @@ export function handleAgentComplete(
         agentsToComplete.push(childId)
         const childEntry = state.timelineEntries.get(childId)
         if (childEntry) {
-          pushTimelineBlock(childEntry, currentTime, { type: 'complete', label: 'Done', color: COLORS.complete, endTime: currentTime }, ctx)
+          pushTimelineBlock(childEntry, currentTime, { type: 'complete', label: 'Selesai', color: COLORS.complete, endTime: currentTime }, ctx)
           childEntry.endTime = currentTime
         }
       }
@@ -172,7 +172,7 @@ export function handlePermissionRequested(
 
     const entry = state.timelineEntries.get(agentName)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'idle', label: 'Permission', color: COLORS.waiting_permission }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'idle', label: 'Menunggu izin', color: COLORS.waiting_permission }, ctx)
     }
   }
 }

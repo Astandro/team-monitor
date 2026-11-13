@@ -1,6 +1,7 @@
 import { Agent, NODE, CARD, TETHER } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { measureTextCached } from './render-cache'
+import { wrapText } from '@/lib/wrap-text'
 
 /** Truncate text with ellipsis to fit within maxWidth pixels */
 export function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
@@ -12,6 +13,15 @@ export function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWid
     else hi = mid - 1
   }
   return lo > 0 ? text.slice(0, lo) + '\u2026' : '\u2026'
+}
+
+/**
+ * Wrap text across lines to fit maxWidth at the context's current font.
+ * Use for titles that must be shown in full (agent names, session titles).
+ * truncateText stays for tool-call result lines and file paths only.
+ */
+export function wrapTextCanvas(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  return wrapText(text, maxWidth, (s) => measureTextCached(ctx, s))
 }
 
 export function drawTetherLine(ctx: CanvasRenderingContext2D, agent: Agent, transform: { x: number; y: number; scale: number }, canvasH: number) {

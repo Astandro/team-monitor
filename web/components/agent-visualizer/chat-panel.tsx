@@ -2,6 +2,7 @@
 
 import { CARD, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
+import { stateLabel } from '@/lib/readable-labels'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
@@ -42,11 +43,11 @@ export function AgentChatPanel({
             className="w-1.5 h-1.5 rounded-full"
             style={{ background: stateColor, boxShadow: `0 0 6px ${stateColor}` }}
           />
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[10px] font-mono tracking-wider break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere' }}>
             {agentName.toUpperCase()}
           </span>
-          <span className="text-[9px] font-mono capitalize" style={{ color: stateColor + '90' }}>
-            {agentState}
+          <span className="text-[9px] font-mono" style={{ color: stateColor + '90' }}>
+            {stateLabel(agentState)}
           </span>
         </PanelHeader>
 
@@ -59,7 +60,7 @@ export function AgentChatPanel({
           {conversation.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-[10px] font-mono" style={{ color: COLORS.textMuted }}>
-                No messages yet...
+                Belum ada pesan.
               </p>
             </div>
           ) : (

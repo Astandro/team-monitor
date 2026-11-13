@@ -122,7 +122,7 @@ function LiveControlBar({
             }}
           />
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.liveText }}>
-            LIVE
+            LANGSUNG
           </span>
         </div>
 
@@ -142,13 +142,14 @@ function LiveControlBar({
         </div>
 
         {/* Event count */}
-        <span className="text-[10px] font-mono shrink-0" style={{ color: COLORS.textMuted }}>
-          {eventCount}
+        <span className="text-[10px] font-mono shrink-0" style={{ color: COLORS.textMuted }} title="Jumlah kejadian">
+          {eventCount} kejadian
         </span>
 
         {/* Review button */}
         <button
           onClick={onEnterReview}
+          title="Jeda tampilan langsung dan tinjau kejadian sebelumnya"
           className="px-2.5 py-1 rounded text-[10px] font-mono transition-all hover:scale-105"
           style={{
             background: COLORS.holoBg10,
@@ -205,6 +206,8 @@ function ReviewControlBar({
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
+          title={isPlaying ? 'Jeda' : 'Putar'}
+          aria-label={isPlaying ? 'Jeda' : 'Putar'}
           className="w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
           style={{
             background: isPlaying ? COLORS.playBtnActiveBg : COLORS.playBtnBg,
@@ -277,6 +280,7 @@ function ReviewControlBar({
             <button
               key={s}
               onClick={() => onSpeedChange(s)}
+              title={`Kecepatan ${s}x`}
               className="px-2 py-0.5 rounded text-[10px] font-mono transition-all"
               style={{
                 background: speed === s ? COLORS.playBtnActiveBg : 'transparent',
@@ -292,6 +296,7 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onResumeLive}
+            title="Kembali ke tampilan langsung"
             className="px-2.5 py-1 rounded text-[10px] font-mono font-semibold transition-all hover:scale-105 shrink-0"
             style={{
               background: COLORS.liveResumeBg,
@@ -299,7 +304,7 @@ function ReviewControlBar({
               color: COLORS.liveText,
             }}
           >
-            ▶ LIVE
+            ▶ LANGSUNG
           </button>
         )}
 
@@ -307,6 +312,8 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onRestart}
+            title="Ulangi dari awal"
+            aria-label="Ulangi dari awal"
             className="text-sm transition-all shrink-0 hover:scale-110"
             style={{ color: COLORS.textDim }}
           >

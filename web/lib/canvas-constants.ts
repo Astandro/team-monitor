@@ -210,6 +210,11 @@ export const AGENT_DRAW = {
   labelYOffset: 8,
   /** Agent name label width multiplier of radius */
   labelWidthMultiplier: 3,
+  /** Agent name is wrapped, never cut: minimum wrap width and line height */
+  labelMinWidth: 150,
+  labelLineHeight: 12,
+  /** Gap between the context bar and the name when the bar is shown */
+  labelBelowBarGap: 16,
   /** Scanline gradient half-height */
   scanlineHalfH: 4,
   /** Scanline width = 2 * scanlineHalfH */
@@ -322,7 +327,9 @@ export const COST_DRAW = {
 } as const
 
 export const COST_PANEL = {
-  width: 200,
+  width: 240,
+  /** Line height for wrapped agent and tool names */
+  nameLineHeight: 10,
   /** X margin from right edge */
   xMargin: 16,
   /** Y position (below top bar) */

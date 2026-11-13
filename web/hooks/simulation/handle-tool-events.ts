@@ -1,4 +1,5 @@
 import { COLORS } from '@/lib/colors'
+import { toolLabel, toolCallLine } from '@/lib/readable-labels'
 import { TOOL_DEDUP_WINDOW_S } from '@/lib/canvas-constants'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { appendConversation, asString, asBoolean, LABEL_LEN_PARTICLE, LABEL_LEN_TIMELINE } from './types'
@@ -62,13 +63,13 @@ export function handleToolCallStart(
       edgeId: `edge-${toolId}`, progress: 0,
       type: 'tool_call', color: COLORS.tool,
       size: 4, trailLength: 0.15,
-      label: `${toolName} ${args}`.slice(0, LABEL_LEN_PARTICLE),
+      label: `${toolLabel(toolName)} ${args}`.slice(0, LABEL_LEN_PARTICLE),
     })
 
     // Timeline block
     const entry = state.timelineEntries.get(agentName)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: `${toolName}: ${args}`.slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: toolCallLine(toolName, args).slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
     }
 
     // Track file attention
@@ -147,7 +148,7 @@ export function handleToolCallEnd(
           lastBlock.label = `${toolName}: FAILED`
         }
       }
-      pushTimelineBlock(entry, currentTime, { type: 'thinking', label: 'Thinking...', color: COLORS.thinking }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'thinking', label: 'Berpikir...', color: COLORS.thinking }, ctx)
     }
 
     // File attention token cost
