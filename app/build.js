@@ -3,6 +3,7 @@
  * Builds the standalone web app package:
  *   1. Builds the webview UI via Vite (into app/dist/webview/)
  *   2. Bundles the app entry via esbuild (into app/dist/app.js)
+ *   3. Bundles the AskUserQuestion hook (into app/dist/ask-hook.js)
  */
 'use strict'
 
@@ -37,6 +38,20 @@ esbuild.buildSync({
   define: {
     AGENT_FLOW_APP_VERSION: JSON.stringify(APP_PKG.version),
   },
+  banner: {
+    js: '#!/usr/bin/env node',
+  },
+  sourcemap: false,
+  logLevel: 'warning',
+})
+
+// 3. Bundle the Claude Code AskUserQuestion hook (small, no server code)
+esbuild.buildSync({
+  entryPoints: [path.join(APP_DIR, 'src', 'team', 'ask-hook-main.ts')],
+  bundle: true,
+  platform: 'node',
+  target: 'node18',
+  outfile: path.join(APP_DIR, 'dist', 'ask-hook.js'),
   banner: {
     js: '#!/usr/bin/env node',
   },
