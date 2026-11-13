@@ -2,7 +2,7 @@
 // Pure (names and timing); sound-client.ts plays it.
 
 import type { SoundCue } from './cues'
-import { RECIPES, recipeDuration } from './recipes'
+import { cueLength } from './samples'
 
 /** Plain names for each sound, as the owner reads them in the popover. */
 export const CUE_NAMES: Record<SoundCue, string> = {
@@ -57,11 +57,17 @@ export function demoSteps(gap: number = DEMO_GAP): { steps: DemoStep[]; total: n
   let at = 0
   const steps = DEMO_ORDER.map((cue) => {
     const step = { cue, name: CUE_NAMES[cue], at }
-    at += recipeDuration(RECIPES[cue]) + gap
+    at += cueLength(cue) + gap
     return step
   })
   return { steps, total: at }
 }
+
+/** What the popover shows while the sound files are still downloading (first "Coba suara" after sound is on). */
+export const DEMO_LOADING_LABEL = 'Memuat suara…'
+
+/** Longest wait for the files before the demo starts anyway (cues not loaded yet play the synthesised sound). */
+export const DEMO_LOAD_WAIT_MS = 4000
 
 /** What the popover shows while the demo runs. */
 export function demoLabel(step: DemoStep, index: number, count: number): string {

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { CUE_PRIORITY } from './cues'
 import { CUE_NAMES, DEMO_ORDER, demoLabel, demoSteps } from './demo'
-import { RECIPES, recipeDuration } from './recipes'
+import { cueLength } from './samples'
 
 test('"Coba suara" plays every sound once, each with its own name', () => {
   assert.deepEqual([...DEMO_ORDER].sort(), [...CUE_PRIORITY].sort())
@@ -16,10 +16,10 @@ test('demo sounds never overlap, with a gap after each, and the big ones come la
   assert.equal(steps[0].at, 0)
   for (let i = 1; i < steps.length; i++) {
     const prev = steps[i - 1]
-    assert.ok(steps[i].at >= prev.at + recipeDuration(RECIPES[prev.cue]) + 1 - 1e-9, steps[i].cue)
+    assert.ok(steps[i].at >= prev.at + cueLength(prev.cue) + 1 - 1e-9, steps[i].cue)
   }
   const last = steps[steps.length - 1]
-  assert.ok(Math.abs(total - (last.at + recipeDuration(RECIPES[last.cue]) + 1)) < 1e-9)
+  assert.ok(Math.abs(total - (last.at + cueLength(last.cue) + 1)) < 1e-9)
   assert.equal(last.cue, 'stage_done')
   assert.equal(steps[0].cue, 'tool_start')
 })

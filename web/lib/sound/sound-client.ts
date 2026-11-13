@@ -5,26 +5,37 @@
 
 import { AudioEngine } from '@/lib/audio-engine'
 import type { SoundCue } from './cues'
-import { demoLabel, demoSteps, DEMO_ORDER } from './demo'
+import { demoLabel, demoSteps, DEMO_LOAD_WAIT_MS, DEMO_LOADING_LABEL, DEMO_ORDER } from './demo'
 import { STAGGER_MS } from './gate'
+import { SampleBank } from './sample-bank'
+import { sampleUrls } from './samples'
 import { SoundSettingsStore, type SoundSettings } from './settings'
 import { renderCueOffline, renderMixOffline } from './synth'
 
-// QA handle (read-only, plays nothing): render any sound offline, e.g. to save it as a WAV in a headless browser.
+/**
+ * Sound set v3 (sample files) only in the standalone app, whose server serves the files next to index.js. The VS Code
+ * webview keeps the synthesised v2 set (its CSP does not allow fetching media).
+ */
+const USE_SAMPLES = process.env.AGENT_FLOW_STANDALONE === '1'
+
+interface SoundClient {
+  engine: AudioEngine
+  store: SoundSettingsStore
+  samples: SampleBank | null
+}
+
+let client: SoundClient | null = null
+
+// QA handle (plays nothing): render any synthesised (v2) sound offline, e.g. to save it as a WAV in a headless
+// browser, and read which sample files (v3) loaded.
 if (typeof window !== 'undefined') {
   ;(window as unknown as { tmSoundLab?: unknown }).tmSoundLab = {
     cues: DEMO_ORDER,
     render: (cue: SoundCue, sampleRate?: number) => renderCueOffline(cue, sampleRate),
     renderMix: (mix: { cue: SoundCue; at: number }[], sampleRate?: number) => renderMixOffline(mix, sampleRate),
+    samples: () => client?.samples?.statuses() ?? null,
   }
 }
-
-interface SoundClient {
-  engine: AudioEngine
-  store: SoundSettingsStore
-}
-
-let client: SoundClient | null = null
 
 function browserStorage() {
   return window.localStorage
@@ -33,9 +44,10 @@ function browserStorage() {
 export function getSoundClient(): SoundClient | null {
   if (typeof window === 'undefined') return null
   if (client) return client
-  const engine = new AudioEngine()
+  const samples = USE_SAMPLES ? new SampleBank(sampleUrls('/')) : null
+  const engine = new AudioEngine({ samples: samples ?? undefined })
   const store = new SoundSettingsStore(browserStorage, engine)
-  client = { engine, store }
+  client = { engine, store, samples }
 
   const unlock = () => {
     engine.unlock()
@@ -68,6 +80,8 @@ export function toggleSound(): void {
  * "Coba suara": play every sound in turn, reporting each one's label (null when the demo is over or stopped).
  * Called from a button press, so audio may start; it turns sound on when it was off (the owner asked to hear it).
  * Bypasses the rate limits on purpose. Returns a stop function (sounds already started finish on their own).
+ * The first time, the sample files are still downloading: it shows "Memuat suara…" and starts once they are in
+ * (at most DEMO_LOAD_WAIT_MS; a sound not loaded by then plays its synthesised version).
  */
 export function startSoundDemo(onStep: (label: string | null) => void): () => void {
   const c = getSoundClient()
@@ -77,15 +91,28 @@ export function startSoundDemo(onStep: (label: string | null) => void): () => vo
   }
   if (c.store.get().muted) c.store.setMuted(false)
   c.engine.unlock()
-  const { steps, total } = demoSteps()
-  const timers = steps.map((step, i) =>
-    window.setTimeout(() => {
-      c.engine.play(step.cue)
-      onStep(demoLabel(step, i, steps.length))
-    }, step.at * 1000),
-  )
-  timers.push(window.setTimeout(() => onStep(null), total * 1000))
+  let stopped = false
+  const timers: number[] = []
+  const begin = () => {
+    if (stopped) return
+    const { steps, total } = demoSteps()
+    steps.forEach((step, i) =>
+      timers.push(window.setTimeout(() => {
+        c.engine.play(step.cue)
+        onStep(demoLabel(step, i, steps.length))
+      }, step.at * 1000)),
+    )
+    timers.push(window.setTimeout(() => onStep(null), total * 1000))
+  }
+  const loading = c.samples ? Object.values(c.samples.statuses()).some((s) => s === 'loading') : false
+  if (loading) {
+    onStep(DEMO_LOADING_LABEL)
+    void c.engine.samplesSettled(DEMO_LOAD_WAIT_MS).then(begin)
+  } else {
+    begin()
+  }
   return () => {
+    stopped = true
     for (const t of timers) window.clearTimeout(t)
     onStep(null)
   }
