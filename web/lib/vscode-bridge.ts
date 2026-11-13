@@ -7,13 +7,15 @@
  */
 
 export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
-import type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
+import type { AgentEvent, SessionInfo, SessionUpdate, ConnectionStatus } from './bridge-types'
+import { parseOffboardedMessage } from './team/offboard'
 
 type InitCallback = () => void
+type OffboardedCallback = (sessionId: string, agents: string[]) => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
-type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | { sessionId: string; label: string; projectId?: string; prompt?: string }) => void
+type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | SessionUpdate) => void
 
 class VSCodeBridge {
   private _isVSCode = false
@@ -25,6 +27,7 @@ class VSCodeBridge {
   private statusListeners: StatusCallback[] = []
   private configListeners: ConfigCallback[] = []
   private sessionListeners: SessionCallback[] = []
+  private offboardedListeners: OffboardedCallback[] = []
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -98,9 +101,16 @@ class VSCodeBridge {
 
       case 'session-updated':
         for (const cb of this.sessionListeners) {
-          cb('updated', { sessionId: data.sessionId, label: data.label, projectId: data.projectId, prompt: data.prompt })
+          cb('updated', { sessionId: data.sessionId, label: data.label, projectId: data.projectId, prompt: data.prompt, coordinator: data.coordinator })
         }
         break
+
+      case 'agents-offboarded': {
+        const msg = parseOffboardedMessage(data)
+        if (!msg) break
+        for (const cb of this.offboardedListeners) cb(msg.sessionId, msg.agents)
+        break
+      }
     }
   }
 
@@ -143,6 +153,11 @@ class VSCodeBridge {
     return this.subscribe(this.sessionListeners, callback)
   }
 
+  /** Agents the server offboarded (standalone app): their nodes and buffered events must go. */
+  onOffboarded(callback: OffboardedCallback): () => void {
+    return this.subscribe(this.offboardedListeners, callback)
+  }
+
   // ─── Send commands to extension ──────────────────────────────────────────
 
   openFile(filePath: string, line?: number): void {
@@ -175,6 +190,7 @@ class VSCodeBridge {
     this.statusListeners = []
     this.configListeners = []
     this.sessionListeners = []
+    this.offboardedListeners = []
   }
 }
 

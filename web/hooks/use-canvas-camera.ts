@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { agentLabelBottom } from '@/lib/agent-label'
-import { agentDisplayName } from '@/lib/readable-labels'
+import { identityLine } from '@/lib/agent-identity'
+import { canvasIdentity } from '@/components/agent-visualizer/canvas/identity'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
@@ -114,7 +115,7 @@ export function useCanvasCamera({
       maxY = Math.max(maxY, agent.y + r)
       // The wrapped name hangs below the hexagon; frame it too
       const baseR = agent.isMain ? NODE.radiusMain : NODE.radiusSub
-      maxY = Math.max(maxY, agent.y + agentLabelBottom(agentDisplayName(agent.name), baseR, agent.tokensUsed > 0))
+      maxY = Math.max(maxY, agent.y + agentLabelBottom(identityLine(canvasIdentity(agent)), baseR, agent.tokensUsed > 0))
       if (agent.messageBubbles.length > 0) {
         const visibleCount = agent.messageBubbles.filter(b => {
           const age = (simTimeRef.current ?? 0) - b.time

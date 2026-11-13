@@ -217,6 +217,49 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-stage.done .track i{background:var(--done)}
 .tm-stage .pc{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 
+/* Chat with the coordinator (spec-chat). Owner messages sit right on the accent tint, replies left on the surface:
+   the side says who wrote it at a glance, the same reading as any messenger the owner already uses. */
+.tm-chat-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px}
+.tm-chat-off{padding:10px 12px;border-radius:12px;background:var(--sunk);color:var(--review);font-size:13px;font-weight:600;margin-bottom:10px;overflow-wrap:anywhere}
+.tm-chat-empty{margin:4px 2px 12px;color:var(--muted);font-size:14px}
+.tm-thread{list-style:none;margin:0 0 12px;padding:2px;display:flex;flex-direction:column;gap:8px;max-height:min(420px,55dvh);overflow-y:auto;overscroll-behavior:contain}
+.tm-msg{max-width:88%;align-self:flex-start;background:var(--bg);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:8px 12px}
+.tm-msg.mine{align-self:flex-end;background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:14px 14px 4px 14px}
+.tm-msg .tx{white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.45}
+.tm-msg .mt{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:4px;font-size:12px;color:var(--muted)}
+.tm-msg.mine .mt{justify-content:flex-end}
+.tm-msg .who{font-weight:600;color:var(--ink)}
+.tm-msg time{font-variant-numeric:tabular-nums}
+.tm-msg .st.read{color:var(--done);font-weight:600}
+.tm-compose label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.tm-compose textarea{display:block;width:100%;resize:vertical;min-height:64px;max-height:40dvh;font:inherit;font-size:15px;line-height:1.45;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tm-compose textarea::placeholder{color:var(--muted)}
+.tm-compose textarea:focus-visible{border-color:var(--accent)}
+.tm-compose .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
+.tm-compose .hint{font-size:12px;color:var(--muted);min-width:0}
+.tm-compose .count{font-variant-numeric:tabular-nums;font-weight:600;color:var(--review)}
+.tm-compose .count.full{color:var(--blocked)}
+.tm-compose .send-state{font-size:13px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.tm-compose .send-state:empty{margin:0}
+.tm-compose .send-state .err{color:var(--blocked)}
+.tm-chat-limits{margin:10px 2px 0;font-size:12px;color:var(--muted)}
+
+/* Floating "Pesan ke Sora" on phone and tablet, above the bottom bar */
+.tm-fab-wrap{position:fixed;right:16px;bottom:calc(72px + env(safe-area-inset-bottom));z-index:60;background:transparent}
+.tm-fab{font:inherit;font-weight:700;font-size:14px;min-height:48px;padding:0 18px;border-radius:24px;border:1px solid var(--accent);background:var(--accent);color:var(--bg);box-shadow:var(--shadow)}
+.tm-fab:hover{filter:brightness(1.08)}
+.tm-fab:active{transform:translateY(1px)}
+@media (min-width:1024px){.tm-fab-wrap{display:none}}
+@media (max-width:1023.98px){.tm-app .tm-wrap{padding-bottom:96px}}
+
+/* "Selesai kontrak": offboarded agents, name and role first like the graph */
+.tm-off-row .nm{font-weight:600}
+.tm-off-row .rl{font-weight:400;color:var(--muted)}
+.tm-off-row .tk{font-size:13px;color:var(--ink);margin-top:2px}
+.tm-off-row .wh{font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
+.tm-offboarded .err-row{align-items:center;color:var(--blocked)}
+.tm-themed .wh, .tm-themed .tx{overflow-wrap:anywhere}
+
 /* The panel adapts to its own width (a 440px column on desktop, a full page on tablet), not to the window */
 @container (min-width:600px){
   .tm-team .members{grid-template-columns:repeat(6,minmax(0,1fr))}

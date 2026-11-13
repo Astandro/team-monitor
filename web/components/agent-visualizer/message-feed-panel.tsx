@@ -6,7 +6,14 @@ import { COLORS, ROLE_COLORS, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useClickOutside } from '@/hooks/use-click-outside'
 import { agentDisplayName } from '@/lib/readable-labels'
+import { identityLine } from '@/lib/agent-identity'
 import { useVirtualList } from '@/hooks/use-virtual-list'
+import { canvasIdentity } from './canvas/identity'
+
+/** "Hiro · Frontend Engineer" when the node is known, else the old label */
+function feedName(agent: Agent | undefined, agentId: string): string {
+  return agent ? identityLine(canvasIdentity(agent)) : agentDisplayName(agentId)
+}
 
 interface MessageFeedPanelProps {
   conversations: Map<string, ConversationMessage[]>
@@ -185,7 +192,7 @@ export function MessageFeedPanel({
   if (!expanded) {
     if (!latestMessage) return null
     const agent = agents.get(latestMessage.agentId)
-    const agentName = agentDisplayName(agent?.name ?? latestMessage.agentId)
+    const agentName = feedName(agent, latestMessage.agentId)
     const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
     const preview = latestMessage.content.replace(/\n/g, ' ').slice(0, PREVIEW_MAX)
 
@@ -244,7 +251,7 @@ export function MessageFeedPanel({
           />
           {agentsWithMessages.map(agentId => {
             const agent = agents.get(agentId)
-            const name = agentDisplayName(agent?.name ?? agentId)
+            const name = feedName(agent, agentId)
             const color = agent ? getStateColor(agent.state) : COLORS.idle
             return (
               <TabButton
@@ -285,7 +292,7 @@ export function MessageFeedPanel({
                     <MessageRow
                       message={msg}
                       agentId={msg.agentId}
-                      agentName={agentDisplayName(agents.get(msg.agentId)?.name ?? msg.agentId)}
+                      agentName={feedName(agents.get(msg.agentId), msg.agentId)}
                       showAgent={activeTab === 'all'}
                       isSelected={selectedAgentId === msg.agentId}
                       onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}

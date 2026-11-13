@@ -7,6 +7,7 @@ import { newBubbleKeys, themeLabel, type ThemePref } from '@/lib/team/session'
 import type { DecisionVM, MemberVM, TaskVM } from '@/lib/team/view-model'
 import type { TeamModel } from './use-team-model'
 import { useSoundSettings } from '@/hooks/use-sound-settings'
+import { ChatSection, type ChatSectionHandle } from './chat-section'
 
 interface PanelProps {
   model: TeamModel
@@ -14,6 +15,7 @@ interface PanelProps {
   onCycleTheme: () => void
   calm: boolean
   onToggleCalm: () => void
+  chatRef?: React.Ref<ChatSectionHandle>
 }
 
 function Avatar({ tone, initial, working, size }: { tone: string; initial: string; working?: boolean; size?: 'lead' }) {
@@ -180,7 +182,50 @@ function Empty({ title, children }: { title: string; children?: React.ReactNode 
   )
 }
 
-export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: PanelProps) {
+/** Offboarded agents of this project (D22), collapsed: history stays reachable, the graph stays clean. */
+function OffboardedList({ model }: { model: TeamModel }) {
+  const list = model.offboarded
+  const count = list.status === 'ready' ? list.rows.length : null
+  return (
+    <details className="tm-list tm-offboarded">
+      <summary>
+        <span>Selesai kontrak</span>
+        <span className="note">{count === null ? '' : `${count} agent`}</span>
+      </summary>
+      {list.status === 'loading' && <div className="tm-row">Lagi memuat…</div>}
+      {list.status === 'error' && (
+        <div className="tm-row err-row">
+          <span className="ttl">{list.message}</span>
+          <button type="button" className="tm-btn" onClick={model.reloadOffboarded}>
+            Coba lagi
+          </button>
+        </div>
+      )}
+      {list.status === 'ready' && list.rows.length === 0 && (
+        <div className="tm-row">
+          <span className="ttl">
+            Belum ada. Agent yang sudah selesai bisa di-offboard dari grafik: ketuk agent-nya lalu pilih Offboard.
+          </span>
+        </div>
+      )}
+      {list.status === 'ready' &&
+        list.rows.map((r) => (
+          <div className="tm-row tm-off-row" key={r.key}>
+            <div className="ttl">
+              <div className="nm">
+                {r.name}
+                {r.role && <span className="rl"> · {r.role}</span>}
+              </div>
+              {r.task && <div className="tk">{r.task}</div>}
+              {r.when && <div className="wh">{r.when}</div>}
+            </div>
+          </div>
+        ))}
+    </details>
+  )
+}
+
+export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm, chatRef }: PanelProps) {
   const { vm, view } = model
   const seenRef = useRef<Set<string> | null>(null)
   const keys = vm.live.map((t) => `${t.id}:${t.status}`)
@@ -247,6 +292,15 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: Pa
           Proyek ini belum punya catatan tim. Begitu koordinator menulis <code>.agent-team/state.json</code>, tampilannya
           muncul di sini sendiri.
         </Empty>
+      )}
+      {view === 'no-data' && model.hasPayload && (
+        <ChatSection
+          ref={chatRef}
+          thread={model.thread}
+          coordinatorName={model.coordinatorName}
+          watcherNotice={model.watcherNotice}
+          send={model.sendMessage}
+        />
       )}
 
       {ready && (
@@ -331,12 +385,22 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: Pa
             ))}
           </details>
 
+          <OffboardedList model={model} />
+
           <h2 id="keputusan">Keputusan</h2>
           {vm.decisions.length === 0 ? (
             <div className="tm-empty">Belum ada keputusan yang perlu kamu ambil.</div>
           ) : (
             vm.decisions.map((d) => <Decision key={d.id} d={d} send={model.sendAnswer} />)
           )}
+
+          <ChatSection
+            ref={chatRef}
+            thread={model.thread}
+            coordinatorName={model.coordinatorName}
+            watcherNotice={model.watcherNotice}
+            send={model.sendMessage}
+          />
 
           <div className="tm-grid2">
             <div>

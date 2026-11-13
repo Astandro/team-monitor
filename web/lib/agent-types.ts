@@ -36,6 +36,10 @@ export interface Agent {
   model?: string
   currentTool?: string
   task?: string
+  /** Personal instance name from the spawn payload ("Hiro"), D23. */
+  displayName?: string
+  /** Standard role from the spawn payload ("Frontend Engineer"). */
+  role?: string
   spawnTime: number
   completeTime?: number
   opacity: number

@@ -8,6 +8,8 @@ import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
+import type { OffboardResult } from "@/lib/team/offboard"
+import { OffboardButton } from "./offboard-button"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
@@ -102,6 +104,11 @@ export interface TopBarProps {
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
+  /** Finished sub-agents that can be offboarded here (0 hides the action) */
+  finishedCount?: number
+  onOffboardAll?: () => Promise<OffboardResult>
+  /** Failure of an offboard started from the node menu, in plain text */
+  offboardNotice?: string
   /** Reports where the bars end, so floating canvas panels can sit below them */
   onLayout?: (layout: TopBarLayout) => void
   /** Rendered in flow under the bars (the collapsed message card), so it never overlaps them */
@@ -123,6 +130,7 @@ export const TopBar = memo(function TopBar({
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
   onTogglePanel, onToggleTimeline, onToggleMute,
+  finishedCount = 0, onOffboardAll, offboardNotice,
   onLayout, children,
 }: TopBarProps) {
   useGraphTheme()
@@ -202,6 +210,24 @@ export const TopBar = memo(function TopBar({
           </span>
         </ToggleButton>
       </div>
+      {/* Offboarding finished agents (D22): own row so its status text has room and never pushes the toggles */}
+      {(finishedCount > 0 && onOffboardAll || offboardNotice) && (
+        <div className="self-end max-w-full pointer-events-auto flex flex-col items-end gap-1" style={{ maxWidth: 'min(100%, 320px)' }}>
+          {finishedCount > 0 && onOffboardAll && (
+            <OffboardButton
+              label={`Offboard semua yang selesai (${finishedCount})`}
+              busyLabel="Lagi offboard…"
+              title="Semua agent yang sudah selesai hilang dari grafik dan masuk daftar Selesai kontrak"
+              onRun={onOffboardAll}
+            />
+          )}
+          {offboardNotice && (
+            <span role="status" className="text-[11px] text-right" style={{ color: COLORS.error, overflowWrap: 'anywhere' }}>
+              {offboardNotice}
+            </span>
+          )}
+        </div>
+      )}
       </div>
       {children && <div className="self-start max-w-full pointer-events-auto">{children}</div>}
     </div>

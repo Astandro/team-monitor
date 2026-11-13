@@ -3,6 +3,14 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
+import type { SessionUpdate } from '@/lib/bridge-types'
+import { dropOffboardedEvents, OFFBOARDED_EVENT } from '@/lib/team/offboard'
+
+/** Bumped when agents of a session were offboarded; the visualizer rebuilds that session from its buffer. */
+export interface OffboardRevision {
+  sessionId: string
+  seq: number
+}
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -33,6 +41,10 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Last offboarding seen (null before any) */
+  offboardRevision: OffboardRevision | null
+  /** Drop offboarded agents' buffered events (server message, or our own POST answered 200) */
+  applyOffboarded: (sessionId: string, agents: string[]) => void
 }
 
 /**
@@ -62,6 +74,22 @@ export function useVSCodeBridge(): BridgeHookResult {
    *  Prevents the animation frame from processing events in the wrong simulation context. */
   const sessionSwitchPendingRef = useRef(false)
   const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
+  const [offboardRevision, setOffboardRevision] = useState<OffboardRevision | null>(null)
+
+  const applyOffboarded = useCallback((sessionId: string, agents: string[]) => {
+    if (agents.length === 0) return
+    const buf = sessionEventsRef.current.get(sessionId)
+    if (buf) {
+      const kept = dropOffboardedEvents(buf, agents)
+      if (kept !== buf) sessionEventsRef.current.set(sessionId, kept)
+    }
+    // Rebuild even when the buffer had nothing left to drop: the node may still be drawn from earlier events
+    setOffboardRevision(prev => ({ sessionId, seq: (prev?.seq ?? 0) + 1 }))
+    // The team panel's "Selesai kontrak" list refreshes on this
+    try {
+      window.dispatchEvent(new CustomEvent(OFFBOARDED_EVENT, { detail: { sessionId, agents } }))
+    } catch { /* old browsers: the list refreshes on the next load */ }
+  }, [])
 
   // Connect to standalone dev relay server via SSE when not in VS Code
   useEffect(() => {
@@ -233,10 +261,15 @@ export function useVSCodeBridge(): BridgeHookResult {
         selectedSessionIdRef.current = session.id
         setSelectedSessionId(session.id)
       } else if (type === 'updated') {
-        const { sessionId, label, projectId, prompt } = data as { sessionId: string; label: string; projectId?: string; prompt?: string }
+        const { sessionId, label, projectId, prompt, coordinator } = data as SessionUpdate
         setSessions(prev => prev.map(s =>
           s.id === sessionId
-            ? { ...s, label, ...(projectId !== undefined ? { projectId } : {}), ...(prompt !== undefined ? { prompt } : {}) }
+            ? {
+                ...s, label,
+                ...(projectId !== undefined ? { projectId } : {}),
+                ...(prompt !== undefined ? { prompt } : {}),
+                ...(coordinator !== undefined ? { coordinator } : {}),
+              }
             : s
         ))
       } else if (type === 'ended') {
@@ -247,14 +280,17 @@ export function useVSCodeBridge(): BridgeHookResult {
       }
     })
 
+    const unsubOffboarded = bridge.onOffboarded(applyOffboarded)
+
     return () => {
       unsubInit()
       unsubEvent()
       unsubStatus()
       unsubConfig()
       unsubSession()
+      unsubOffboarded()
     }
-  }, [])
+  }, [applyOffboarded])
 
   const consumeEvents = useCallback(() => {
     // Clear in-place so stale closures in animation callbacks
@@ -330,5 +366,7 @@ export function useVSCodeBridge(): BridgeHookResult {
     getSessionEventCount,
     sessionsWithActivity,
     removeSession,
+    offboardRevision,
+    applyOffboarded,
   }
 }
