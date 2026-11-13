@@ -35,10 +35,20 @@
 
 /* Shell: desktop = panel column + graph; phone and tablet = one pane at a time with a switch */
 .tm-app{display:flex;flex-direction:column;height:100dvh;width:100%;overflow:hidden}
+/* Scroll (owner, 13 Nov: the Tim tab overshot past its end on the phone). The page itself never scrolls or bounces:
+   only the pane does, and the pane stops hard at both ends instead of rubber-banding, so nothing (the dark page
+   colour, an empty band) shows behind the bottom bar. Momentum scrolling inside the pane is the browser's own and
+   stays. `contain` keeps a scroll from chaining to the page; `none` on the y axis also drops the bounce. */
+html:has(.tm-app), body:has(.tm-app){height:100%;overflow:hidden;overscroll-behavior:none}
 .tm-panes{position:relative;flex:1;min-height:0}
 .tm-pane{position:absolute;inset:0}
 .tm-pane[data-active="false"]{visibility:hidden;pointer-events:none}
-.tm-pane-team{overflow-y:auto;overflow-x:hidden;background:var(--bg);overscroll-behavior:contain}
+/* A hidden pane's CSS animations (pulses, nebula, alert tags) still tick under visibility:hidden: hold them while the
+   Grafik tab is shown. Desktop shows both panes, so this only applies below 1024 px. */
+@media (max-width:1023.98px){
+  .tm-pane[data-active="false"] *, .tm-pane[data-active="false"] *::before, .tm-pane[data-active="false"] *::after{animation-play-state:paused!important}
+}
+.tm-pane-team{overflow-y:auto;overflow-x:hidden;background:var(--bg);overscroll-behavior:contain;overscroll-behavior-y:none}
 .tm-pane-graph > div:not(.tm-edge){height:100%!important;width:100%!important}
 
 /* Graph chrome in the panel's look (spec graph-theme items 1-2): same tokens, font and radius. The tokens carry a
@@ -183,7 +193,9 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-av .st{position:absolute;right:-4px;top:-4px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface)}
 .tm-av .st.idle{background:var(--line)}
 .tm-av .st.work{background:var(--accent)}
-.tm-av.working{animation:tm-breathe 2.6s ease-in-out infinite}
+/* Working pulse: a soft accent ring that fades in and out. Drawn on a pseudo-element and animated with opacity only
+   (the compositor runs it, no repaint per frame); it used to animate box-shadow, which repainted every frame. */
+.tm-av.working::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:0 0 0 7px var(--accent-soft);opacity:0;pointer-events:none;animation:tm-ring 2.6s ease-in-out infinite}
 /* Leaving member: the graph's disintegration in small. The outline is an SVG drawn in pieces; the body fades. */
 .tm-av.leaving{border-color:transparent;background:transparent}
 .tm-av.leaving .body{position:absolute;inset:0;border-radius:10px;display:grid;place-items:center;transition:opacity 1s linear}
@@ -196,18 +208,23 @@ a.tm-stat.hot b{color:var(--blocked)}
    slow nebula (calmer since the owner's second pass): two soft clouds and a faint warm core that swell slowly and
    fade, repeating every burstPeriod() seconds (22 s down to 10 s). The tag is a see-through tint with a warning
    triangle in front. Reduced motion: static alert tag, no nebula, plain fade. */
-.tm-alert-tag{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;line-height:1.3;padding:0 7px 0 5px;margin-left:6px;border-radius:6px;vertical-align:1px;white-space:nowrap;color:var(--alert-ink);background:var(--alert-bg);border:1px solid var(--alert-line)}
+.tm-alert-tag{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;line-height:1.3;padding:0 7px 0 5px;margin-left:6px;border-radius:6px;vertical-align:1px;white-space:nowrap;color:var(--alert-ink);background:var(--alert-bg);border:1px solid var(--alert-line);position:relative;isolation:isolate}
 .tm-alert-tag svg{flex:none;width:11px;height:11px}
 .tm-alert-tag.blink{animation:tm-alert-pulse var(--tm-flicker,3s) ease-in-out infinite}
-/* Owner (13 Nov): the whole alert component blinks (pill, triangle and text), not only the border. */
-@keyframes tm-alert-pulse{0%,100%{opacity:1;background:var(--alert-bg);box-shadow:0 0 0 0 transparent}50%{opacity:.3;background:var(--alert-bg-hi);box-shadow:0 0 0 3px color-mix(in srgb,var(--alert-line) 35%,transparent)}}
+/* Owner (13 Nov): the whole alert component blinks (pill, triangle and text), not only the border.
+   Performance (13 Nov): only opacity animates. The stronger tint and the soft ring at the peak sit on a pseudo-element
+   behind the text that fades in with the pulse; ten leaving members used to repaint background and box-shadow on
+   every frame. A second layer of the base tint lands close to the "hi" tint (16% over 16% = 29%, token 26%). */
+@keyframes tm-alert-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.tm-alert-tag.blink::after{content:"";position:absolute;inset:-1px;border-radius:inherit;z-index:-1;pointer-events:none;background:var(--alert-bg);box-shadow:0 0 0 3px color-mix(in srgb,var(--alert-line) 35%,transparent);opacity:0;animation:tm-ring var(--tm-flicker,3s) ease-in-out infinite}
+@keyframes tm-ring{0%,100%{opacity:0}50%{opacity:1}}
 .tm-av.leaving.bursting::before,.tm-av.leaving.bursting::after{content:"";position:absolute;inset:-10px;border-radius:50%;pointer-events:none;opacity:0;z-index:-1;animation:tm-nebula var(--tm-burst,16s) ease-in-out infinite}
 .tm-av.leaving.bursting::before{background:radial-gradient(circle at 35% 40%,rgba(227,91,214,.28),transparent 55%),radial-gradient(circle at 66% 62%,rgba(47,211,196,.25),transparent 55%)}
 .tm-av.leaving.bursting::after{background:radial-gradient(circle at 50% 50%,rgba(255,244,220,.45),transparent 22%);animation-delay:calc(var(--tm-burst,16s) * -0.02)}
 /* slow swell in, long fade, then rest until the next one (most of the cycle is quiet) */
 @keyframes tm-nebula{0%{opacity:0;transform:scale(.5)}14%{opacity:.9;transform:scale(.9)}32%{opacity:.5;transform:scale(1.15)}42%{opacity:0;transform:scale(1.25)}100%{opacity:0;transform:scale(1.25)}}
 .tm-av.leaving{isolation:isolate}
-@media (prefers-reduced-motion:reduce){.tm-themed .tm-alert-tag.blink{animation:none!important}.tm-themed .tm-av.leaving::before,.tm-themed .tm-av.leaving::after{display:none}}
+@media (prefers-reduced-motion:reduce){.tm-themed .tm-alert-tag.blink{animation:none!important}.tm-themed .tm-alert-tag.blink::after{display:none}.tm-themed .tm-av.leaving::before,.tm-themed .tm-av.leaving::after{display:none}}
 /* Groups in the tree (owner feedback 13 Nov): Aktif, Siaga, then Disintegrating on its own tint at the bottom */
 .tm-team .tm-group{margin-top:8px}
 .tm-team .tm-group-title{margin:6px 0 0;font-size:12px;font-weight:700;color:var(--muted);display:flex;align-items:center;gap:6px}
@@ -222,7 +239,7 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-av.has-bot{border-color:transparent;overflow:visible}
 
 .tm-bubbles{display:flex;flex-direction:column;gap:10px}
-.tm-bubble{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 14px;box-shadow:var(--shadow)}
+.tm-bubble{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 14px;box-shadow:var(--shadow);position:relative}
 .tm-bubble .tm-av{width:40px;height:40px;border-radius:12px;font-size:14px}
 .tm-bubble .bd{min-width:0;flex:1}
 .tm-bubble .tt{font-weight:600;line-height:1.35}
@@ -233,12 +250,13 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-chip.review{color:var(--review)}
 .tm-chip.blocked{color:var(--blocked)}
 .tm-chip.done{color:var(--done)}
-.tm-bubble.running{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));animation:tm-breathe 2.6s ease-in-out infinite}
+/* Running task: the same opacity-only ring as a working avatar (no box-shadow animation, see .tm-av.working) */
+.tm-bubble.running{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.tm-bubble.running::after{content:"";position:absolute;inset:-1px;border-radius:inherit;box-shadow:0 0 0 7px var(--accent-soft);opacity:0;pointer-events:none;animation:tm-ring 2.6s ease-in-out infinite}
+.tm-bubble.running.enter::after{animation-delay:.5s}
 .tm-bubble.enter{animation:tm-pop .5s cubic-bezier(.2,.9,.25,1.15) both}
-.tm-bubble.running.enter{animation:tm-pop .5s cubic-bezier(.2,.9,.25,1.15) both,tm-breathe 2.6s ease-in-out .5s infinite}
-@keyframes tm-breathe{0%,100%{box-shadow:var(--shadow),0 0 0 0 var(--accent-soft)}50%{box-shadow:var(--shadow),0 0 0 7px var(--accent-soft)}}
 @keyframes tm-pop{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.tm-themed .tm-bubble,.tm-themed .tm-av{animation:none!important}}
+@media (prefers-reduced-motion:reduce){.tm-themed .tm-bubble,.tm-themed .tm-av{animation:none!important}.tm-themed .tm-bubble.running::after,.tm-themed .tm-av.working::after{display:none}}
 
 .tm-list{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);margin-top:10px}
 .tm-list summary{list-style:none;padding:12px 14px;min-height:44px;font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center;gap:10px}

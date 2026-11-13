@@ -9,6 +9,7 @@ import { BloomRenderer } from './bloom-renderer'
 import { drawBackground } from './background-layer'
 import { createSkyParticles, updateSkyParticles, type SkyParticle } from '@/lib/sky'
 import { reducedMotion } from '@/lib/motion'
+import { graphFrameMode, resumeDelta, type GraphFrameMode } from '@/lib/frame-rate'
 import {
   type VisualEffect,
   drawTetherLine,
@@ -45,12 +46,15 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /** The graph pane is on screen (false behind the phone's Tim tab): drawing pauses while it is not. */
+  active?: boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit, fitTop,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  active = true,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -63,6 +67,7 @@ export function AgentCanvas({
   const skyThemeRef = useRef<string | null>(null)
   const lastFrameTimeRef = useRef(0)
   const dprRef = useRef(1)
+  const frameModeRef = useRef<GraphFrameMode>('every-frame')
 
   // Effects system
   const effectsRef = useRef<VisualEffect[]>([])
@@ -182,6 +187,12 @@ export function AgentCanvas({
   const drawRef = useRef<(timestamp: number) => void>(() => {})
 
   const draw = useCallback((timestamp: number) => {
+    // Hidden pane or background page: stop here and schedule nothing (web/lib/frame-rate.ts). The effect below
+    // starts the loop again when the graph is shown.
+    if (frameModeRef.current === 'paused') {
+      animationRef.current = 0
+      return
+    }
     animationRef.current = requestAnimationFrame((ts) => drawRef.current(ts))
 
     const canvas = mainCanvasRef.current
@@ -211,7 +222,7 @@ export function AgentCanvas({
       } = drawPropsRef.current
       const transform = transformRef.current
 
-      const deltaTime = lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
+      const deltaTime = resumeDelta(lastFrameTimeRef.current, timestamp, ANIM_SPEED.defaultDeltaTime)
       lastFrameTimeRef.current = timestamp
       timeRef.current += deltaTime
       if (simTime != null) simTimeRef.current = simTime
@@ -355,12 +366,30 @@ export function AgentCanvas({
 
   drawRef.current = draw
 
+  // Draw every display frame while the graph is on screen, nothing while its pane is hidden or the page is in the
+  // background (spec mobile-perf item 1). The simulation keeps running either way.
+  const [pageVisible, setPageVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
   useEffect(() => {
+    const on = () => setPageVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [])
+  const frameMode = graphFrameMode({ paneVisible: active, pageVisible })
+  frameModeRef.current = frameMode
+  useEffect(() => {
+    if (frameMode === 'paused') {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current)
+      animationRef.current = 0
+      return
+    }
     const loop = (timestamp: number) => drawRef.current(timestamp)
     animationRef.current = requestAnimationFrame(loop)
-    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- drawRef is stable; rAF loop set up once
-  }, [])
+    return () => {
+      if (animationRef.current) cancelAnimationFrame(animationRef.current)
+      animationRef.current = 0
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- drawRef is stable; the loop restarts only on a mode change
+  }, [frameMode])
 
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: isDragging ? 'grabbing' : 'grab' }}>

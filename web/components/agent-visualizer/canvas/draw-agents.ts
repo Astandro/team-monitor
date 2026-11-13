@@ -10,6 +10,7 @@ import { getAgentGlowSprite } from './render-cache'
 import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, NEBULA_COLORS, NEBULA_CORE, tagPulse, type Burst, type Fragment } from '@/lib/disintegration'
 import { ALERT_TOKENS, alertBlinkAlpha, mixHex, WARNING_ICON } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
+import { drawNodeAvatar } from './avatar-sprites'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -269,6 +270,30 @@ function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
   }
 }
 
+/** Waiting for permission while the avatar fills the hexagon: the lock moves to a small badge on its lower right. */
+function drawLockBadge(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string) {
+  const s = r * 0.42
+  const bx = agent.x + r * 0.52
+  const by = agent.y + r * 0.5
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(bx, by, s * 0.75, 0, Math.PI * 2)
+  ctx.fillStyle = COLORS.nodeInterior
+  ctx.fill()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.roundRect(bx - s * 0.32, by - s * 0.05, s * 0.64, s * 0.46, 1.5)
+  ctx.fill()
+  ctx.beginPath()
+  ctx.arc(bx, by - s * 0.08, s * 0.22, Math.PI, 0)
+  ctx.lineWidth = 1.3
+  ctx.stroke()
+  ctx.restore()
+}
+
 function drawOrbitingParticles(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, time: number) {
   for (let i = 0; i < 4; i++) {
     const angle = time * ANIM.orbitSpeed + (i / 4) * Math.PI * 2
@@ -491,6 +516,7 @@ export function drawAgents(
   // Wall clock for the auto-offboard countdown (the server's finishedAt / autoOffboardAt are real times)
   const now = Date.now()
   const still = reducedMotion()
+  const theme = getGraphTheme() === 'dark' ? 'dark' : 'light'
   for (const [id, agent] of agents) {
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const color = getStateColor(agent.state)
@@ -527,7 +553,10 @@ export function drawAgents(
 
     drawDepthShadow(ctx, agent, r)
     drawAgentGlow(ctx, agent, r, color, isHovered, isSelected, isWaiting)
-    drawScanline(ctx, agent, r, color, isHovered, isWaiting, time)
+    // The member's bot face inside the hexagon (owner, 13 Nov), the same face as in the team list. It takes the
+    // hexagon's interior, so the scanline and the centre icon are only drawn while its bitmap is still decoding.
+    const avatarDrawn = drawNodeAvatar(ctx, agent.x, agent.y, r, canvasIdentity(agent).name, !!agent.isMain, theme)
+    if (!avatarDrawn) drawScanline(ctx, agent, r, color, isHovered, isWaiting, time)
     if (look?.pieces) {
       ctx.globalAlpha = agent.opacity
       drawBrokenOutline(ctx, agent, r, color, look.pieces)
@@ -536,7 +565,8 @@ export function drawAgents(
     } else {
       drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
     }
-    drawCenterIcon(ctx, agent, r, color, isWaiting)
+    if (!avatarDrawn) drawCenterIcon(ctx, agent, r, color, isWaiting)
+    else if (isWaiting) drawLockBadge(ctx, agent, r, color)
 
     if (agent.state === 'thinking') {
       drawOrbitingParticles(ctx, agent, r, color, time)
