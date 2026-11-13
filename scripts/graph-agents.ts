@@ -80,6 +80,12 @@ export class GraphAgents {
     }
   }
 
+  /** Sub-agents of a session that are running now (for finishing them when the session ends). */
+  runningSubagents(sessionId: string): string[] {
+    const agents = this.bySession.get(sessionId)
+    return agents ? [...agents.values()].filter((a) => !a.isMain && a.status === 'running').map((a) => a.name) : []
+  }
+
   hasSession(sessionId: string): boolean {
     return this.bySession.has(sessionId)
   }
@@ -117,6 +123,22 @@ export class GraphAgents {
    * running offboarded agent finish; `hide` then names the agents that just became hidden, for an
    * `agents-offboarded` message.
    */
+  /**
+   * A sub-agent's `agent_complete` with `finishedAt` (ISO) and, when auto offboarding is on, `autoOffboardAt` (ISO)
+   * added to its payload (spec ui-cleanup item 6), so every viewer, also on replay, can draw the time left. Other
+   * events, the Orchestrator's completion and completions of agents the registry never saw come back unchanged.
+   * Call before `admit()`, with the same `finishedAt` that `admit()` gets.
+   */
+  annotateCompletion(event: AgentEvent, finishedAt: number, autoOffboardMs?: number): AgentEvent {
+    if (event.type !== 'agent_complete' || !event.sessionId) return event
+    const name = str(event.payload?.name)
+    const agent = name ? this.bySession.get(event.sessionId)?.get(name) : undefined
+    if (!agent || agent.isMain || !Number.isFinite(finishedAt)) return event
+    const payload: Record<string, unknown> = { ...event.payload, finished: true, finishedAt: new Date(finishedAt).toISOString() }
+    if (typeof autoOffboardMs === 'number' && autoOffboardMs > 0) payload.autoOffboardAt = new Date(finishedAt + autoOffboardMs).toISOString()
+    return { ...event, payload }
+  }
+
   admit(event: AgentEvent, lookup: OffboardLookup, now: number = Date.now(), finishedAt?: number): { send: boolean; hide: string[] } {
     const before = this.isVisible(event, lookup)
     this.observe(event, now, finishedAt)
@@ -136,4 +158,12 @@ export interface GraphView {
   sessionProject(sessionId: string): string | null
   /** Tell open graph streams that these agents were offboarded (`agents-offboarded` message). */
   announceOffboarded(sessionId: string, agents: string[]): void
+}
+
+/** What the auto offboarder needs on top of `GraphView` (implemented by the relay; spec ui-cleanup item 6). */
+export interface AutoOffboardGraph extends GraphView {
+  /** Ids of the watched Claude sessions. */
+  sessions(): string[]
+  /** Called after a sub-agent spawned (became active again) or completed; returns a function that unsubscribes. */
+  onAgentsChanged(listener: () => void): () => void
 }
