@@ -5,8 +5,19 @@
 
 import { AudioEngine } from '@/lib/audio-engine'
 import type { SoundCue } from './cues'
+import { demoLabel, demoSteps, DEMO_ORDER } from './demo'
 import { STAGGER_MS } from './gate'
 import { SoundSettingsStore, type SoundSettings } from './settings'
+import { renderCueOffline, renderMixOffline } from './synth'
+
+// QA handle (read-only, plays nothing): render any sound offline, e.g. to save it as a WAV in a headless browser.
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { tmSoundLab?: unknown }).tmSoundLab = {
+    cues: DEMO_ORDER,
+    render: (cue: SoundCue, sampleRate?: number) => renderCueOffline(cue, sampleRate),
+    renderMix: (mix: { cue: SoundCue; at: number }[], sampleRate?: number) => renderMixOffline(mix, sampleRate),
+  }
+}
 
 interface SoundClient {
   engine: AudioEngine
@@ -51,6 +62,33 @@ export function toggleSound(): void {
   if (!c) return
   c.store.toggleMuted()
   c.engine.unlock()
+}
+
+/**
+ * "Coba suara": play every sound in turn, reporting each one's label (null when the demo is over or stopped).
+ * Called from a button press, so audio may start; it turns sound on when it was off (the owner asked to hear it).
+ * Bypasses the rate limits on purpose. Returns a stop function (sounds already started finish on their own).
+ */
+export function startSoundDemo(onStep: (label: string | null) => void): () => void {
+  const c = getSoundClient()
+  if (!c) {
+    onStep(null)
+    return () => {}
+  }
+  if (c.store.get().muted) c.store.setMuted(false)
+  c.engine.unlock()
+  const { steps, total } = demoSteps()
+  const timers = steps.map((step, i) =>
+    window.setTimeout(() => {
+      c.engine.play(step.cue)
+      onStep(demoLabel(step, i, steps.length))
+    }, step.at * 1000),
+  )
+  timers.push(window.setTimeout(() => onStep(null), total * 1000))
+  return () => {
+    for (const t of timers) window.clearTimeout(t)
+    onStep(null)
+  }
 }
 
 export function setSoundVolume(volume: number): void {

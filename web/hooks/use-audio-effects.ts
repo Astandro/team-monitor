@@ -5,6 +5,7 @@ import { detectStateChanges } from '@/components/agent-visualizer/canvas/detect-
 import { cueForGraphTransition, isHandoffParticle, type SoundCue } from '@/lib/sound/cues'
 import { SoundGate, startedSessions } from '@/lib/sound/gate'
 import { playCues } from '@/lib/sound/sound-client'
+import { OFFBOARDED_EVENT } from '@/lib/team/offboard'
 import { useSoundSettings } from './use-sound-settings'
 
 interface AudioEffectsInput {
@@ -41,6 +42,18 @@ export function useAudioEffects({ agents, toolCalls, particles, isReviewing, ses
     for (const s of sessions) seenSessionsRef.current.add(s.id)
     if (started.length > 0) playCues(gateRef.current!.admit(['session_start'], performance.now()))
   }, [sessions])
+
+  // An instance left the team (server auto-offboard or the owner's Offboard): a distant meteor burning up.
+  // The same quiet window applies, so offboards caught up right after load stay silent.
+  useEffect(() => {
+    const onOffboarded = (e: Event) => {
+      const agents = (e as CustomEvent<{ agents?: unknown }>).detail?.agents
+      if (Array.isArray(agents) && agents.length === 0) return
+      playCues(gateRef.current!.admit(['agent_offboarded'], performance.now()))
+    }
+    window.addEventListener(OFFBOARDED_EVENT, onOffboarded)
+    return () => window.removeEventListener(OFFBOARDED_EVENT, onOffboarded)
+  }, [])
 
   // Detect tool/agent state transitions and handoffs, play sounds (live mode only).
   // The baselines follow every frame, also while seeking or reviewing, so going back to live is not a burst.
