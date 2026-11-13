@@ -27,6 +27,19 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void
 
 // ─── Projects and watchers ──────────────────────────────────────────────────
 
+/**
+ * One entry of `GET /api/team/projects`. Cloud projects (hub intake, `--ingest`) also carry `origin: "cloud"`,
+ * their `sourceId` and `stale` (true while the source has sent nothing for 60 s); local projects omit all three.
+ */
+export interface TeamProjectInfo {
+  id: string
+  name: string
+  hasState: boolean
+  origin?: 'cloud'
+  sourceId?: string
+  stale?: boolean
+}
+
 export class TeamService {
   private watchers = new Map<string, TeamStateWatcher>()
   private sseClients = new Set<http.ServerResponse>()
@@ -56,7 +69,7 @@ export class TeamService {
     return this.watchers.get(id)
   }
 
-  list() {
+  list(): TeamProjectInfo[] {
     return this.projects.map((p) => ({ id: p.id, name: p.name, hasState: hasState(p.path) }))
   }
 
