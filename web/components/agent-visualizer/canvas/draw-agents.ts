@@ -8,7 +8,7 @@ import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, NEBULA_COLORS, NEBULA_CORE, tagPulse, type Burst, type Fragment } from '@/lib/disintegration'
-import { ALERT_TOKENS, mixHex, WARNING_ICON } from '@/lib/alert-tag'
+import { ALERT_TOKENS, alertBlinkAlpha, mixHex, WARNING_ICON } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
 
 let _claudeSparkPath: Path2D | null = null
@@ -360,6 +360,9 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   const h = 13
   const x = agent.x - w / 2
   const y = agent.y + top + lines * AGENT_DRAW.labelLineHeight + 2
+  // Owner (13 Nov): the whole alert component blinks (pill, triangle and text together), not only its border.
+  ctx.save()
+  ctx.globalAlpha *= alertBlinkAlpha(pulse)
   if (pulse > 0) {
     // the ring is a stroke outside the pill, so the see-through tint does not darken under it
     ctx.beginPath()
@@ -380,6 +383,7 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   ctx.fillText(DISINTEGRATING_TAG, x + 4 + icon + 3, y + h / 2 + 0.5)
+  ctx.restore()
 }
 
 /** The tag's warning triangle (same shape as the panel's inline SVG, WARNING_ICON). */

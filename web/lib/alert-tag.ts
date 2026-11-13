@@ -47,6 +47,18 @@ export function mixHex(a: string, b: string, t: number): string {
   return toHex(out)
 }
 
+/** Lowest opacity of the whole alert component at the bottom of a blink (owner, 13 Nov: the component blinks). */
+export const ALERT_BLINK_MIN_ALPHA = 0.3
+
+/**
+ * Opacity of the whole alert component (pill, triangle and text together) for a pulse value 0..1: fully visible at
+ * pulse 0 (also the static, reduced-motion state), fading to ALERT_BLINK_MIN_ALPHA at pulse 1.
+ */
+export function alertBlinkAlpha(pulse: number): number {
+  const k = Math.min(1, Math.max(0, pulse))
+  return 1 - (1 - ALERT_BLINK_MIN_ALPHA) * k
+}
+
 /** A #RRGGBBAA colour laid over an opaque #RRGGBB background: the opaque colour the eye sees. */
 export function compositeOver(fg: string, bg: string): string {
   const a = channel(fg, 3) / 255
