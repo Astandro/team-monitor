@@ -8,9 +8,10 @@ import { syncOnce } from './telemetry/sync'
  * Hardcoded telemetry endpoint + publishable key.
  *
  * These ship inside every published binary. No env var override, no runtime
- * fallback. All enabled installs send events to Agent Flow's Supabase project.
- * Forks that republish under a different name must edit these constants and
- * rebuild.
+ * fallback. Telemetry is off by default in Team Monitor; if someone opts in,
+ * events go to the upstream Agent Flow Supabase project (inherited constants,
+ * not ours). Forks that republish under a different name must edit these
+ * constants and rebuild.
  *
  * Safe to commit: publishable keys are designed to be public. Postgres RLS
  * denies the anon role everything; the only write path is the telemetry-ingest
@@ -33,6 +34,7 @@ const SYNC_SCHEDULE_MS = [2 * 60 * 1000, 3 * 60 * 1000]
 const SYNC_REPEAT_MS = 5 * 60 * 1000
 
 const FALSY_VALUES = new Set(['false', '0', 'disabled', ''])
+const TRUTHY_OPT_IN = new Set(['true', '1', 'yes', 'on'])
 
 export interface TelemetryEvent {
   event_type: 'session_start' | 'session_end' | 'error'
@@ -79,21 +81,23 @@ export interface TelemetryClient {
 /**
  * Pure function: given an env record, return true if telemetry should emit.
  *
- * Rules:
+ * Team Monitor ships with telemetry OFF. Rules:
  * - `DO_NOT_TRACK` truthy → disabled (wins over everything)
- * - `AGENT_FLOW_TELEMETRY` falsy (`false`, `0`, `disabled`, ``) → disabled
- * - Otherwise enabled (including when AGENT_FLOW_TELEMETRY is unset)
+ * - legacy `AGENT_FLOW_TELEMETRY` falsy (`false`, `0`, `disabled`, ``) → disabled
+ * - enabled only when `TEAM_MONITOR_TELEMETRY` is explicitly truthy
+ *   (`true`, `1`, `yes`, `on`); unset or anything else → disabled
  */
 export function isTelemetryEnabled(env: NodeJS.ProcessEnv): boolean {
   const dnt = env.DO_NOT_TRACK
   if (dnt !== undefined && dnt !== '' && dnt !== '0' && dnt.toLowerCase() !== 'false') {
     return false
   }
-  const flag = env.AGENT_FLOW_TELEMETRY
-  if (flag !== undefined && FALSY_VALUES.has(flag.toLowerCase())) {
+  const legacy = env.AGENT_FLOW_TELEMETRY
+  if (legacy !== undefined && FALSY_VALUES.has(legacy.toLowerCase())) {
     return false
   }
-  return true
+  const optIn = env.TEAM_MONITOR_TELEMETRY
+  return optIn !== undefined && TRUTHY_OPT_IN.has(optIn.toLowerCase())
 }
 
 export function createTelemetryClient(opts: TelemetryClientOptions): TelemetryClient {

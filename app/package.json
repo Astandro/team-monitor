@@ -1,9 +1,9 @@
 {
-  "name": "agent-flow-app",
+  "name": "team-monitor",
   "version": "0.9.4",
-  "description": "Real-time visualization of AI agent orchestration — standalone web app",
+  "description": "Team monitor for an agentic team: live agent graph plus team, tasks and decisions",
   "bin": {
-    "agent-flow": "dist/app.js"
+    "team-monitor": "dist/app.js"
   },
   "files": [
     "dist/"
@@ -14,13 +14,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/patoles/agent-flow.git"
+    "url": "git+https://github.com/Astandro/team-monitor.git"
   },
   "keywords": [
     "agent",
     "visualization",
     "ai",
     "llm",
-    "agent-flow"
+    "team-monitor"
   ]
 }
