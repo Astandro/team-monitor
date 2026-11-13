@@ -7,6 +7,9 @@ import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
 import { ControlBar } from "./control-bar"
+import { RecenterButton } from "./recenter-button"
+import { AgentSheet } from "./agent-sheet"
+import { isSheetLayout } from "@/lib/sheet-layout"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
 import { ToolDetailPopup } from "./tool-detail-popup"
@@ -316,6 +319,15 @@ export function AgentVisualizer({ projectId = null }: {
 
   const finishedCount = useMemo(() => finishedSubAgents(agents).length, [agents])
 
+  // Phone and tablet widths show agent details in one bottom sheet (web/lib/sheet-layout.ts)
+  const [sheetLayout, setSheetLayout] = useState(() => typeof window !== 'undefined' && isSheetLayout(window.innerWidth))
+  useEffect(() => {
+    const on = () => setSheetLayout(isSheetLayout(window.innerWidth))
+    on()
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+
   // Context menu items (right click / long press on a node)
   const menuAgentId = selection.contextMenu?.agentId ?? null
   const menuAgent = menuAgentId ? agents.get(menuAgentId) : undefined
@@ -392,8 +404,21 @@ export function AgentVisualizer({ projectId = null }: {
         showCostOverlay={showCostOverlay}
       />
 
+      {/* Phones and tablets: one bottom sheet (detail, transcript one tap away); desktop: floating card + chat panel */}
+      {sheetLayout && selectedAgent && (
+        <AgentSheet
+          agent={selectedAgent}
+          coordinator={coordinator}
+          conversation={selectedConversation}
+          runtime={selectedAgent.runtime ?? sessionRuntime}
+          onOffboard={offboardSession ? runOffboard : undefined}
+          onClose={selection.clearAgent}
+          topReserve={fitTop}
+        />
+      )}
+
       {/* Agent detail card (floating, tethered to node) */}
-      {selectedAgent && selection.selectedAgentWorldPos && (
+      {!sheetLayout && selectedAgent && selection.selectedAgentWorldPos && (
         <div {...stopPropagationHandlers}>
           <AgentDetailCard
             agent={selectedAgent}
@@ -428,9 +453,10 @@ export function AgentVisualizer({ projectId = null }: {
 
       {/* Chat panel (bottom-right, shown when agent selected) */}
       <AgentChatPanel
-        visible={!!selectedAgent}
+        visible={!sheetLayout && !!selectedAgent}
         agentName={selectedAgent ? identityLine(agentIdentity(selectedAgent, coordinator)) : ''}
         agentState={selectedAgent?.state ?? 'idle'}
+        agentIsMain={!!selectedAgent?.isMain}
         conversation={selectedConversation}
         runtime={selectedAgent?.runtime ?? sessionRuntime}
         onClose={selection.clearAgent}
@@ -444,6 +470,9 @@ export function AgentVisualizer({ projectId = null }: {
           onClose={() => selection.setContextMenu(null)}
         />
       )}
+
+      {/* Re-centre: back to the Orchestrator and the sub-agents at work (drops a node focus, keeps everything else) */}
+      {!isEmpty && <RecenterButton onClick={() => { selection.clearAgent(); setZoomToFitTrigger(n => n + 1) }} />}
 
       {/* Floating control strip */}
       <ControlBar

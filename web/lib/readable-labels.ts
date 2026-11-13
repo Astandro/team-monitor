@@ -93,6 +93,16 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? spaced(state)
 }
 
+/**
+ * State label for a node. The Orchestrator's "complete" only means the relay saw no transcript write (its own or a
+ * sub-agent's) for 5 minutes; the next write brings it back. "Selesai" read as "the session is over" while the owner
+ * was still working with it (owner screenshot 13 Nov), so the main node says it is quiet instead.
+ */
+export function agentStateLabel(state: string, isMain?: boolean): string {
+  if (isMain && state === 'complete') return 'Sepi, belum ada aktivitas baru'
+  return stateLabel(state)
+}
+
 const TOOL_STATE_LABELS: Record<string, string> = {
   running: 'Berjalan',
   complete: 'Selesai',

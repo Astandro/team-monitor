@@ -2,7 +2,7 @@
 
 import { CARD, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
-import { stateLabel } from '@/lib/readable-labels'
+import { agentStateLabel } from '@/lib/readable-labels'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
@@ -13,6 +13,8 @@ interface ChatPanelProps {
   /** Display line, already resolved ("Hiro · Frontend Engineer") */
   agentName: string
   agentState: AgentState
+  /** The Orchestrator: its quiet state is not called "Selesai" */
+  agentIsMain?: boolean
   conversation: ConversationMessage[]
   runtime?: 'claude' | 'codex'
   onClose: () => void
@@ -22,6 +24,7 @@ export function AgentChatPanel({
   visible,
   agentName,
   agentState,
+  agentIsMain,
   conversation,
   runtime,
   onClose,
@@ -48,7 +51,7 @@ export function AgentChatPanel({
             {agentName}
           </span>
           <span className="text-[9px] font-mono" style={{ color: stateColor + '90' }}>
-            {stateLabel(agentState)}
+            {agentStateLabel(agentState, agentIsMain)}
           </span>
         </PanelHeader>
 

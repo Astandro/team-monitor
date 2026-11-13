@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentDisplayName, toolLabel,toolCallLine, hasDistinctToolName, stateLabel, toolStateLabel } from './readable-labels'
+import { agentDisplayName, toolLabel,toolCallLine, hasDistinctToolName, stateLabel, toolStateLabel, agentStateLabel } from './readable-labels'
 
 test('known tools map to plain Indonesian labels', () => {
   assert.equal(toolLabel('Bash'), 'Jalanin perintah')
@@ -64,4 +64,11 @@ test('state labels are plain Indonesian', () => {
   assert.equal(stateLabel('unknown_state'), 'unknown state')
   assert.equal(toolStateLabel('running'), 'Berjalan')
   assert.equal(toolStateLabel('error'), 'Gagal')
+})
+
+test('the Orchestrator is never "Selesai" while its session can still wake up; sub-agents still are', () => {
+  assert.notEqual(agentStateLabel('complete', true), 'Selesai')
+  assert.match(agentStateLabel('complete', true), /Sepi/)
+  assert.equal(agentStateLabel('complete', false), 'Selesai')
+  assert.equal(agentStateLabel('thinking', true), 'Berpikir')
 })

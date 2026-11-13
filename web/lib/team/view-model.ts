@@ -26,6 +26,8 @@ export interface MemberVM {
   role: string
   initial: string
   tone: AvatarTone
+  /** The team lead: its bot avatar has the lead look (web/lib/bot-avatar.ts) */
+  isLead: boolean
   working: boolean
   task: string
   /** 'offboarding': retired, breaking up over the hour after finishedAt (see members.ts). */
@@ -45,6 +47,9 @@ export interface TaskVM {
   who: string
   tone: AvatarTone
   initial: string
+  /** Who the bot avatar is drawn for (the member's nick; empty when nobody is named) */
+  avatarName: string
+  avatarLead: boolean
 }
 
 export interface DecisionVM {
@@ -126,6 +131,7 @@ function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: s
     role: name,
     initial: initialOf(nick),
     tone: avatarTone(a.desk, a.model),
+    isLead: a.desk === 'coordinator',
     working,
     task: working ? asTask || rawTask : '',
     phase: offboarding ? 'offboarding' : working ? 'working' : 'idle',
@@ -201,6 +207,8 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
       who: who ? [who.nick, who.model].filter(Boolean).join(' · ') : '',
       tone: who ? who.tone : 'lead',
       initial: who ? who.initial : '·',
+      avatarName: who ? who.nick : '',
+      avatarLead: who ? who.isLead : false,
     }
   })
   const live = tasks.filter((t) => t.status === 'running' || t.status === 'review' || t.status === 'blocked')
