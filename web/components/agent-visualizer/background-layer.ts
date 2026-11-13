@@ -1,49 +1,18 @@
-import { DepthParticle } from '@/lib/agent-types'
-import { COLORS } from '@/lib/colors'
+import { COLORS, getGraphTheme } from '@/lib/colors'
 import { alphaHex } from '@/lib/utils'
+import { skyAlpha, skyTints, type SkyParticle } from '@/lib/sky'
 
-const NUM_PARTICLES = 80
 const HEX_GRID_SIZE = 60
-
-export function createDepthParticles(width: number, height: number): DepthParticle[] {
-  const particles: DepthParticle[] = []
-  for (let i = 0; i < NUM_PARTICLES; i++) {
-    particles.push({
-      x: Math.random() * width * 2 - width * 0.5,
-      y: Math.random() * height * 2 - height * 0.5,
-      size: Math.random() * 1.5 + 0.5,
-      brightness: Math.random() * 0.3 + 0.05,
-      speed: Math.random() * 0.15 + 0.05,
-      depth: Math.random(),
-    })
-  }
-  return particles
-}
-
-export function updateDepthParticles(
-  particles: DepthParticle[],
-  deltaTime: number,
-  width: number,
-  height: number,
-): void {
-  for (const p of particles) {
-    p.x += p.speed * deltaTime * 10 * (1 - p.depth * 0.5)
-    p.y -= p.speed * deltaTime * 5 * (1 - p.depth * 0.3)
-
-    // Wrap around
-    if (p.x > width * 1.5) p.x = -width * 0.5
-    if (p.y < -height * 0.5) p.y = height * 1.5
-  }
-}
 
 export function drawBackground(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  particles: DepthParticle[],
+  particles: SkyParticle[],
   transform: { x: number; y: number; scale: number },
   showHexGrid: boolean,
   time: number,
+  reducedMotion: boolean,
   activeAgentPos?: { x: number; y: number; color: string },
 ): void {
   // Deep void
@@ -61,23 +30,26 @@ export function drawBackground(
     ctx.fillRect(0, 0, width, height)
   }
 
-  // Depth particles (parallax)
+  // Sky particles with parallax: soft blue dust (Terang) or twinkling white and gold stars (Gelap), see lib/sky.ts
+  const theme = getGraphTheme()
+  const tints = skyTints(theme)
   for (const p of particles) {
     const parallaxFactor = 0.3 + p.depth * 0.7
     const px = p.x + transform.x * parallaxFactor * 0.1
     const py = p.y + transform.y * parallaxFactor * 0.1
+    if (px < -4 || py < -4 || px > width + 4 || py > height + 4) continue
     const size = p.size * (0.5 + p.depth * 0.5)
-    const alpha = p.brightness * (0.5 + p.depth * 0.5)
+    const alpha = skyAlpha(p, theme, time, reducedMotion)
 
     ctx.beginPath()
-    ctx.fillStyle = COLORS.holoBase + alphaHex(alpha)
+    ctx.fillStyle = (tints[p.tint] ?? tints[0]) + alphaHex(alpha)
     ctx.arc(px, py, size, 0, Math.PI * 2)
     ctx.fill()
   }
 
   // Hex grid (optional)
   if (showHexGrid) {
-    drawHexGrid(ctx, width, height, transform, time)
+    drawHexGrid(ctx, width, height, transform, reducedMotion ? 0 : time)
   }
 }
 

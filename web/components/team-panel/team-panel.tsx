@@ -3,18 +3,15 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
 import { OWNER_LABEL } from '@/lib/team/labels'
-import { newBubbleKeys, themeLabel, type ThemePref } from '@/lib/team/session'
+import { newBubbleKeys, themeButton, type ThemePref } from '@/lib/team/session'
 import type { DecisionVM, MemberVM, TaskVM } from '@/lib/team/view-model'
 import type { TeamModel } from './use-team-model'
-import { useSoundSettings } from '@/hooks/use-sound-settings'
 import { ChatSection, type ChatSectionHandle } from './chat-section'
 
 interface PanelProps {
   model: TeamModel
   theme: ThemePref
   onCycleTheme: () => void
-  calm: boolean
-  onToggleCalm: () => void
   chatRef?: React.Ref<ChatSectionHandle>
 }
 
@@ -140,36 +137,27 @@ function Decision({
   )
 }
 
-/** Same mute and volume as the graph's top bar; on a phone the panel is the main view, so it lives here too. */
-function SoundControls() {
-  const sound = useSoundSettings()
-  const volumeId = useId()
+/** Small icon button that cycles Terang, Gelap, Sistem. Sun, moon, or a half-filled circle for "follow the system". */
+function ThemeButton({ theme, onCycle }: { theme: ThemePref; onCycle: () => void }) {
+  const { icon, label } = themeButton(theme)
   return (
-    <>
-      <button
-        type="button"
-        className="tm-btn"
-        aria-pressed={!sound.muted}
-        title={sound.muted ? 'Nyalakan suara' : 'Matikan suara'}
-        onClick={sound.toggle}
-      >
-        {sound.muted ? 'Suara: mati' : 'Suara: nyala'}
-      </button>
-      {!sound.muted && (
-        <div className="tm-volume">
-          <label htmlFor={volumeId}>Volume</label>
-          <input
-            id={volumeId}
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={Math.round(sound.volume * 100)}
-            onChange={(e) => sound.setVolume(Number(e.target.value) / 100)}
-          />
-        </div>
-      )}
-    </>
+    <button type="button" className="tm-icon-btn" aria-label={label} title={label} onClick={onCycle}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {icon === 'sun' && (
+          <>
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+          </>
+        )}
+        {icon === 'moon' && <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />}
+        {icon === 'auto' && (
+          <>
+            <circle cx="12" cy="12" r="8" />
+            <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
+          </>
+        )}
+      </svg>
+    </button>
   )
 }
 
@@ -215,6 +203,11 @@ function OffboardedList({ model }: { model: TeamModel }) {
               <div className="nm">
                 {r.name}
                 {r.role && <span className="rl"> · {r.role}</span>}
+                {r.auto && (
+                  <span className="tm-chip auto" title="Di-offboard otomatis satu jam setelah selesai">
+                    otomatis
+                  </span>
+                )}
               </div>
               {r.task && <div className="tk">{r.task}</div>}
               {r.when && <div className="wh">{r.when}</div>}
@@ -225,7 +218,7 @@ function OffboardedList({ model }: { model: TeamModel }) {
   )
 }
 
-export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm, chatRef }: PanelProps) {
+export function TeamPanel({ model, theme, onCycleTheme, chatRef }: PanelProps) {
   const { vm, view } = model
   const seenRef = useRef<Set<string> | null>(null)
   const keys = vm.live.map((t) => `${t.id}:${t.status}`)
@@ -234,38 +227,35 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm, chat
   useEffect(() => {
     seenRef.current = ready ? new Set(keys) : null
   })
+  // With several projects the theme button sits next to the project switcher; with one, next to the title.
+  const hasSwitcher = model.projects.length > 1
 
   return (
     <div className="tm-wrap">
+      {hasSwitcher && (
+        <div className="tm-switch">
+          <label htmlFor="tm-project">Proyek</label>
+          <div className="tm-switch-row">
+            <select id="tm-project" value={model.selectedId ?? ''} onChange={(e) => model.selectProject(e.target.value)}>
+              {model.projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.hasState ? '' : ' (belum ada data)'}
+                </option>
+              ))}
+            </select>
+            <ThemeButton theme={theme} onCycle={onCycleTheme} />
+          </div>
+        </div>
+      )}
+
       <header className="tm-top">
         <div className="tm-heading">
           <h1>{ready ? vm.title : model.projectName || 'Monitor tim'}</h1>
           {ready && vm.statusText && <p className="sub">{vm.statusText}</p>}
         </div>
-        <div className="tm-tools">
-          <SoundControls />
-          <button type="button" className="tm-btn" aria-pressed={calm} onClick={onToggleCalm}>
-            {calm ? 'Putar animasi' : 'Jeda animasi'}
-          </button>
-          <button type="button" className="tm-btn" onClick={onCycleTheme}>
-            Tema: {themeLabel(theme)}
-          </button>
-        </div>
+        {!hasSwitcher && <ThemeButton theme={theme} onCycle={onCycleTheme} />}
       </header>
-
-      {model.projects.length > 1 && (
-        <div className="tm-switch">
-          <label htmlFor="tm-project">Proyek</label>
-          <select id="tm-project" value={model.selectedId ?? ''} onChange={(e) => model.selectProject(e.target.value)}>
-            {model.projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.hasState ? '' : ' (belum ada data)'}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
 
       <div className="tm-banners" role="status" aria-live="polite">
         {model.listError && <div className="tm-banner err">{model.listError}</div>}

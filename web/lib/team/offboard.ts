@@ -7,13 +7,19 @@ import { chatTime } from './chat'
 /** Window event the graph fires when agents were offboarded, so the panel refreshes its list. */
 export const OFFBOARDED_EVENT = 'tm-agents-offboarded'
 
-/** Only a finished sub-agent can be offboarded: never the Orchestrator, never one that still runs. */
-export function canOffboard(agent: { isMain?: boolean; state?: string } | null | undefined): boolean {
-  return !!agent && !agent.isMain && agent.state === 'complete'
+type OffboardCandidate = { isMain?: boolean; state?: string; finished?: unknown }
+
+/**
+ * Only a sub-agent the server marked finished can be offboarded (its last event is an `agent_complete` with
+ * `finished: true`): never the Orchestrator, never one that still runs, and never a node that only looks finished
+ * because its parent completed (that one may still be running on the server).
+ */
+export function canOffboard(agent: OffboardCandidate | null | undefined): boolean {
+  return !!agent && !agent.isMain && agent.state === 'complete' && !!agent.finished
 }
 
 /** Node names of every finished sub-agent, in map order. */
-export function finishedSubAgents(agents: Iterable<[string, { isMain?: boolean; state?: string }]>): string[] {
+export function finishedSubAgents(agents: Iterable<[string, OffboardCandidate]>): string[] {
   const out: string[] = []
   for (const [id, a] of agents) if (canOffboard(a)) out.push(id)
   return out
@@ -60,6 +66,8 @@ export interface OffboardRecord {
   task?: string | null
   finishedAt?: string | null
   offboardedAt?: string
+  /** "auto" when the server offboarded it after autoOffboardMinutes; older records have none (= manual) */
+  reason?: string
 }
 
 export type OffboardResult =
@@ -122,6 +130,8 @@ export interface OffboardRow {
   task: string
   /** "Selesai 14.05 · Offboard 14.20" */
   when: string
+  /** Offboarded by the server's one-hour rule, shown as "otomatis" */
+  auto: boolean
 }
 
 /** "Selesai kontrak" rows, in server order (newest offboarded first). */
@@ -139,6 +149,7 @@ export function offboardRows(records: readonly OffboardRecord[] | null | undefin
       role: typeof r.role === 'string' ? r.role.trim() : '',
       task: typeof r.task === 'string' ? r.task.trim() : '',
       when,
+      auto: r.reason === 'auto',
     })
   })
   return rows

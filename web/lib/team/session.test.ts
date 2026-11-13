@@ -13,6 +13,8 @@ import {
   pickProject,
   reconnectDelay,
   resolveTheme,
+  themeButton,
+  type ThemePref,
 } from './session'
 import { relativeTime } from './labels'
 
@@ -91,6 +93,22 @@ test('theme preference defaults to light and cycles system, light, dark', () => 
   assert.equal(resolveTheme('system', true), 'dark')
   assert.equal(resolveTheme('system', false), 'light')
   assert.equal(resolveTheme('light', true), 'light')
+})
+
+test('theme icon button: one tap per step walks Terang, Gelap, Sistem and back; icon and label match the choice', () => {
+  let p: ThemePref = 'light'
+  const seen: string[] = []
+  for (let i = 0; i < 3; i++) {
+    const b = themeButton(p)
+    seen.push(`${b.icon}|${b.label}`)
+    p = nextThemePref(p)
+  }
+  assert.equal(p, 'light', 'three taps come back to Terang')
+  assert.deepEqual(seen, [
+    'sun|Tema: Terang. Ketuk untuk ganti ke Gelap',
+    'moon|Tema: Gelap. Ketuk untuk ganti ke Sistem',
+    'auto|Tema: Sistem. Ketuk untuk ganti ke Terang',
+  ])
 })
 
 test('reconnect delay doubles and stops at 15 seconds', () => {

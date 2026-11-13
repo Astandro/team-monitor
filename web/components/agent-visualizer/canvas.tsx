@@ -1,12 +1,14 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
+import { Agent, Particle, Edge, Discovery } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
-import { getStateColor, graphBloomEnabled } from '@/lib/colors'
+import { getGraphTheme, getStateColor, graphBloomEnabled } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { BloomRenderer } from './bloom-renderer'
-import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
+import { drawBackground } from './background-layer'
+import { createSkyParticles, updateSkyParticles, type SkyParticle } from '@/lib/sky'
+import { reducedMotion } from '@/lib/motion'
 import {
   type VisualEffect,
   drawTetherLine,
@@ -55,7 +57,8 @@ export function AgentCanvas({
   const timeRef = useRef(0)
   const simTimeRef = useRef(0)
   const bloomRef = useRef<BloomRenderer | null>(null)
-  const depthParticlesRef = useRef<DepthParticle[]>([])
+  const depthParticlesRef = useRef<SkyParticle[]>([])
+  const skyThemeRef = useRef<string | null>(null)
   const lastFrameTimeRef = useRef(0)
   const dprRef = useRef(1)
 
@@ -126,9 +129,7 @@ export function AgentCanvas({
 
   useEffect(() => {
     bloomRef.current = new BloomRenderer(0.5)
-    depthParticlesRef.current = createDepthParticles(dimensions.width, dimensions.height)
     return () => { bloomRef.current = null }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- particles created once, resized by draw loop
   }, [])
 
   useEffect(() => {
@@ -236,7 +237,16 @@ export function AgentCanvas({
       }
 
       ctx.clearRect(0, 0, w, h)
-      updateDepthParticles(depthParticlesRef.current, deltaTime, w, h)
+      // The sky is rebuilt when the theme changes (dust and stars differ in count, tint and motion) or the canvas
+      // size changes a lot, so the stars always cover the whole view
+      const skyTheme = getGraphTheme()
+      const skyKey = `${skyTheme}:${Math.round(w / 240)}x${Math.round(h / 240)}`
+      if (skyThemeRef.current !== skyKey) {
+        skyThemeRef.current = skyKey
+        depthParticlesRef.current = createSkyParticles(skyTheme, w, h)
+      }
+      const still = reducedMotion()
+      updateSkyParticles(depthParticlesRef.current, deltaTime, w, h, still)
 
       let activeAgentPos: { x: number; y: number; color: string } | undefined
       for (const [, agent] of agents) {
@@ -246,7 +256,7 @@ export function AgentCanvas({
         }
       }
 
-      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, activeAgentPos)
+      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, still, activeAgentPos)
 
       ctx.save()
       ctx.translate(transform.x, transform.y)

@@ -21,6 +21,12 @@ export function themeLabel(p: ThemePref): string {
   return p === 'system' ? 'Sistem' : p === 'light' ? 'Terang' : 'Gelap'
 }
 
+/** The panel header's theme icon button: the icon shows the current choice, the label also says what a tap does. */
+export function themeButton(p: ThemePref): { icon: 'sun' | 'moon' | 'auto'; label: string } {
+  const icon = p === 'light' ? 'sun' : p === 'dark' ? 'moon' : 'auto'
+  return { icon, label: `Tema: ${themeLabel(p)}. Ketuk untuk ganti ke ${themeLabel(nextThemePref(p))}` }
+}
+
 export function resolveTheme(p: ThemePref, systemDark: boolean): 'light' | 'dark' {
   return p === 'system' ? (systemDark ? 'dark' : 'light') : p
 }

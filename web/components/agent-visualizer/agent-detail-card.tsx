@@ -9,6 +9,7 @@ import { canOffboard, type OffboardResult } from '@/lib/team/offboard'
 import { GlassCard } from './glass-card'
 import { PanelHeader, ProgressBar } from './shared-ui'
 import { OffboardButton } from './offboard-button'
+import { autoOffboardText, type FinishedClock } from '@/lib/disintegration'
 
 interface AgentDetailCardProps {
   agent: {
@@ -24,6 +25,7 @@ interface AgentDetailCardProps {
     toolCalls: number
     timeAlive: number
     currentTool?: string
+    finished?: FinishedClock
   }
   coordinator?: CoordinatorInfo | null
   /** Present when offboarding is possible here (standalone app with a selected session) */
@@ -109,6 +111,13 @@ export function AgentDetailCard({
         >
           <span className="animate-spin inline-block">⚙</span>
           {toolLabel(agent.currentTool)}
+        </div>
+      )}
+
+      {/* When the server will offboard it by itself (one hour after it finished) */}
+      {!agent.isMain && agent.state === 'complete' && agent.finished && (
+        <div className="mb-2 text-[11px]" style={{ color: COLORS.textMuted }}>
+          {autoOffboardText(agent.finished, Date.now())}
         </div>
       )}
 

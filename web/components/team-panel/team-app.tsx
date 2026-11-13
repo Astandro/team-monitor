@@ -34,14 +34,12 @@ export function TeamApp() {
   useTeamSounds(model.selectedId, model.state, model.chat)
   const systemDark = useSystemDark()
   const [theme, setTheme] = useState<ThemePref>(() => parseThemePref(readStored('tm-theme')))
-  const [calm, setCalm] = useState(() => readStored('tm-calm') === '1')
   const [pane, setPane] = useState<Pane>('tim')
 
   const cycleTheme = useCallback(() => setTheme((t) => nextThemePref(t)), [])
-  const toggleCalm = useCallback(() => setCalm((c) => !c), [])
   // remembered after the state changed, not inside the state updaters
   useEffect(() => writeStored('tm-theme', theme), [theme])
-  useEffect(() => writeStored('tm-calm', calm ? '1' : '0'), [calm])
+  // Motion follows prefers-reduced-motion only (no "Jeda animasi" switch any more, owner request 13 Nov)
 
   // Phone and tablet: a floating "Pesan ke Sora" button on the team pane jumps to the chat and focuses the box,
   // hidden while the chat is already on screen. Desktop shows the panel column all the time: no floating button.
@@ -69,15 +67,13 @@ export function TeamApp() {
   useLayoutEffect(() => applyGraphTheme(resolved), [resolved])
 
   return (
-    <div className={`tm-root tm-app${calm ? ' tm-calm' : ''}`} data-tm-theme={resolved}>
+    <div className="tm-root tm-app" data-tm-theme={resolved}>
       <div className="tm-panes">
         <main className="tm-pane tm-pane-team tm-themed" id="tm-panel-tim" data-active={pane === 'tim'} aria-label="Tim">
           <TeamPanel
             model={model}
             theme={theme}
             onCycleTheme={cycleTheme}
-            calm={calm}
-            onToggleCalm={toggleCalm}
             chatRef={chatRef}
           />
         </main>

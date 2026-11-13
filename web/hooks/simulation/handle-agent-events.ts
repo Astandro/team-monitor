@@ -7,6 +7,7 @@ import { COLORS } from '@/lib/colors'
 import { AGENT_SPAWN_DISTANCE } from '@/lib/canvas-constants'
 import { withTimelineModel } from '@/lib/timeline-models'
 import { spawnIdentity } from '@/lib/agent-identity'
+import { finishedClock } from '@/lib/disintegration'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { edgeId, asString, asBoolean } from './types'
 
@@ -30,6 +31,8 @@ export function handleAgentSpawn(
   if (existing) {
     state.agents.set(name, {
       ...existing,
+      // active again: restored fully, the server restarts its clock on the next completion
+      finished: undefined,
       state: 'idle',
       ...identity,
       ...(task ? { task } : {}),
@@ -130,8 +133,14 @@ export function handleAgentComplete(
 ): void {
   const name = asString(payload.name)
   const agent = state.agents.get(name)
+  // The server's word that a sub-agent is finished (handover sota-auto-offboard-server.md). Also lands on a node
+  // that was already dimmed by its parent's completion; the cascade below never sets it.
+  const clock = agent && !agent.isMain ? finishedClock(payload) : null
+  if (agent && clock && agent.state === 'complete') {
+    state.agents.set(name, { ...agent, finished: clock })
+  }
   if (agent && agent.state !== 'complete') {
-    state.agents.set(name, { ...agent, state: 'complete', completeTime: currentTime })
+    state.agents.set(name, { ...agent, state: 'complete', completeTime: currentTime, ...(clock ? { finished: clock } : {}) })
 
     const entry = state.timelineEntries.get(name)
     if (entry) {
