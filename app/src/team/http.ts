@@ -384,7 +384,9 @@ const PAGE_HEADERS = {
   'Content-Type': 'text/html; charset=utf-8',
   'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
   'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
+  // Not 'no-referrer': with it, browsers send `Origin: null` on the login form POST, which the same-origin check
+  // refuses (seen on Chrome over tailscale serve). 'same-origin' still sends no referrer to other sites.
+  'Referrer-Policy': 'same-origin',
   ...SECURITY_HEADERS,
 }
 

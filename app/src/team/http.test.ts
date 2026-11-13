@@ -464,6 +464,14 @@ describe('team API, remote mode', () => {
     assert.equal((await login(TOKEN, { Origin: 'http://evil.example' })).status, 403)
   })
 
+  test('login page referrer policy lets the form POST carry its real Origin', async () => {
+    // With 'no-referrer' Chrome sends `Origin: null` on the form POST and every phone login is refused.
+    const page = await request(ctx.port, { path: '/login', headers: { Host: tsHost() } })
+    assert.equal(page.status, 200)
+    assert.equal(page.headers['referrer-policy'], 'same-origin')
+    assert.equal((await login(TOKEN, { Origin: 'null' })).status, 403, 'an opaque origin is still refused')
+  })
+
   test('valid token: session cookie works for the UI, API and answers; logout ends it', async () => {
     const r = await login(TOKEN)
     assert.equal(r.status, 303)
