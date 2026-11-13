@@ -10,6 +10,8 @@ export type SoundCue =
   | 'tool_error'
   | 'handoff'
   | 'session_start'
+  /** an instance left the team (the server or the owner offboarded it) */
+  | 'agent_offboarded'
   // team panel (state.json changes)
   | 'decision_open'
   | 'decision_answered'
@@ -31,6 +33,7 @@ export const CUE_PRIORITY: readonly SoundCue[] = [
   'task_start',
   'session_start',
   'agent_complete',
+  'agent_offboarded',
   'agent_spawn',
   'handoff',
   'tool_complete',

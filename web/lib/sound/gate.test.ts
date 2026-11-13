@@ -1,6 +1,30 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { MAX_CUES_PER_BATCH, MIN_GAP_MS, QUIET_AFTER_RESET_MS, SESSION_START_SLACK_MS, SoundGate, startedSessions } from './gate'
+import { DEFAULT_GAP_MS, MAX_CUES_PER_BATCH, MIN_GAP_MS, QUIET_AFTER_RESET_MS, SESSION_START_SLACK_MS, SoundGate, STAGGER_MS, startedSessions } from './gate'
+
+test('sound v2 keeps the v1 rate limits (only the new offboard cue was added)', () => {
+  assert.deepEqual(MIN_GAP_MS, {
+    tool_start: 220,
+    tool_complete: 220,
+    handoff: 250,
+    tool_error: 600,
+    agent_spawn: 400,
+    agent_complete: 400,
+    session_start: 2000,
+    agent_offboarded: 1500,
+  })
+  assert.equal(DEFAULT_GAP_MS, 300)
+  assert.equal(QUIET_AFTER_RESET_MS, 1500)
+  assert.equal(STAGGER_MS, 180)
+  assert.equal(MAX_CUES_PER_BATCH, 3)
+})
+
+test('the same offboard reported twice (server message and our own request) sounds once', () => {
+  const g = new SoundGate()
+  assert.deepEqual(g.admit(['agent_offboarded'], 5000), ['agent_offboarded'])
+  assert.deepEqual(g.admit(['agent_offboarded'], 5000 + 200), [])
+  assert.deepEqual(g.admit(['agent_offboarded'], 5000 + MIN_GAP_MS.agent_offboarded!), ['agent_offboarded'])
+})
 
 test('tool starts in a burst play once per gap, not once per call', () => {
   const g = new SoundGate()

@@ -6,6 +6,8 @@ import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { useClickOutside } from "@/hooks/use-click-outside"
 import { useSoundSettings } from "@/hooks/use-sound-settings"
 import { soundButtonLabel, volumePercent } from "@/lib/sound/control-labels"
+import { DEMO_ORDER } from "@/lib/sound/demo"
+import { startSoundDemo } from "@/lib/sound/sound-client"
 
 function SpeakerIcon({ muted }: { muted: boolean }) {
   return (
@@ -56,6 +58,25 @@ export function SoundControl() {
     if (open) sliderRef.current?.focus()
   }, [open])
 
+  // "Coba suara": each sound in turn with its name; stops when the popover closes or the control goes away
+  const [demo, setDemo] = useState<string | null>(null)
+  const stopDemoRef = useRef<(() => void) | null>(null)
+  const stopDemo = useCallback(() => {
+    stopDemoRef.current?.()
+    stopDemoRef.current = null
+  }, [])
+  const toggleDemo = () => {
+    if (stopDemoRef.current) stopDemo()
+    else stopDemoRef.current = startSoundDemo((step) => {
+      setDemo(step)
+      if (step === null) stopDemoRef.current = null
+    })
+  }
+  useEffect(() => {
+    if (!open) stopDemo()
+  }, [open, stopDemo])
+  useEffect(() => stopDemo, [stopDemo])
+
   const label = soundButtonLabel(sound.muted)
   const pct = volumePercent(sound.volume)
   const btn: React.CSSProperties = {
@@ -103,27 +124,50 @@ export function SoundControl() {
       {open && (
         <div
           id={popId}
-          className="glass-card absolute right-0 flex items-center gap-3"
-          style={{ top: "calc(100% + 6px)", padding: "10px 12px", zIndex: 5, minWidth: 220, color: COLORS.textPrimary }}
+          className="glass-card absolute right-0 flex flex-col gap-2"
+          style={{ top: "calc(100% + 6px)", padding: "10px 12px", zIndex: 5, width: 260, maxWidth: "calc(100vw - 32px)", color: COLORS.textPrimary }}
         >
-          <label htmlFor={sliderId} className="text-[12px] font-semibold" style={{ color: COLORS.textMuted }}>
-            Volume
-          </label>
-          <input
-            ref={sliderRef}
-            id={sliderId}
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={pct}
-            onChange={(e) => sound.setVolume(Number(e.target.value) / 100)}
-            className="flex-1"
-            style={{ accentColor: COLORS.thinking, minHeight: 32 }}
-          />
-          <span className="text-[12px] tabular-nums" style={{ color: COLORS.textPrimary, minWidth: 34, textAlign: "right" }}>
-            {pct}%
-          </span>
+          <div className="flex items-center gap-3">
+            <label htmlFor={sliderId} className="text-[12px] font-semibold" style={{ color: COLORS.textMuted }}>
+              Volume
+            </label>
+            <input
+              ref={sliderRef}
+              id={sliderId}
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={pct}
+              onChange={(e) => sound.setVolume(Number(e.target.value) / 100)}
+              className="flex-1 min-w-0"
+              style={{ accentColor: COLORS.thinking, minHeight: 32 }}
+            />
+            <span className="text-[12px] tabular-nums" style={{ color: COLORS.textPrimary, minWidth: 34, textAlign: "right" }}>
+              {pct}%
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleDemo}
+              aria-pressed={demo !== null}
+              className="tm-sound-btn shrink-0 text-[12px] font-semibold"
+              style={{
+                background: COLORS.toggleInactive,
+                border: `1px solid ${COLORS.toggleBorder}`,
+                color: COLORS.textPrimary,
+                borderRadius: 10,
+                minHeight: 32,
+                padding: "0 12px",
+              }}
+            >
+              {demo === null ? "Coba suara" : "Berhenti"}
+            </button>
+            <span aria-live="polite" className="text-[12px]" style={{ color: demo === null ? COLORS.textMuted : COLORS.textPrimary }}>
+              {demo ?? (sound.muted ? `Nyalakan suara, putar ${DEMO_ORDER.length} suara` : `${DEMO_ORDER.length} suara, satu per satu`)}
+            </span>
+          </div>
         </div>
       )}
     </div>

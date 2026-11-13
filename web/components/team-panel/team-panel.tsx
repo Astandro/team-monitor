@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
 import { burstPeriod, DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES } from '@/lib/disintegration'
+import { WARNING_ICON } from '@/lib/alert-tag'
 import { OWNER_LABEL } from '@/lib/team/labels'
 import { groupMembers } from '@/lib/team/groups'
 import { BotAvatar } from '../bot-avatar'
@@ -108,6 +109,11 @@ function Member({ m, lead, reduce }: { m: MemberVM; lead?: boolean; reduce: bool
               className={`tm-alert-tag${reduce ? '' : ' blink'}`}
               style={reduce ? undefined : ({ '--tm-flicker': `${flickerPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties)}
             >
+              <svg viewBox={WARNING_ICON.viewBox} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinejoin="round" strokeLinecap="round">
+                <path d={WARNING_ICON.triangle} />
+                <path d={WARNING_ICON.mark} />
+                <circle cx={WARNING_ICON.dot.cx} cy={WARNING_ICON.dot.cy} r={WARNING_ICON.dot.r} fill="currentColor" stroke="none" />
+              </svg>
               {DISINTEGRATING_TAG}
             </span>
           )}

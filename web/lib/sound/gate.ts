@@ -13,6 +13,8 @@ export const MIN_GAP_MS: Partial<Record<SoundCue, number>> = {
   agent_spawn: 400,
   agent_complete: 400,
   session_start: 2000,
+  // new in v2: the server's message and our own offboard request can both report the same leave
+  agent_offboarded: 1500,
 }
 export const DEFAULT_GAP_MS = 300
 

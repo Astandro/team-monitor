@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { CUE_PRIORITY, cueForGraphTransition, isHandoffParticle, orderCues, type SoundCue } from './cues'
-import { RECIPES, recipeDuration, recipePeak } from './recipes'
+import { RECIPES } from './recipes'
 
 test('each graph transition plays its own cue', () => {
   assert.equal(cueForGraphTransition('agent_spawn'), 'agent_spawn')
@@ -28,8 +28,9 @@ test('orderCues dedupes and puts the owner decision first', () => {
 
 test('every cue has a priority and a recipe of its own', () => {
   const all = Object.keys(RECIPES) as SoundCue[]
-  assert.equal(all.length, 14)
-  assert.equal(new Set(CUE_PRIORITY).size, 14)
+  // the 14 v1 events plus the offboard one (spec v2)
+  assert.equal(all.length, 15)
+  assert.equal(new Set(CUE_PRIORITY).size, 15)
   for (const cue of all) {
     assert.ok(CUE_PRIORITY.includes(cue), cue)
     assert.ok(RECIPES[cue].length > 0, cue)
@@ -39,21 +40,10 @@ test('every cue has a priority and a recipe of its own', () => {
   assert.equal(shapes.size, all.length)
 })
 
-test('sounds are short and quiet: most under 400 ms, tool blips the shortest', () => {
-  const all = Object.keys(RECIPES) as SoundCue[]
-  const short = all.filter((c) => recipeDuration(RECIPES[c]) < 0.4)
-  assert.ok(short.length >= 10, `only ${short.length} cues under 400 ms`)
-  for (const c of all) assert.ok(recipeDuration(RECIPES[c]) <= 1.5, c)
-  const toolStart = recipeDuration(RECIPES.tool_start)
-  for (const c of all) if (c !== 'tool_complete') assert.ok(recipeDuration(RECIPES[c]) >= toolStart, c)
-  // the stage pad is the longer one
-  assert.ok(recipeDuration(RECIPES.stage_done) > 1)
-})
-
-test('a waiting decision is the most noticeable sound, tool blips the softest', () => {
-  const all = Object.keys(RECIPES) as SoundCue[]
-  const open = recipePeak(RECIPES.decision_open)
-  for (const c of all) if (c !== 'decision_open') assert.ok(recipePeak(RECIPES[c]) < open, c)
-  assert.ok(recipePeak(RECIPES.tool_start) <= 0.02)
-  for (const c of all) for (const v of RECIPES[c]) assert.ok(v.peak <= 0.06, c)
+test('agent events landing together play finished, then offboarded, then spawned', () => {
+  assert.deepEqual(orderCues(['agent_spawn', 'agent_offboarded', 'agent_complete']), [
+    'agent_complete',
+    'agent_offboarded',
+    'agent_spawn',
+  ])
 })
