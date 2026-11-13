@@ -3,7 +3,7 @@ import {
   TOOL_MIN_DISPLAY_S, TOOL_MAX_RUNNING_S,
   DISCOVERY_HOLD_S, DISCOVERY_LERP_SPEED,
   BUBBLE_VISIBLE_S, MOCK_END_BUFFER_S,
-  ANIM_SPEED,
+  ANIM_SPEED, COMPLETED_SUBAGENT_OPACITY,
 } from '@/lib/canvas-constants'
 
 export interface AnimateOptions {
@@ -12,7 +12,7 @@ export interface AnimateOptions {
   mockScenarioEndTime: number
 }
 
-function animateAgents(agents: SimulationState['agents'], deltaTime: number, currentTime: number): SimulationState['agents'] {
+export function animateAgents(agents: SimulationState['agents'], deltaTime: number, currentTime: number): SimulationState['agents'] {
   let newAgents = agents
   for (const [id, agent] of agents) {
     let updated = false
@@ -24,7 +24,8 @@ function animateAgents(agents: SimulationState['agents'], deltaTime: number, cur
     if (agent.state !== 'complete' && opacity < 1) { opacity = Math.min(1, opacity + deltaTime * ANIM_SPEED.agentFadeIn); updated = true }
     if (agent.state !== 'complete' && scale < 1) { scale = Math.min(1, scale + deltaTime * ANIM_SPEED.agentScaleIn); updated = true }
     if (agent.state === 'complete' && !agent.isMain) {
-      if (opacity > 0) { opacity = Math.max(0, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }
+      // Dim to a floor and stay: finished sub-agents remain visible (and are never cleaned up below).
+      if (opacity > COMPLETED_SUBAGENT_OPACITY) { opacity = Math.max(COMPLETED_SUBAGENT_OPACITY, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }
       if (scale > 0.8) { scale = Math.max(0.8, scale - deltaTime * ANIM_SPEED.agentScaleOut); updated = true }
     }
     if (agent.state !== 'complete') { timeAlive += deltaTime; updated = true }

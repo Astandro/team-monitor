@@ -86,6 +86,10 @@ export const BUBBLE_VISIBLE_S = 12
 // ─── Animation speed multipliers ─────────────────────────────────────────────
 // Multiplied by deltaTime in the animation loop
 
+/** Finished sub-agents stay on the graph, dimmed to this opacity, instead of fading out and being removed
+ *  (owner request: idle team members must stay visible). A resumed agent is reactivated by its next spawn. */
+export const COMPLETED_SUBAGENT_OPACITY = 0.45
+
 export const ANIM_SPEED = {
   /** Agent fade-in (opacity per dt) */
   agentFadeIn: 3,
