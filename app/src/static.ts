@@ -24,10 +24,13 @@ const HTML_SHELL = `<!DOCTYPE html>
 </body>
 </html>`
 
-const MIME_TYPES: Record<string, string> = {
+export const MIME_TYPES: Record<string, string> = {
   '.js': 'application/javascript',
   '.css': 'text/css',
   '.html': 'text/html',
+  // sound set v3 (copied flat into the webview folder by app/build.js)
+  '.ogg': 'audio/ogg',
+  '.mp3': 'audio/mpeg',
 }
 
 export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
