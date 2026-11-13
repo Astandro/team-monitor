@@ -1,7 +1,9 @@
 "use client"
 
-import { memo, useEffect, useRef } from "react"
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react"
 import { Z } from "@/lib/agent-types"
+import { isCompactGraph } from "@/lib/graph-fit"
+import { useClickOutside } from "@/hooks/use-click-outside"
 import { COLORS } from "@/lib/colors"
 import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { formatTokens } from "@/lib/utils"
@@ -59,6 +61,113 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   )
 }
 
+// ─── Phone menu ─────────────────────────────────────────────────────────────
+
+type MenuProps = Pick<TopBarProps,
+  'isVSCode' | 'connectionStatus' | 'agentCount' | 'totalTokens' | 'showFileAttention' | 'showTranscript' |
+  'showCostOverlay' | 'showTimeline' | 'onTogglePanel' | 'onToggleTimeline' | 'finishedCount' | 'onOffboardAll' |
+  'offboardNotice'>
+
+/**
+ * Phone only: everything the wide bar shows in a row (numbers, File / Obrolan / Biaya, Linimasa, Offboard semua) sits
+ * behind one 44 px button, so the graph keeps its top area. A disclosure, not an ARIA menu: Tab moves through the
+ * buttons inside, Escape and a tap outside close it and focus goes back to the button.
+ */
+function GraphMenu({
+  isVSCode, connectionStatus, agentCount, totalTokens,
+  showFileAttention, showTranscript, showCostOverlay, showTimeline,
+  onTogglePanel, onToggleTimeline, finishedCount = 0, onOffboardAll, offboardNotice,
+}: MenuProps) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelId = useId()
+  const close = useCallback(() => setOpen(false), [])
+  useClickOutside(wrapRef, close)
+  // An offboard refusal from the node menu opens nothing by itself; show a dot so it is not missed
+  const attention = !!offboardNotice
+  const row = (label: string, active: boolean, onClick: () => void, hint: string) => (
+    <button
+      type="button"
+      aria-pressed={active}
+      title={hint}
+      onClick={() => { onClick(); setOpen(false) }}
+      className="tm-graph-menu-item w-full text-left rounded-lg px-3 text-[12px] font-semibold"
+      style={{
+        minHeight: 44,
+        background: active ? COLORS.toggleActive : undefined,
+        border: `1px solid ${active ? COLORS.toggleBorder : 'transparent'}`,
+        color: active ? COLORS.holoBright : COLORS.textPrimary,
+      }}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div
+      ref={wrapRef}
+      className="relative pointer-events-auto shrink-0"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); btnRef.current?.focus() }
+      }}
+    >
+      <button
+        ref={btnRef}
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={`Menu grafik${finishedCount > 0 ? `, ${finishedCount} agent selesai bisa di-offboard` : ''}`}
+        title="Menu grafik"
+        onClick={() => setOpen((o) => !o)}
+        className="tm-graph-menu-btn relative inline-flex items-center justify-center rounded-[10px]"
+        style={{ width: 44, height: 44, background: COLORS.toggleInactive, border: `1px solid ${COLORS.toggleBorder}`, color: COLORS.textPrimary }}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
+        </svg>
+        {attention && (
+          <span aria-hidden="true" className="absolute rounded-full" style={{ top: 6, right: 6, width: 8, height: 8, background: COLORS.error }} />
+        )}
+      </button>
+      {open && (
+        <div
+          id={panelId}
+          className="glass-card absolute right-0 flex flex-col gap-1"
+          style={{ top: 'calc(100% + 6px)', width: 'min(260px, calc(100vw - 24px))', padding: 8, zIndex: 5, color: COLORS.textPrimary }}
+        >
+          <div className="px-3 py-1 text-[12px] flex flex-wrap gap-x-3" style={{ color: COLORS.textMuted }}>
+            {isVSCode && <ConnectionIndicator status={connectionStatus} />}
+            <span>{agentCount} agent</span>
+            <span>
+              {formatTokens(totalTokens)} tokens
+              <span style={{ color: COLORS.complete, marginLeft: 4 }}>~${agentCost(totalTokens).toFixed(2)}</span>
+            </span>
+          </div>
+          {row('File', showFileAttention, () => onTogglePanel('files'), 'File yang paling banyak dibaca atau diubah')}
+          {row('Obrolan', showTranscript, () => onTogglePanel('transcript'), 'Riwayat obrolan sesi ini')}
+          {row('Biaya', showCostOverlay, () => onTogglePanel('cost'), 'Perkiraan biaya per agent dan per alat')}
+          {row('Linimasa', showTimeline, onToggleTimeline, 'Linimasa kerja tiap agent')}
+          {finishedCount > 0 && onOffboardAll && (
+            <div className="pt-1 mt-1" style={{ borderTop: `1px solid ${COLORS.toggleBorder}` }}>
+              <OffboardButton
+                label={`Offboard semua yang selesai (${finishedCount})`}
+                busyLabel="Lagi offboard…"
+                title="Semua agent yang sudah selesai hilang dari grafik dan masuk daftar Selesai kontrak"
+                onRun={onOffboardAll}
+              />
+            </div>
+          )}
+          {offboardNotice && (
+            <span role="status" className="px-3 text-[12px]" style={{ color: COLORS.error, overflowWrap: 'anywhere' }}>
+              {offboardNotice}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Top Bar ────────────────────────────────────────────────────────────────
 
 export interface TopBarProps {
@@ -94,6 +203,8 @@ export interface TopBarProps {
 
 export interface TopBarLayout {
   width: number
+  /** Phone-sized graph: the controls are one row (message card, sound, menu) */
+  compact: boolean
   /** Bottom edge of the tabs and the stats/toggles rows */
   barsBottom: number
   /** Bottom edge of everything, including the children */
@@ -113,6 +224,19 @@ export const TopBar = memo(function TopBar({
   useGraphTheme()
   const rootRef = useRef<HTMLDivElement>(null)
   const barsRef = useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = useState(false)
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    // The bar is inset 12 px on each side: the graph's own width decides (web/lib/graph-fit.ts)
+    const measure = () => setCompact(isCompactGraph((root.parentElement ?? root).getBoundingClientRect().width))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(root.parentElement ?? root)
+    return () => ro.disconnect()
+  }, [])
 
   useEffect(() => {
     const root = rootRef.current
@@ -120,7 +244,7 @@ export const TopBar = memo(function TopBar({
     if (!root || !bars || !onLayout) return
     const report = () => {
       const r = root.getBoundingClientRect()
-      onLayout({ width: r.width, barsBottom: bars.getBoundingClientRect().bottom, stackBottom: r.bottom })
+      onLayout({ width: r.width, compact, barsBottom: bars.getBoundingClientRect().bottom, stackBottom: r.bottom })
     }
     report()
     if (typeof ResizeObserver === 'undefined') return
@@ -128,7 +252,52 @@ export const TopBar = memo(function TopBar({
     ro.observe(root)
     ro.observe(bars)
     return () => ro.disconnect()
-  }, [onLayout])
+  }, [onLayout, compact])
+
+  if (compact) {
+    return (
+      // Phone: one row. Message card (name · role, tap to open) on the left, sound and a menu with everything else
+      // on the right. The card's slot has a fixed height, so an opened card floats over the graph instead of pushing
+      // the row down (the auto-fit keeps the graph below this row).
+      <div ref={rootRef} className="absolute top-3 left-3 right-3 flex flex-col gap-2 font-mono text-[10px] pointer-events-none" style={{ zIndex: Z.info }}>
+        {sessions.length > 1 && (
+          <div className="w-full pointer-events-auto">
+            <SessionTabs
+              sessions={sessions}
+              selectedSessionId={selectedSessionId}
+              sessionsWithActivity={sessionsWithActivity}
+              onSelectSession={onSelectSession}
+              onCloseSession={onCloseSession}
+            />
+          </div>
+        )}
+        <div ref={barsRef} className="flex items-start gap-2">
+          {/* z-index: an opened card covers the sound and menu buttons instead of sliding under them */}
+          <div className="relative flex-1 min-w-0" style={{ height: 44, zIndex: 1 }}>
+            {children && <div className="absolute left-0 top-0 max-w-full pointer-events-auto">{children}</div>}
+          </div>
+          <div className="pointer-events-auto shrink-0">
+            <SoundControl />
+          </div>
+          <GraphMenu
+            isVSCode={isVSCode}
+            connectionStatus={connectionStatus}
+            agentCount={agentCount}
+            totalTokens={totalTokens}
+            showFileAttention={showFileAttention}
+            showTranscript={showTranscript}
+            showCostOverlay={showCostOverlay}
+            showTimeline={showTimeline}
+            onTogglePanel={onTogglePanel}
+            onToggleTimeline={onToggleTimeline}
+            finishedCount={finishedCount}
+            onOffboardAll={onOffboardAll}
+            offboardNotice={offboardNotice}
+          />
+        </div>
+      </div>
+    )
+  }
 
   return (
     // The whole top area is one column: tabs on their own full-width row, then the

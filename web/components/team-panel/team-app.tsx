@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ChatSectionHandle } from './chat-section'
 import { AgentVisualizer } from '@/components/agent-visualizer'
 import { applyGraphTheme } from '@/lib/colors'
+import { isPanelToggleKey, PANEL_HIDDEN_KEY, parsePanelHidden, storePanelHidden } from '@/lib/team/sections'
 import { nextThemePref, parseThemePref, resolveTheme, type ThemePref } from '@/lib/team/session'
 import { readStored, writeStored } from './storage'
 import { TeamPanel } from './team-panel'
@@ -61,13 +62,46 @@ export function TeamApp() {
     requestAnimationFrame(() => chatRef.current?.focus())
   }, [])
 
+  // Desktop: the panel can be hidden so the graph takes the full width (spec-panel-compact item 1). Remembered per
+  // browser. Below 1024 px the flag does nothing: phone and tablet keep the Tim/Grafik switch.
+  const [panelHidden, setPanelHidden] = useState(() => parsePanelHidden(readStored(PANEL_HIDDEN_KEY)))
+  useEffect(() => writeStored(PANEL_HIDDEN_KEY, storePanelHidden(panelHidden)), [panelHidden])
+  // Focus follows the control that just appeared, so a keyboard user never lands on a hidden button.
+  const focusAfter = useRef<string | null>(null)
+  useEffect(() => {
+    const id = focusAfter.current
+    focusAfter.current = null
+    if (id) document.getElementById(id)?.focus()
+  }, [panelHidden])
+  const togglePanel = useCallback((focus: boolean) => {
+    setPanelHidden((h) => {
+      if (focus) focusAfter.current = h ? 'tm-panel-toggle' : 'tm-panel-show'
+      return !h
+    })
+  }, [])
+  useEffect(() => {
+    const desk = window.matchMedia('(min-width:1024px)')
+    const onKey = (e: KeyboardEvent) => {
+      if (!desk.matches) return
+      const t = e.target instanceof HTMLElement ? e.target : null
+      if (!isPanelToggleKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, repeat: e.repeat, defaultPrevented: e.defaultPrevented, target: t })) return
+      e.preventDefault()
+      // move focus only when it was on the control that is about to disappear (or nowhere in particular)
+      const active = document.activeElement
+      const onToggle = !active || active === document.body || active.id === 'tm-panel-toggle' || active.id === 'tm-panel-show'
+      togglePanel(onToggle || !!document.getElementById('tm-panel-tim')?.contains(active))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [togglePanel])
+
   const open = model.view === 'ready' ? model.vm.openDecisions : 0
   const resolved = resolveTheme(theme, systemDark)
   // One theme switch for the whole page: the graph palette follows the panel's, before the next paint.
   useLayoutEffect(() => applyGraphTheme(resolved), [resolved])
 
   return (
-    <div className="tm-root tm-app" data-tm-theme={resolved}>
+    <div className="tm-root tm-app" data-tm-theme={resolved} data-panel-hidden={panelHidden}>
       <div className="tm-panes">
         <main className="tm-pane tm-pane-team tm-themed" id="tm-panel-tim" data-active={pane === 'tim'} aria-label="Tim">
           <TeamPanel
@@ -75,10 +109,39 @@ export function TeamApp() {
             theme={theme}
             onCycleTheme={cycleTheme}
             chatRef={chatRef}
+            onHide={() => togglePanel(true)}
           />
         </main>
         <section className="tm-pane tm-pane-graph" id="tm-panel-grafik" data-active={pane === 'grafik'} aria-label="Grafik">
           <AgentVisualizer projectId={model.selectedId} />
+          {/* Desktop with the panel hidden: a slim tab on the left edge brings it back; it carries the open-decision
+              count so a waiting decision is not missed while the panel is away. */}
+          {panelHidden && (
+            <div className="tm-edge tm-themed">
+              <button
+                type="button"
+                id="tm-panel-show"
+                className="tm-edge-btn"
+                aria-controls="tm-panel-tim"
+                aria-expanded="false"
+                title="Tampilkan panel tim (tombol [)"
+                aria-label={`Tampilkan panel tim${open > 0 ? `, ${open} keputusan butuh kamu` : ''}`}
+                onClick={() => togglePanel(true)}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="3" />
+                  <path d="M9 4v16" />
+                  <path d="M14 10l2 2-2 2" />
+                </svg>
+                <span className="lbl">Tim</span>
+                {open > 0 && (
+                  <span className="count" aria-hidden="true">
+                    {open}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
         </section>
       </div>
       {/* Team pane only: on the graph pane it would cover the graph's own floating cards (play bar, agent chat) */}

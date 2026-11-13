@@ -301,11 +301,17 @@ export function AgentVisualizer({ projectId = null }: {
   // The top bar can wrap onto several rows. Floating panels (file list, cost) sit under it;
   // on narrow screens they also clear the message card, which is as wide as the screen.
   const [panelTop, setPanelTop] = useState(48)
+  // Auto-fit frames the graph below the controls (owner feedback 13 Nov): below the bars on a wide graph, below
+  // the one control row on a phone. The message card is not counted; opened, it floats over the graph.
+  const [fitTop, setFitTop] = useState(0)
+  const [graphCompact, setGraphCompact] = useState(false)
   const handleTopLayout = useCallback((l: TopBarLayout) => {
     const narrow = l.width < 720
     const top = Math.max(48, Math.ceil((narrow ? l.stackBottom : l.barsBottom) + 8))
     setCostPanelTop(top)
     setPanelTop(top)
+    setFitTop(Math.ceil(l.barsBottom + 8))
+    setGraphCompact(l.compact)
   }, [])
 
   const finishedCount = useMemo(() => finishedSubAgents(agents).length, [agents])
@@ -374,6 +380,7 @@ export function AgentVisualizer({ projectId = null }: {
         showHexGrid={showHexGrid}
         zoomToFitTrigger={zoomToFitTrigger}
         pauseAutoFit={selection.contextMenu !== null}
+        fitTop={fitTop}
         onAgentClick={selection.handleAgentClick}
         onAgentHover={selection.setHoveredAgentId}
         onAgentDrag={updateAgentPosition}
@@ -518,6 +525,7 @@ export function AgentVisualizer({ projectId = null }: {
           agents={agents}
           onAgentClick={selection.handleAgentClick}
           selectedAgentId={selection.selectedAgentId}
+          compact={graphCompact}
         />
       </TopBar>
     </div>

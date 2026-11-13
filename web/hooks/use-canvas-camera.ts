@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
+import { compactFocus, fitTransform, isCompactGraph } from '@/lib/graph-fit'
 import { agentLabelBottom } from '@/lib/agent-label'
 import { identityLine } from '@/lib/agent-identity'
 import { canvasIdentity } from '@/components/agent-visualizer/canvas/identity'
@@ -27,6 +28,8 @@ interface CameraOptions {
     selectedAgentId: string | null
     pauseAutoFit?: boolean
     isDragging: boolean
+    /** Screen px at the top covered by the graph's controls; the frame stays below them */
+    fitTop?: number
   }>
   simTimeRef: MutableRefObject<number>
   dimensions: { width: number; height: number }
@@ -56,8 +59,9 @@ export function useCanvasCamera({
     toolCalls: Map<string, ToolCallNode> | null
     discoveries: Discovery[] | null
     selectedAgentId: string | null
+    frameKey: string
     result: Transform | null
-  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, result: null })
+  }>({ agents: null, toolCalls: null, discoveries: null, selectedAgentId: null, frameKey: '', result: null })
 
   // Initialize transform centered on first agents
   useEffect(() => {
@@ -85,6 +89,10 @@ export function useCanvasCamera({
   const computeFitTransform = useCallback((): Transform | null => {
     const { agents, toolCalls, discoveries, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
+    const fitTop = drawPropsRef.current.fitTop ?? 0
+    // Phone-sized graph: nodes only, the Orchestrator and the sub-agents at work, readable scale (web/lib/graph-fit.ts)
+    const compact = isCompactGraph(dimensions.width)
+    const frameKey = `${dimensions.width}x${dimensions.height}:${fitTop}`
 
     // Return cached result if inputs haven't changed (reference equality —
     // React creates new Map/array objects on state updates, so same ref = same data)
@@ -92,7 +100,8 @@ export function useCanvasCamera({
     if (cache.agents === agents
       && cache.toolCalls === toolCalls
       && cache.discoveries === discoveries
-      && cache.selectedAgentId === selectedAgentId) {
+      && cache.selectedAgentId === selectedAgentId
+      && cache.frameKey === frameKey) {
       return cache.result
     }
 
@@ -104,6 +113,7 @@ export function useCanvasCamera({
         focusScope = getDescendantIds(agents, selectedAgentId)
       }
     }
+    if (!focusScope) focusScope = compactFocus(agents, compact)
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
     for (const [id, agent] of agents) {
@@ -116,7 +126,7 @@ export function useCanvasCamera({
       // The wrapped name hangs below the hexagon; frame it too
       const baseR = agent.isMain ? NODE.radiusMain : NODE.radiusSub
       maxY = Math.max(maxY, agent.y + agentLabelBottom(identityLine(canvasIdentity(agent)), baseR, agent.tokensUsed > 0))
-      if (agent.messageBubbles.length > 0) {
+      if (!compact && agent.messageBubbles.length > 0) {
         const visibleCount = agent.messageBubbles.filter(b => {
           const age = (simTimeRef.current ?? 0) - b.time
           return age <= BUBBLE_HOLD + BUBBLE_FADE_OUT
@@ -130,7 +140,7 @@ export function useCanvasCamera({
         }
       }
     }
-    for (const [, tool] of toolCalls) {
+    for (const [, tool] of compact ? [] : toolCalls) {
       if (tool.opacity > 0.1 && (!focusScope || focusScope.has(tool.agentId))) {
         const halfW = TOOL_CARD_W / 2
         const halfH = TOOL_CARD_H / 2
@@ -140,7 +150,7 @@ export function useCanvasCamera({
         maxY = Math.max(maxY, tool.y + halfH)
       }
     }
-    for (const disc of discoveries) {
+    for (const disc of compact ? [] : discoveries) {
       if (disc.opacity > 0.1 && (!focusScope || focusScope.has(disc.agentId))) {
         minX = Math.min(minX, disc.x - DISC_BOUNDS_HALF_W)
         maxX = Math.max(maxX, disc.x + DISC_BOUNDS_HALF_W)
@@ -149,23 +159,12 @@ export function useCanvasCamera({
       }
     }
     if (minX === Infinity) {
-      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result: null }
+      fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, frameKey, result: null }
       return null
     }
-    const padding = ANIM.viewportPadding
-    const boundsW = maxX - minX + padding * 2
-    const boundsH = maxY - minY + padding * 2
-    const centerX = (minX + maxX) / 2
-    const centerY = (minY + maxY) / 2
-    // Keep clear of the control bar along the bottom edge
-    const usableH = Math.max(dimensions.height - CONTROL_BAR_RESERVE, 120)
-    const scale = Math.min(dimensions.width / boundsW, usableH / boundsH, 2)
-    const result = {
-      x: dimensions.width / 2 - centerX * scale,
-      y: usableH / 2 - centerY * scale,
-      scale,
-    }
-    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }
+    // Keep clear of the control bar along the bottom edge and of the controls along the top
+    const result = fitTransform({ minX, maxX, minY, maxY }, dimensions, { top: fitTop, bottom: CONTROL_BAR_RESERVE }, compact)
+    fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, frameKey, result }
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef])
 

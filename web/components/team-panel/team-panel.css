@@ -37,7 +37,7 @@
 .tm-pane{position:absolute;inset:0}
 .tm-pane[data-active="false"]{visibility:hidden;pointer-events:none}
 .tm-pane-team{overflow-y:auto;overflow-x:hidden;background:var(--bg);overscroll-behavior:contain}
-.tm-pane-graph > div{height:100%!important;width:100%!important}
+.tm-pane-graph > div:not(.tm-edge){height:100%!important;width:100%!important}
 
 /* Graph chrome in the panel's look (spec graph-theme items 1-2): same tokens, font and radius. The tokens carry a
    --g- prefix here because the graph also uses Tailwind, whose --muted / --accent / --radius mean other things.
@@ -95,7 +95,25 @@
 
 .tm-wrap{max-width:760px;margin:0 auto;padding:18px 16px 40px;container-type:inline-size}
 .tm-top{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
-.tm-heading{flex:1 1 240px;min-width:0}
+.tm-top-actions{display:flex;gap:8px;flex-shrink:0}
+.tm-top-actions:empty{display:none}
+/* The hide-panel button only exists where the panel is a column next to the graph */
+.tm-themed .tm-desk-only{display:none}
+@media (min-width:1024px){.tm-themed .tm-icon-btn.tm-desk-only{display:grid}}
+
+/* Desktop with the panel hidden (item 1): the graph takes the whole width; a slim tab on its left edge brings the
+   panel back. Instant, no slide: the graph re-fits once instead of on every animation frame. */
+.tm-edge{display:none;background:transparent}
+@media (min-width:1024px){
+  .tm-app[data-panel-hidden="true"] .tm-panes{grid-template-columns:minmax(0,1fr)}
+  .tm-app[data-panel-hidden="true"] .tm-pane-team{display:none}
+  .tm-edge{display:block;position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:40}
+}
+.tm-edge-btn{font:inherit;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px;width:44px;min-height:88px;padding:10px 0;border:1px solid var(--line);border-left:0;border-radius:0 12px 12px 0;background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+.tm-edge-btn:hover{background:var(--sunk);color:var(--accent)}
+.tm-edge-btn:active{transform:translateX(1px)}
+.tm-edge-btn .count{min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:var(--blocked);color:var(--surface);font-size:11px;display:inline-grid;place-items:center;font-variant-numeric:tabular-nums}
+.tm-heading{flex:1 1 160px;min-width:0}
 .tm-themed h1{font-size:22px;line-height:1.25;margin:0;font-weight:700;letter-spacing:-.01em}
 .tm-themed .sub{color:var(--muted);margin:4px 0 0;font-size:14px}
 /* Theme picker: one small icon button (sun / moon / half circle), tooltip and aria-label carry the words */
@@ -135,29 +153,51 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-stat .dots i{width:6px;height:6px;border-radius:50%;background:var(--line)}
 .tm-stat .dots i.d{background:var(--done)} .tm-stat .dots i.r{background:var(--accent)} .tm-stat .dots i.v{background:var(--review)}
 
-.tm-team{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 12px 16px;box-shadow:var(--shadow)}
-.tm-team .owner{display:flex;justify-content:center}
-.tm-team .owner span{font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:4px 12px}
-.tm-team .stem{width:1px;height:16px;background:var(--line);margin:0 auto}
-.tm-team .lead-row{display:flex;justify-content:center}
-.tm-team .bar{height:1px;background:var(--line);margin:0 8%}
-.tm-team .members{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 6px}
-.tm-member{display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:14px;position:relative;min-width:0}
-.tm-member::before{content:"";position:absolute;top:0;left:50%;width:1px;height:14px;background:var(--line)}
-.lead-row .tm-member{padding-top:0;max-width:260px}
-.lead-row .tm-member::before{display:none}
-.tm-av{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-weight:700;font-size:17px;position:relative;border:1px solid var(--line);color:var(--ink);flex-shrink:0}
+/* Team tree, compact (spec-panel-compact item 2): owner, the coordinator, then one row per member on a rail.
+   Rows instead of a 3-column grid of tall cards: no empty cells when the count is not a multiple of 3, and a name,
+   role and task read left to right like the rest of the panel. Wider panels (tablet) flow the rows into 2 columns. */
+.tm-team{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px 12px;box-shadow:var(--shadow)}
+.tm-team .owner{display:flex}
+.tm-team .owner span{font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:2px 10px}
+.tm-team .lead-row{margin-top:8px}
+.tm-team .members{list-style:none;margin:6px 0 0;padding:0}
+.tm-team .members.under-lead{margin-left:17px}
+.tm-team .members li{position:relative;padding:4px 0 4px 16px;break-inside:avoid}
+/* rail: one vertical segment per row (so it survives the 2-column flow) plus a tick into the avatar */
+.tm-team .members.under-lead li::before{content:"";position:absolute;left:0;top:0;bottom:0;width:1px;background:var(--line)}
+.tm-team .members.under-lead li:last-child::before{bottom:auto;height:21px}
+.tm-team .members.under-lead li::after{content:"";position:absolute;left:0;top:21px;width:12px;height:1px;background:var(--line)}
+.tm-team .members:not(.under-lead) li{padding-left:0}
+.tm-member{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.tm-member .who{min-width:0;flex:1;padding-top:1px}
+.tm-member .line{line-height:1.3}
+.tm-member .nm{font-weight:700;font-size:14px}
+.tm-member .rl{font-size:12px;color:var(--muted)}
+.tm-member .tk{font-size:12px;color:var(--accent);margin-top:1px;line-height:1.35}
+.tm-member .tk.idle{color:var(--muted)}
+.tm-av{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:700;font-size:14px;position:relative;border:1px solid var(--line);color:var(--ink);flex-shrink:0}
 .tm-av.opus{background:var(--opus)} .tm-av.sonnet{background:var(--sonnet)} .tm-av.lead{background:var(--lead)}
-.tm-av.big{width:60px;height:60px;font-size:19px}
-.tm-av .st{position:absolute;right:-5px;top:-5px;width:18px;height:18px;border-radius:50%;border:2px solid var(--surface)}
+.tm-av.big{width:36px;height:36px}
+.tm-av .st{position:absolute;right:-4px;top:-4px;width:12px;height:12px;border-radius:50%;border:2px solid var(--surface)}
 .tm-av .st.idle{background:var(--line)}
 .tm-av .st.work{background:var(--accent)}
 .tm-av.working{animation:tm-breathe 2.6s ease-in-out infinite}
-.tm-member .nm{font-weight:700;font-size:14px;margin-top:8px}
-.tm-member .rl{font-size:12px;color:var(--muted);line-height:1.3}
-.tm-member .rl.mdl{white-space:nowrap}
-.tm-member .tk{font-size:12px;color:var(--accent);margin-top:4px;line-height:1.35}
-.tm-member .tk.idle{color:var(--muted)}
+/* Leaving member: the graph's disintegration in small. The outline is an SVG drawn in pieces; the body fades. */
+.tm-av.leaving{border-color:transparent;background:transparent}
+.tm-av.leaving .body{position:absolute;inset:0;border-radius:10px;display:grid;place-items:center;transition:opacity 1s linear}
+.tm-av.leaving .body.opus{background:var(--opus)} .tm-av.leaving .body.sonnet{background:var(--sonnet)} .tm-av.leaving .body.lead{background:var(--lead)}
+.tm-av.leaving .edge{position:absolute;inset:-1px;width:calc(100% + 2px);height:calc(100% + 2px);overflow:visible;pointer-events:none}
+.tm-av.leaving .edge rect{fill:none;stroke:var(--muted);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.tm-member.leaving .nm{font-weight:600}
+/* Item 7: a faint ring flashes off the avatar now and then (period from burstPeriod(), shorter as the hour runs out),
+   the name blinks slowly between 55% and 100% (flickerPeriod()), and a small "disintegrating" tag sits by the name.
+   Reduced motion: no flash, no blink (plain fade only). */
+.tm-av.leaving.bursting::after{content:"";position:absolute;inset:-2px;border-radius:12px;border:2px solid var(--accent);opacity:0;pointer-events:none;animation:tm-burst var(--tm-burst,8s) ease-out infinite}
+@keyframes tm-burst{0%{opacity:.45;transform:scale(1)}7%{opacity:0;transform:scale(1.45)}100%{opacity:0;transform:scale(1.45)}}
+.tm-member .nm.flicker{animation:tm-flicker var(--tm-flicker,3s) ease-in-out infinite}
+@keyframes tm-flicker{0%,100%{opacity:1}50%{opacity:.55}}
+.tm-member .tm-chip.tag{font-size:10.5px;font-weight:600;font-style:italic;padding:0 6px;margin-left:6px;vertical-align:1px}
+@media (prefers-reduced-motion:reduce){.tm-themed .tm-av.leaving::after,.tm-themed .nm.flicker{animation:none!important;opacity:1}.tm-themed .tm-av.leaving::after{display:none}}
 
 .tm-bubbles{display:flex;flex-direction:column;gap:10px}
 .tm-bubble{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 14px;box-shadow:var(--shadow)}
@@ -190,9 +230,6 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-dec{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:12px}
 .tm-dec h3{margin:0;font-size:16px;line-height:1.35}
 .tm-dec p{margin:6px 0 12px;color:var(--muted);font-size:14px}
-.tm-dec.answered{box-shadow:none}
-.tm-dec .done-line{margin-top:8px}
-.tm-dec .done-line strong{color:var(--done);overflow-wrap:anywhere}
 .tm-dec .opts{display:flex;flex-direction:column;gap:8px}
 .tm-dec .opt{text-align:left;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 14px;min-height:44px;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .tm-dec .opt:hover:not(:disabled){border-color:var(--accent)}
@@ -205,9 +242,12 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-dec .send-state:empty{margin:0}
 .tm-dec .send-state .err{color:var(--blocked)}
 
-.tm-stages,.tm-log{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
-.tm-log{box-shadow:none}
-.tm-log .tm-row:first-child{border-top:0}
+.tm-stages{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+
+/* Answered decisions: one row each, the question title then the answer in the "done" colour (item 3) */
+.tm-answered .q{font-size:14px;line-height:1.35}
+.tm-answered .ans{font-size:13px;font-weight:600;color:var(--done);margin-top:2px;overflow-wrap:anywhere}
+.tm-answered{margin-bottom:4px}
 .tm-stage{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px 14px;border-top:1px solid var(--line)}
 .tm-stage:first-child{border-top:0}
 .tm-stage .ix{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--sunk);color:var(--muted)}
@@ -266,8 +306,7 @@ a.tm-stat.hot b{color:var(--blocked)}
 
 /* The panel adapts to its own width (a 440px column on desktop, a full page on tablet), not to the window */
 @container (min-width:600px){
-  .tm-team .members{grid-template-columns:repeat(6,minmax(0,1fr))}
-  .tm-team .bar{margin:0 8.3%}
+  .tm-team .members{columns:2;column-gap:20px}
 }
 @media (min-width:600px){
   .tm-wrap{padding:28px 24px 56px}
@@ -285,12 +324,8 @@ a.tm-stat.hot b{color:var(--blocked)}
   .tm-pane-team .tm-stat{min-height:64px;padding:10px 6px}
   .tm-pane-team .tm-stat b{font-size:20px}
   .tm-pane-team .tm-stat b small{font-size:14px}
-  .tm-pane-team .tm-team{padding:12px 8px}
-  .tm-pane-team .tm-team .members{gap:12px 4px}
-  .tm-pane-team .tm-av{width:42px;height:42px;border-radius:13px;font-size:15px}
-  .tm-pane-team .tm-av.big{width:48px;height:48px;font-size:16px}
-  .tm-pane-team .tm-av .st{width:14px;height:14px;right:-4px;top:-4px}
-  .tm-pane-team .tm-member .nm{font-size:13px;margin-top:6px}
+  .tm-pane-team .tm-team{padding:10px 10px 10px}
+  .tm-pane-team .tm-member .nm{font-size:13px}
   .tm-pane-team .tm-member .rl, .tm-pane-team .tm-member .tk{font-size:11.5px}
   .tm-pane-team .tm-bubbles{gap:8px}
   .tm-pane-team .tm-bubble{padding:10px 12px;gap:10px;border-radius:14px}
@@ -311,3 +346,8 @@ a.tm-stat.hot b{color:var(--blocked)}
   .tm-pane-graph .tm-sound-btn{min-height:44px!important;min-width:44px!important}
 }
 .tm-pane-graph .glass-card input[type="range"]{background:transparent!important;border:0!important;padding:0}
+/* Phone graph menu (top-bar.tsx GraphMenu): hover and press states for the rows and the button */
+.tm-graph-menu-item{background:transparent}
+.tm-pane-graph .tm-graph-menu-item:hover:not([aria-pressed="true"]){background:var(--g-sunk)}
+.tm-pane-graph .tm-graph-menu-btn:hover{border-color:var(--g-accent)!important}
+.tm-pane-graph .tm-graph-menu-btn:active, .tm-pane-graph .tm-graph-menu-item:active{transform:translateY(1px)}

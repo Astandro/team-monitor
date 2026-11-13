@@ -87,7 +87,6 @@ test('no id, key or code appears in anything the viewer reads (O2)', () => {
     members: vm.members.map(({ id: _id, ...rest }) => rest),
     lead: vm.lead && (({ id: _id, ...rest }) => rest)(vm.lead),
     stages: vm.stages.map(({ id: _id, ...rest }) => rest),
-    log: vm.log.map(({ id: _id, ...rest }) => rest),
   })
   assert.ok(!/\btm0\d\b/.test(shown), 'task key leaked')
   assert.ok(!/"D[0-9]"/.test(shown), 'decision key leaked')
@@ -178,14 +177,50 @@ test('stage progress is a clamped percent; done shows a check, others their numb
   assert.equal(odd.stages[0].percent, 100)
 })
 
-test('log shows the newest 20 first with relative time', () => {
-  const log: Record<string, { t: string; text: string }> = {}
-  for (let i = 0; i < 25; i++) log[`e${i}`] = { t: new Date(NOW - i * 3_600_000).toISOString(), text: `kejadian ${i}` }
-  const vm = buildTeamVM({ log }, { now: NOW })
-  assert.equal(vm.log.length, 20)
-  assert.equal(vm.log[0].text, 'kejadian 0')
-  assert.equal(vm.log[0].time, 'baru saja')
-  assert.equal(vm.log[1].time, '1 jam lalu')
+test('the log stays in state.json but the panel model carries none of it (spec-panel-compact item 5)', () => {
+  const vm = buildTeamVM({ log: { e1: { t: new Date(NOW).toISOString(), text: 'kejadian rahasia' } } }, { now: NOW })
+  assert.ok(!('log' in vm))
+  assert.ok(!JSON.stringify(vm).includes('kejadian rahasia'))
+})
+
+test('team tree: working and idle as usual, offboarding breaks up over the hour, expired is gone (item 2)', () => {
+  const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString()
+  const vm = buildTeamVM(
+    {
+      tasks: { t1: { title: 'Panel ringkas', status: 'done', agent: 'old', order: 1 } },
+      agents: {
+        lead: { nick: 'Sora', desk: 'coordinator', status: 'working', task: 'Koordinasi', order: 1 },
+        w: { nick: 'Haruki', status: 'working', task: 'Panel', order: 2 },
+        i: { nick: 'Aoi', status: 'idle', order: 3 },
+        recent: { nick: 'Yuto', status: 'offboarding', finishedAt: iso(15), task: 'Panel', order: 4 },
+        edge: { nick: 'Riku', status: 'offboarding', finishedAt: iso(60), order: 5 },
+        old: { nick: 'Kaito', status: 'offboarding', finishedAt: iso(61), order: 6 },
+        noclock: { nick: 'Ren', status: 'offboarding', order: 7 },
+      },
+    },
+    { now: NOW },
+  )
+  assert.deepEqual(vm.members.map((m) => m.nick), ['Haruki', 'Aoi', 'Yuto', 'Ren'])
+  assert.deepEqual(vm.members.map((m) => m.phase), ['working', 'idle', 'offboarding', 'offboarding'])
+  const yuto = vm.members[2]
+  assert.equal(yuto.progress, 0.25)
+  assert.equal(yuto.working, false)
+  assert.equal(yuto.task, '')
+  assert.match(yuto.leaving, /^Keluar otomatis \d\d\.\d\d \(45 menit lagi\)$/)
+  assert.equal(vm.members[3].progress, 0)
+  assert.equal(vm.members[3].leaving, 'Selesai, lagi keluar dari tim')
+  assert.equal(vm.members[0].leaving, '')
+  // a gone member still names the task it did
+  assert.equal(vm.queue[0].who, 'Kaito')
+})
+
+test('an expired coordinator leaves the tree like anyone else', () => {
+  const vm = buildTeamVM(
+    { agents: { a: { nick: 'Sora', desk: 'coordinator', status: 'offboarding', finishedAt: new Date(NOW - 2 * 3_600_000).toISOString() } } },
+    { now: NOW },
+  )
+  assert.equal(vm.lead, null)
+  assert.equal(vm.members.length, 0)
 })
 
 test('survives empty and broken state', () => {

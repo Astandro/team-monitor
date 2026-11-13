@@ -34,6 +34,8 @@ interface CanvasProps {
   showHexGrid: boolean
   zoomToFitTrigger?: number
   pauseAutoFit?: boolean
+  /** Screen px at the top covered by the graph's controls; auto-fit frames below them */
+  fitTop?: number
   onAgentClick: (agentId: string | null) => void
   onAgentHover: (agentId: string | null) => void
   onAgentDrag: (agentId: string, x: number, y: number) => void
@@ -47,7 +49,7 @@ interface CanvasProps {
 
 export function AgentCanvas({
   simulationRef,
-  selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
+  selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit, fitTop,
   onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -97,7 +99,7 @@ export function AgentCanvas({
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
     showCostOverlay, selectedToolCallId, selectedDiscoveryId,
-    simTime: sim.currentTime, pauseAutoFit, dimensions,
+    simTime: sim.currentTime, pauseAutoFit, dimensions, fitTop,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick,
     isDragging: prev?.isDragging ?? false,

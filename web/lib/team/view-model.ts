@@ -1,13 +1,14 @@
 // state.json -> what the panel draws. Pure: no DOM, no clock (the caller passes `now`).
 // Rule O2/O3: ids (task keys, agent ids, decision keys) never become display text, and no title is ever cut.
+import { autoOffboardText } from '../disintegration'
 import {
   avatarTone,
   normalizeTaskStatus,
   projectStatusLabel,
-  relativeTime,
   taskStatusLabel,
   type AvatarTone,
 } from './labels'
+import { memberPhase } from './members'
 import type { TaskStatus, TeamAgent, TeamApproval, TeamState } from './types'
 
 export interface BuildOptions {
@@ -27,6 +28,12 @@ export interface MemberVM {
   tone: AvatarTone
   working: boolean
   task: string
+  /** 'offboarding': retired, breaking up over the hour after finishedAt (see members.ts). */
+  phase: 'working' | 'idle' | 'offboarding'
+  /** 0..1 through the offboarding hour; 0 otherwise. */
+  progress: number
+  /** "Keluar otomatis 15.05 (23 menit lagi)" while offboarding; empty otherwise. */
+  leaving: string
 }
 
 export interface TaskVM {
@@ -60,12 +67,6 @@ export interface StageVM {
   marker: string
 }
 
-export interface LogVM {
-  id: string
-  text: string
-  time: string
-}
-
 export interface TeamVM {
   title: string
   statusText: string
@@ -82,7 +83,6 @@ export interface TeamVM {
   queue: TaskVM[]
   decisions: DecisionVM[]
   stages: StageVM[]
-  log: LogVM[]
 }
 
 function num(v: unknown): number {
@@ -109,11 +109,13 @@ function initialOf(nick: string): string {
   return ch ? ch.toUpperCase() : '?'
 }
 
-function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: string }>): MemberVM {
+function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: string }>, now: number): MemberVM {
   const nick = str(a.nick) || str(a.name) || 'Anggota tim'
   const name = str(a.name)
   const model = str(a.model)
-  const working = a.status === 'working'
+  const phase = memberPhase(a, now)
+  const working = phase.kind === 'working'
+  const offboarding = phase.kind === 'offboarding'
   // agent.task may be a free-text sentence or the key of a task: show the title, never the key.
   const rawTask = str(a.task)
   const asTask = rawTask && Object.prototype.hasOwnProperty.call(tasks, rawTask) ? str(tasks[rawTask]?.title) : ''
@@ -126,6 +128,9 @@ function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: s
     tone: avatarTone(a.desk, a.model),
     working,
     task: working ? asTask || rawTask : '',
+    phase: offboarding ? 'offboarding' : working ? 'working' : 'idle',
+    progress: offboarding ? phase.progress : 0,
+    leaving: !offboarding ? '' : phase.clock ? autoOffboardText(phase.clock, now) : 'Selesai, lagi keluar dari tim',
   }
 }
 
@@ -166,12 +171,15 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
   const taskMap = (s.tasks && typeof s.tasks === 'object' ? s.tasks : {}) as Record<string, { title?: string }>
 
   const sortedAgents = agents.slice().sort(byOrderThenKey)
-  const leadEntry = sortedAgents.find(([, a]) => a.desk === 'coordinator')
-  const lead = leadEntry ? buildMember(leadEntry[0], leadEntry[1], taskMap) : null
-  const members = sortedAgents
+  // The tree shows the current team only: a member past finishedAt + 60 min is gone even if still in the file.
+  const shownAgents = sortedAgents.filter(([, a]) => memberPhase(a, opts.now).kind !== 'gone')
+  const leadEntry = shownAgents.find(([, a]) => a.desk === 'coordinator')
+  const lead = leadEntry ? buildMember(leadEntry[0], leadEntry[1], taskMap, opts.now) : null
+  const members = shownAgents
     .filter(([id]) => !leadEntry || id !== leadEntry[0])
-    .map(([id, a]) => buildMember(id, a, taskMap))
-  const byAgent = new Map(sortedAgents.map(([id, a]) => [id, buildMember(id, a, taskMap)]))
+    .map(([id, a]) => buildMember(id, a, taskMap, opts.now))
+  // Task rows still name whoever did them, gone or not.
+  const byAgent = new Map(sortedAgents.map(([id, a]) => [id, buildMember(id, a, taskMap, opts.now)]))
 
   const taskEntries = entries(s.tasks).sort((a, b) => {
     const d = num(a[1].order) - num(b[1].order)
@@ -219,12 +227,7 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
     }
   })
 
-  const log: LogVM[] = entries(s.log)
-    .map(([id, row]) => ({ id, text: str(row.text), t: Date.parse(str(row.t)), iso: row.t }))
-    .filter((r) => r.text !== '')
-    .sort((a, b) => (Number.isNaN(b.t) ? -Infinity : b.t) - (Number.isNaN(a.t) ? -Infinity : a.t))
-    .slice(0, 20)
-    .map((r) => ({ id: r.id, text: r.text, time: relativeTime(r.iso, opts.now) }))
+  // `log` stays in state.json but is not shown: the graph covers it (spec-panel-compact item 5).
 
   return {
     title: str(meta.title) || opts.projectName || 'Tim',
@@ -241,6 +244,5 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
     queue,
     decisions,
     stages,
-    log,
   }
 }

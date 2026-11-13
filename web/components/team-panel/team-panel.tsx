@@ -1,8 +1,11 @@
 "use client"
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
+import { burstPeriod, DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES } from '@/lib/disintegration'
 import { OWNER_LABEL } from '@/lib/team/labels'
+import { dashArrayFromPieces } from '@/lib/team/members'
+import { ANSWERED_OPEN_BY_DEFAULT, answeredSummary, panelSections, splitDecisions, type SectionKey } from '@/lib/team/sections'
 import { newBubbleKeys, themeButton, type ThemePref } from '@/lib/team/session'
 import type { DecisionVM, MemberVM, TaskVM } from '@/lib/team/view-model'
 import type { TeamModel } from './use-team-model'
@@ -13,6 +16,8 @@ interface PanelProps {
   theme: ThemePref
   onCycleTheme: () => void
   chatRef?: React.Ref<ChatSectionHandle>
+  /** Desktop only: hide the panel so the graph takes the full width. */
+  onHide?: () => void
 }
 
 function Avatar({ tone, initial, working, size }: { tone: string; initial: string; working?: boolean; size?: 'lead' }) {
@@ -24,18 +29,91 @@ function Avatar({ tone, initial, working, size }: { tone: string; initial: strin
   )
 }
 
-function Member({ m, lead }: { m: MemberVM; lead?: boolean }) {
+function usePrefersReducedMotion(): boolean {
+  const [reduce, setReduce] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const on = (e: MediaQueryListEvent) => setReduce(e.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return reduce
+}
+
+/**
+ * A retired member's avatar, the same idea as the graph's node: the outline breaks up piece by piece over the hour
+ * (the share left reads as time left), the body fades to 30%. Reduced motion: whole outline, plain fade.
+ */
+function LeavingAvatar({ m, reduce }: { m: MemberVM; reduce: boolean }) {
+  const look = disintegrationLook(m.id, m.progress, reduce)
+  const dash = look.pieces ? dashArrayFromPieces(look.pieces) : 'none'
+  // Quiet light bursts, more often as the hour runs out (item 7); the CSS drops them under reduced motion
+  const motion = reduce ? undefined : ({ '--tm-burst': `${burstPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties)
   return (
-    <div className="tm-member">
-      <Avatar tone={m.tone} initial={m.initial} working={m.working} size={lead ? 'lead' : undefined} />
-      <div className="nm">{m.nick}</div>
-      {m.role && <div className="rl">{m.role}</div>}
-      {m.model && <div className="rl mdl">{m.model}</div>}
-      <div className={`tk${m.working && m.task ? '' : ' idle'}`}>
-        <span className="sr-only">{m.working ? 'Lagi ngerjain: ' : 'Status: '}</span>
-        {m.working && m.task ? m.task : 'Siaga'}
+    <div className={`tm-av leaving${reduce ? '' : ' bursting'}`} style={motion} aria-hidden="true">
+      <span className={`body ${m.tone}`} style={{ opacity: look.body }}>
+        {m.initial}
+      </span>
+      <svg className="edge" viewBox="0 0 34 34" preserveAspectRatio="none">
+        <rect
+          x="0.75"
+          y="0.75"
+          width="32.5"
+          height="32.5"
+          rx="9.5"
+          pathLength={OUTLINE_PIECES}
+          strokeDasharray={dash}
+          style={{ opacity: look.pieces ? 1 : look.body }}
+        />
+      </svg>
+    </div>
+  )
+}
+
+/** One compact row in the tree: avatar, name with role and model, then what they are on (or that they are leaving). */
+function Member({ m, lead, reduce }: { m: MemberVM; lead?: boolean; reduce: boolean }) {
+  const leaving = m.phase === 'offboarding'
+  const label = leaving ? disintegrationLook(m.id, m.progress, reduce).label : 1
+  const sub = [m.role, m.model].filter(Boolean).join(' · ')
+  return (
+    <div className={`tm-member${leaving ? ' leaving' : ''}`}>
+      {leaving ? (
+        <LeavingAvatar m={m} reduce={reduce} />
+      ) : (
+        <Avatar tone={m.tone} initial={m.initial} working={m.working} size={lead ? 'lead' : undefined} />
+      )}
+      <div className="who">
+        <div className="line" style={label < 1 ? { opacity: Math.max(label, 0.35) } : undefined}>
+          <span
+            className={`nm${leaving && !reduce ? ' flicker' : ''}`}
+            style={leaving && !reduce ? ({ '--tm-flicker': `${flickerPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties) : undefined}
+          >
+            {m.nick}
+          </span>
+          {leaving && <span className="tm-chip tag">{DISINTEGRATING_TAG}</span>}
+          {sub && <span className="rl"> {sub}</span>}
+        </div>
+        {leaving ? (
+          <div className="tk idle">{m.leaving}</div>
+        ) : (
+          <div className={`tk${m.working && m.task ? '' : ' idle'}`}>
+            <span className="sr-only">{m.working ? 'Lagi ngerjain: ' : 'Status: '}</span>
+            {m.working && m.task ? m.task : 'Siaga'}
+          </div>
+        )}
       </div>
     </div>
+  )
+}
+
+/** Sidebar glyph: a panel outline with its left column and a chevron pointing the way it will move. */
+function PanelIcon({ dir }: { dir: 'hide' | 'show' }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M9 4v16" />
+      <path d={dir === 'hide' ? 'M16 10l-2 2 2 2' : 'M14 10l2 2-2 2'} />
+    </svg>
   )
 }
 
@@ -77,24 +155,6 @@ function Decision({
     else setState({ kind: 'error', message: r.message })
   }
 
-  if (!d.open) {
-    return (
-      <div className="tm-dec answered">
-        <h3>{d.title}</h3>
-        {d.question && <p>{d.question}</p>}
-        <div className="done-line" role="status">
-          {d.answer ? (
-            <>
-              Jawaban: <strong>{d.answer}</strong>
-            </>
-          ) : (
-            <strong>Sudah dijawab</strong>
-          )}
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="tm-dec">
       <h3>{d.title}</h3>
@@ -134,6 +194,35 @@ function Decision({
         {state.kind === 'error' && <span className="err">{state.message}</span>}
       </div>
     </div>
+  )
+}
+
+/** Answered decisions, one row each (title, then the answer), all behind one collapsed "N sudah dijawab" (item 3). */
+function AnsweredDecisions({ list }: { list: DecisionVM[] }) {
+  return (
+    <details className="tm-list tm-answered" open={ANSWERED_OPEN_BY_DEFAULT || undefined}>
+      <summary>
+        <span>Keputusan</span>
+        <span className="note">{answeredSummary(list.length)}</span>
+      </summary>
+      {list.map((d) => (
+        <div className="tm-row" key={d.id}>
+          <div className="ttl">
+            <div className="q">{d.title}</div>
+            <div className="ans">
+              {d.answer ? (
+                <>
+                  <span className="sr-only">Jawaban: </span>
+                  {d.answer}
+                </>
+              ) : (
+                'Sudah dijawab'
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </details>
   )
 }
 
@@ -218,8 +307,9 @@ function OffboardedList({ model }: { model: TeamModel }) {
   )
 }
 
-export function TeamPanel({ model, theme, onCycleTheme, chatRef }: PanelProps) {
+export function TeamPanel({ model, theme, onCycleTheme, chatRef, onHide }: PanelProps) {
   const { vm, view } = model
+  const reduce = usePrefersReducedMotion()
   const seenRef = useRef<Set<string> | null>(null)
   const keys = vm.live.map((t) => `${t.id}:${t.status}`)
   const fresh = newBubbleKeys(seenRef.current, keys)
@@ -229,6 +319,121 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef }: PanelProps) {
   })
   // With several projects the theme button sits next to the project switcher; with one, next to the title.
   const hasSwitcher = model.projects.length > 1
+  const decisionGroups = splitDecisions(vm.decisions)
+
+  // One block per section; the order comes from SECTION_ORDER (web/lib/team/sections.ts, tested).
+  const sections: Record<SectionKey, React.ReactNode> = {
+    stages: (
+      <>
+        <h2>Tahapan</h2>
+        {vm.stages.length === 0 ? (
+          <div className="tm-empty">Belum ada tahapan.</div>
+        ) : (
+          <div className="tm-stages">
+            {vm.stages.map((s) => (
+              <div className={`tm-stage ${s.status}`} key={s.id}>
+                <div className="ix" aria-hidden="true">
+                  {s.marker}
+                </div>
+                <div className="mid">
+                  <div className="lb">{s.label}</div>
+                  {s.sub && <div className="sb">{s.sub}</div>}
+                  <div
+                    className="track"
+                    role="progressbar"
+                    aria-label={`Kemajuan ${s.label}`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={s.percent}
+                  >
+                    <i style={{ width: `${s.percent}%` }} />
+                  </div>
+                </div>
+                <div className="pc">{s.percent}%</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    ),
+    live: (
+      <>
+        <h2>Lagi dikerjain</h2>
+        <div aria-live="polite">
+          {vm.live.length === 0 ? (
+            <div className="tm-empty">Nggak ada yang lagi jalan. Tim lagi siaga.</div>
+          ) : (
+            <div className="tm-bubbles">
+              {vm.live.map((t) => (
+                <Bubble key={t.id} t={t} fresh={fresh.has(`${t.id}:${t.status}`)} />
+              ))}
+            </div>
+          )}
+        </div>
+      </>
+    ),
+    decisions: (
+      <>
+        <h2 id="keputusan">Keputusan</h2>
+        {decisionGroups.open.length === 0 ? (
+          <div className="tm-empty">Belum ada keputusan yang perlu kamu ambil.</div>
+        ) : (
+          decisionGroups.open.map((d) => <Decision key={d.id} d={d} send={model.sendAnswer} />)
+        )}
+      </>
+    ),
+    team: (
+      <>
+        <h2>Tim</h2>
+        <section className="tm-team" aria-label="Susunan tim">
+          <div className="owner">
+            <span>{OWNER_LABEL}</span>
+          </div>
+          {vm.lead && (
+            <div className="lead-row">
+              <Member m={vm.lead} lead reduce={reduce} />
+            </div>
+          )}
+          {vm.members.length > 0 && (
+            <ul className={`members${vm.lead ? ' under-lead' : ''}`}>
+              {vm.members.map((m) => (
+                <li key={m.id}>
+                  <Member m={m} reduce={reduce} />
+                </li>
+              ))}
+            </ul>
+          )}
+          {!vm.lead && vm.members.length === 0 && <div className="tm-empty">Belum ada anggota tim di catatan.</div>}
+        </section>
+      </>
+    ),
+    chat: (
+      <ChatSection
+        ref={chatRef}
+        thread={model.thread}
+        coordinatorName={model.coordinatorName}
+        watcherNotice={model.watcherNotice}
+        send={model.sendMessage}
+      />
+    ),
+    queue: (
+      <details className="tm-list">
+        <summary>
+          <span>Antrian dan yang sudah selesai</span>
+          <span className="note">{vm.queue.length} task</span>
+        </summary>
+        {vm.queue.length === 0 && <div className="tm-row">Belum ada.</div>}
+        {vm.queue.map((t) => (
+          <div className="tm-row" key={t.id}>
+            <span className="ttl">{t.title}</span>
+            <span className={`tm-chip ${t.status}`}>{t.statusLabel}</span>
+          </div>
+        ))}
+      </details>
+    ),
+    offboarded: <OffboardedList model={model} />,
+    answered: <AnsweredDecisions list={decisionGroups.answered} />,
+  }
 
   return (
     <div className="tm-wrap">
@@ -254,7 +459,23 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef }: PanelProps) {
           <h1>{ready ? vm.title : model.projectName || 'Monitor tim'}</h1>
           {ready && vm.statusText && <p className="sub">{vm.statusText}</p>}
         </div>
-        {!hasSwitcher && <ThemeButton theme={theme} onCycle={onCycleTheme} />}
+        <div className="tm-top-actions">
+          {onHide && (
+            <button
+              type="button"
+              id="tm-panel-toggle"
+              className="tm-icon-btn tm-desk-only"
+              aria-label="Sembunyikan panel tim (tombol [)"
+              title="Sembunyikan panel tim (tombol [)"
+              aria-controls="tm-panel-tim"
+              aria-expanded="true"
+              onClick={onHide}
+            >
+              <PanelIcon dir="hide" />
+            </button>
+          )}
+          {!hasSwitcher && <ThemeButton theme={theme} onCycle={onCycleTheme} />}
+        </div>
       </header>
 
       <div className="tm-banners" role="status" aria-live="polite">
@@ -321,127 +542,12 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef }: PanelProps) {
             </a>
           </section>
 
-          <h2>Tim</h2>
-          <section className="tm-team" aria-label="Susunan tim">
-            <div className="owner">
-              <span>{OWNER_LABEL}</span>
-            </div>
-            {vm.lead && (
-              <>
-                <div className="stem" />
-                <div className="lead-row">
-                  <Member m={vm.lead} lead />
-                </div>
-              </>
-            )}
-            {vm.members.length > 0 && (
-              <>
-                <div className="stem" />
-                <div className="bar" />
-                <div className="members">
-                  {vm.members.map((m) => (
-                    <Member key={m.id} m={m} />
-                  ))}
-                </div>
-              </>
-            )}
-            {!vm.lead && vm.members.length === 0 && <div className="tm-empty">Belum ada anggota tim di catatan.</div>}
-          </section>
-
-          <h2>Lagi dikerjain</h2>
-          <div aria-live="polite">
-            {vm.live.length === 0 ? (
-              <div className="tm-empty">Nggak ada yang lagi jalan. Tim lagi siaga.</div>
-            ) : (
-              <div className="tm-bubbles">
-                {vm.live.map((t) => (
-                  <Bubble key={t.id} t={t} fresh={fresh.has(`${t.id}:${t.status}`)} />
-                ))}
-              </div>
-            )}
-          </div>
-
-          <details className="tm-list">
-            <summary>
-              <span>Antrian dan yang sudah selesai</span>
-              <span className="note">{vm.queue.length} task</span>
-            </summary>
-            {vm.queue.length === 0 && <div className="tm-row">Belum ada.</div>}
-            {vm.queue.map((t) => (
-              <div className="tm-row" key={t.id}>
-                <span className="ttl">{t.title}</span>
-                <span className={`tm-chip ${t.status}`}>{t.statusLabel}</span>
-              </div>
-            ))}
-          </details>
-
-          <OffboardedList model={model} />
-
-          <h2 id="keputusan">Keputusan</h2>
-          {vm.decisions.length === 0 ? (
-            <div className="tm-empty">Belum ada keputusan yang perlu kamu ambil.</div>
-          ) : (
-            vm.decisions.map((d) => <Decision key={d.id} d={d} send={model.sendAnswer} />)
-          )}
-
-          <ChatSection
-            ref={chatRef}
-            thread={model.thread}
-            coordinatorName={model.coordinatorName}
-            watcherNotice={model.watcherNotice}
-            send={model.sendMessage}
-          />
-
-          <div className="tm-grid2">
-            <div>
-              <h2>Tahapan</h2>
-              {vm.stages.length === 0 ? (
-                <div className="tm-empty">Belum ada tahapan.</div>
-              ) : (
-                <div className="tm-stages">
-                  {vm.stages.map((s) => (
-                    <div className={`tm-stage ${s.status}`} key={s.id}>
-                      <div className="ix" aria-hidden="true">
-                        {s.marker}
-                      </div>
-                      <div className="mid">
-                        <div className="lb">{s.label}</div>
-                        {s.sub && <div className="sb">{s.sub}</div>}
-                        <div
-                          className="track"
-                          role="progressbar"
-                          aria-label={`Kemajuan ${s.label}`}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-valuenow={s.percent}
-                        >
-                          <i style={{ width: `${s.percent}%` }} />
-                        </div>
-                      </div>
-                      <div className="pc">{s.percent}%</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <h2>Catatan terbaru</h2>
-              {vm.log.length === 0 ? (
-                <div className="tm-empty">Belum ada catatan.</div>
-              ) : (
-                <div className="tm-log">
-                  {vm.log.map((r) => (
-                    <div className="tm-row" key={r.id}>
-                      <span className="ttl">{r.text}</span>
-                      <time>{r.time}</time>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          {panelSections(decisionGroups.answered.length).map((k) => (
+            <Fragment key={k}>{sections[k]}</Fragment>
+          ))}
         </>
       )}
     </div>
   )
 }
+
