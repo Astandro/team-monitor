@@ -3,7 +3,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { Agent, Particle, Edge, Discovery } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
-import { getGraphTheme, getStateColor, graphBloomEnabled } from '@/lib/colors'
+import { getGraphTheme, graphBloomEnabled } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { BloomRenderer } from './bloom-renderer'
 import { drawBackground } from './background-layer'
@@ -272,15 +272,7 @@ export function AgentCanvas({
       const still = reducedMotion()
       updateSkyParticles(depthParticlesRef.current, deltaTime, w, h, still)
 
-      let activeAgentPos: { x: number; y: number; color: string } | undefined
-      for (const [, agent] of agents) {
-        if (agent.state === 'thinking' || agent.state === 'tool_calling' || agent.state === 'waiting_permission') {
-          activeAgentPos = { x: agent.x, y: agent.y, color: getStateColor(agent.state) }
-          break
-        }
-      }
-
-      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, still, activeAgentPos)
+      drawBackground(ctx, w, h, depthParticlesRef.current, transform, showHexGrid, timeRef.current, still)
 
       ctx.save()
       ctx.translate(transform.x, transform.y)

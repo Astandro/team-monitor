@@ -4,6 +4,28 @@
  * and composites back with additive blending.
  */
 
+/** The parts of a 2D context compositeBloom uses (a fake one in tests). */
+export type BloomTarget = Pick<CanvasRenderingContext2D, 'save' | 'restore' | 'setTransform' | 'drawImage' | 'globalCompositeOperation' | 'globalAlpha'>
+
+/**
+ * Lays the blurred copy over the canvas, pixel for pixel. The target context carries the device-pixel-ratio scale
+ * (canvas.tsx calls ctx.scale(dpr, dpr)), while `deviceW` x `deviceH` are the canvas's own pixels, so the draw must
+ * happen with the identity transform. Without the reset the glow of every node was drawn dpr times too large from
+ * the top-left corner: on a phone (dpr 3) it showed as big soft blobs far from their nodes that slid three times as
+ * fast as the graph when panning (owner screenshots 13 Nov). At dpr 1 the two are the same, which is why desktop
+ * looked right.
+ */
+export function compositeBloom(
+  targetCtx: BloomTarget, bloom: CanvasImageSource, deviceW: number, deviceH: number, intensity: number,
+): void {
+  targetCtx.save()
+  targetCtx.setTransform(1, 0, 0, 1, 0, 0)
+  targetCtx.globalCompositeOperation = 'lighter'
+  targetCtx.globalAlpha = intensity
+  targetCtx.drawImage(bloom, 0, 0, deviceW, deviceH)
+  targetCtx.restore()
+}
+
 export class BloomRenderer {
   private bloomCanvas: HTMLCanvasElement
   private bloomCtx: CanvasRenderingContext2D
@@ -48,12 +70,7 @@ export class BloomRenderer {
     this.boxBlur(this.bloomCtx, this.tempCtx, w, h, 6)
     this.boxBlur(this.bloomCtx, this.tempCtx, w, h, 4)
 
-    // Composite bloom over the target with additive blending
-    targetCtx.save()
-    targetCtx.globalCompositeOperation = 'lighter'
-    targetCtx.globalAlpha = this.intensity
-    targetCtx.drawImage(this.bloomCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height)
-    targetCtx.restore()
+    compositeBloom(targetCtx, this.bloomCanvas, sourceCanvas.width, sourceCanvas.height, this.intensity)
   }
 
   private boxBlur(

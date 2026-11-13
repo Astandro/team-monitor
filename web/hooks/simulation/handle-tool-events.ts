@@ -1,5 +1,6 @@
 import { COLORS } from '@/lib/colors'
 import { toolLabel, toolCallLine } from '@/lib/readable-labels'
+import { middleCut, toolArgsDisplay } from '@/lib/command-label'
 import { TOOL_DEDUP_WINDOW_S } from '@/lib/canvas-constants'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { appendConversation, asString, asBoolean, LABEL_LEN_PARTICLE, LABEL_LEN_TIMELINE } from './types'
@@ -21,6 +22,7 @@ export function handleToolCallStart(
   const inputData = (payload.inputData && typeof payload.inputData === 'object' && !Array.isArray(payload.inputData))
     ? payload.inputData as Record<string, unknown> : undefined
   const agent = state.agents.get(agentName)
+  const shown = toolArgsDisplay(toolName, args, inputData)
 
   if (agent) {
     // Dedup: skip if there's already a running tool call for the same agent+tool
@@ -29,6 +31,9 @@ export function handleToolCallStart(
     for (const tc of state.toolCalls.values()) {
       if (tc.agentId === agentName && tc.toolName === toolName && tc.state === 'running' && (currentTime - tc.startTime) < TOOL_DEDUP_WINDOW_S) {
         isDuplicate = true
+        // The hook event carries only the summarised args (cut at 80 characters); the transcript's copy carries
+        // the full input. Whichever came first, the card keeps the full one (readable command, detail popup).
+        if (!tc.inputData && inputData) state.toolCalls.set(tc.id, { ...tc, inputData })
         break
       }
     }
@@ -63,13 +68,13 @@ export function handleToolCallStart(
       edgeId: `edge-${toolId}`, progress: 0,
       type: 'tool_call', color: COLORS.tool,
       size: 4, trailLength: 0.15,
-      label: `${toolLabel(toolName)} ${args}`.slice(0, LABEL_LEN_PARTICLE),
+      label: middleCut(`${toolLabel(toolName)} ${shown.action}`.trim(), LABEL_LEN_PARTICLE),
     })
 
-    // Timeline block
+    // Timeline block: the action (setup like `cd <dir> &&` dropped), shortened in the middle
     const entry = state.timelineEntries.get(agentName)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: toolCallLine(toolName, args).slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: middleCut(toolCallLine(toolName, shown.action), LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
     }
 
     // Track file attention

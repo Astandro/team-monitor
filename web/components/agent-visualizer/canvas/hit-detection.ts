@@ -5,7 +5,7 @@ import {
   TOOL_MAX_CARD_W, getDiscoveryCardDimensions,
   AGENT_DRAW, HIT_DETECTION, BUBBLE_DRAW, TOOL_DRAW,
 } from '@/lib/canvas-constants'
-import { toolCallLine } from '@/lib/readable-labels'
+import { toolCardHeight, toolCardText } from '@/lib/tool-card-text'
 import { bubbleAlpha } from './bubble-utils'
 
 /**
@@ -38,11 +38,14 @@ export function findToolCallAt(
   for (const [id, tool] of toolCalls) {
     if (tool.opacity < 0.1) continue
     // Match the card dimensions from drawToolCalls
-    const isRunning = tool.state === 'running'
-    const isError = tool.state === 'error'
-    const labelLen = toolCallLine(tool.toolName, tool.args).length * HIT_DETECTION.toolCharWidth + 12
-    const cardW = Math.max(60, Math.min(labelLen, TOOL_MAX_CARD_W))
-    const cardH = (!isRunning && (tool.tokenCost || isError)) ? TOOL_DRAW.expandedHeight : TOOL_DRAW.collapsedHeight
+    // Same text and width rule as drawToolCalls, with monospace character widths instead of canvas measuring
+    const card = toolCardText(
+      tool, TOOL_MAX_CARD_W,
+      (s) => s.length * HIT_DETECTION.toolCharWidth,
+      (s) => s.length * HIT_DETECTION.toolCharWidth * (TOOL_DRAW.tokenFontSize / TOOL_DRAW.fontSize),
+    )
+    const cardW = card.width
+    const cardH = toolCardHeight(tool, card, TOOL_DRAW.collapsedHeight, TOOL_DRAW.expandedHeight)
     const cardX = tool.x - cardW / 2
     const cardY = tool.y - cardH / 2
     if (x >= cardX && x <= cardX + cardW && y >= cardY && y <= cardY + cardH) return id
