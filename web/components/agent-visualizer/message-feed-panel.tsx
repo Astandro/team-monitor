@@ -5,6 +5,7 @@ import { Agent, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, ROLE_COLORS, getStateColor } from '@/lib/colors'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useClickOutside } from '@/hooks/use-click-outside'
+import { agentDisplayName } from '@/lib/readable-labels'
 import { useVirtualList } from '@/hooks/use-virtual-list'
 
 interface MessageFeedPanelProps {
@@ -184,17 +185,17 @@ export function MessageFeedPanel({
   if (!expanded) {
     if (!latestMessage) return null
     const agent = agents.get(latestMessage.agentId)
-    const agentName = agent?.name ?? latestMessage.agentId
+    const agentName = agentDisplayName(agent?.name ?? latestMessage.agentId)
     const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
     const preview = latestMessage.content.replace(/\n/g, ' ').slice(0, PREVIEW_MAX)
 
     return (
       <div
-        className="absolute cursor-pointer transition-all hover:scale-[1.02]"
-        style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+        className="cursor-pointer transition-all hover:scale-[1.02]"
+        style={{ pointerEvents: 'auto', maxWidth: '100%' }}
         onClick={() => setExpanded(true)}
       >
-        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }} title="Buka daftar pesan">
+        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 'min(320px, 100%)' }} title="Buka daftar pesan">
           <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
           <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: 190 }}>
             {agentName}
@@ -212,11 +213,10 @@ export function MessageFeedPanel({
   return (
     <div
       ref={panelRef}
-      className="absolute"
-      style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+      style={{ pointerEvents: 'auto', maxWidth: '100%' }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="glass-card flex flex-col" style={{ width: 320, maxHeight: 420 }}>
+      <div className="glass-card flex flex-col" style={{ width: 'min(320px, 100%)', maxHeight: 420 }}>
         {/* Header */}
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
@@ -244,7 +244,7 @@ export function MessageFeedPanel({
           />
           {agentsWithMessages.map(agentId => {
             const agent = agents.get(agentId)
-            const name = agent?.name ?? agentId
+            const name = agentDisplayName(agent?.name ?? agentId)
             const color = agent ? getStateColor(agent.state) : COLORS.idle
             return (
               <TabButton
@@ -285,7 +285,7 @@ export function MessageFeedPanel({
                     <MessageRow
                       message={msg}
                       agentId={msg.agentId}
-                      agentName={agents.get(msg.agentId)?.name ?? msg.agentId}
+                      agentName={agentDisplayName(agents.get(msg.agentId)?.name ?? msg.agentId)}
                       showAgent={activeTab === 'all'}
                       isSelected={selectedAgentId === msg.agentId}
                       onClick={() => { onAgentClick(msg.agentId); setExpanded(false) }}

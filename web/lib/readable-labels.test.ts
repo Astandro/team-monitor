@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { toolLabel, toolCallLine, hasDistinctToolName, stateLabel, toolStateLabel } from './readable-labels'
+import { agentDisplayName, toolLabel,toolCallLine, hasDistinctToolName, stateLabel, toolStateLabel } from './readable-labels'
 
 test('known tools map to plain Indonesian labels', () => {
   assert.equal(toolLabel('Bash'), 'Jalanin perintah')
@@ -48,6 +48,14 @@ test('toolCallLine joins label and args; hasDistinctToolName flags renamed tools
   assert.equal(toolCallLine('Read'), 'Baca file')
   assert.equal(hasDistinctToolName('Bash'), true)
   assert.equal(hasDistinctToolName(''), false)
+})
+
+test('the main agent protocol name reads as plain Indonesian, other names pass through', () => {
+  assert.equal(agentDisplayName('orchestrator'), 'Sesi utama')
+  assert.equal(agentDisplayName(''), 'Sesi utama')
+  assert.equal(agentDisplayName(undefined), 'Sesi utama')
+  assert.equal(agentDisplayName('Perbaiki label grafik'), 'Perbaiki label grafik')
+  assert.equal(agentDisplayName('orchestrator-2'), 'orchestrator-2')
 })
 
 test('state labels are plain Indonesian', () => {

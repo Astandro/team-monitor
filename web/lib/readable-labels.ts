@@ -103,6 +103,16 @@ export function toolStateLabel(state: string): string {
   return TOOL_STATE_LABELS[state] ?? stateLabel(state)
 }
 
+/** Protocol name of the main agent before it is renamed to the session title. */
+const MAIN_AGENT_PROTOCOL_NAME = 'orchestrator'
+
+/** Name to show for an agent. The protocol value is not changed, only what a viewer reads. */
+export function agentDisplayName(name: string | undefined | null): string {
+  const n = (name ?? '').trim()
+  if (!n || n === MAIN_AGENT_PROTOCOL_NAME) return 'Sesi utama'
+  return n
+}
+
 /** "Baca file: src/a.ts" style line for a tool call. Args are optional. */
 export function toolCallLine(toolName: string, args?: string): string {
   const label = toolLabel(toolName)

@@ -50,7 +50,9 @@ export function SessionTabs({
             className="group px-1.5 py-0.5 rounded transition-all flex items-center gap-1"
             style={{
               flexShrink: 1,
-              maxWidth: 280,
+              // Never narrower than a readable column, never wider than a comfortable one
+              minWidth: 'min(140px, 100%)',
+              maxWidth: 'min(280px, 100%)',
               whiteSpace: 'normal',
               overflowWrap: 'anywhere',
               textAlign: 'left',

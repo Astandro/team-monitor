@@ -4,6 +4,7 @@ import {
   AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY,
 } from '@/lib/canvas-constants'
 import { alphaHex, formatTokens } from '@/lib/utils'
+import { agentDisplayName } from '@/lib/readable-labels'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 
@@ -318,7 +319,7 @@ function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, 
   const top = hasBar
     ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
     : r + AGENT_DRAW.labelYOffset
-  const lines = wrapTextCanvas(ctx, agent.name, maxLabelW)
+  const lines = wrapTextCanvas(ctx, agentDisplayName(agent.name), maxLabelW)
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], agent.x, agent.y + top + i * AGENT_DRAW.labelLineHeight)
   }

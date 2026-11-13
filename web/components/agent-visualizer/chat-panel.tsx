@@ -2,7 +2,7 @@
 
 import { CARD, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
-import { stateLabel } from '@/lib/readable-labels'
+import { stateLabel, agentDisplayName } from '@/lib/readable-labels'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
@@ -44,7 +44,7 @@ export function AgentChatPanel({
             style={{ background: stateColor, boxShadow: `0 0 6px ${stateColor}` }}
           />
           <span className="text-[10px] font-mono tracking-wider break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere' }}>
-            {agentName.toUpperCase()}
+            {agentDisplayName(agentName).toUpperCase()}
           </span>
           <span className="text-[9px] font-mono" style={{ color: stateColor + '90' }}>
             {stateLabel(agentState)}

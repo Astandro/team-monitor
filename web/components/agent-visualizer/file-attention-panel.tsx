@@ -10,9 +10,11 @@ interface FileAttentionPanelProps {
   fileAttention: Map<string, FileAttention>
   onClose: () => void
   onOpenFile?: (filePath: string) => void
+  /** Top offset in px; the top bar can be taller than one row */
+  top?: number
 }
 
-export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
+export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile, top = 48 }: FileAttentionPanelProps) {
   if (!visible) return null
 
   const files = Array.from(fileAttention.values())
@@ -23,7 +25,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
   return (
     <SlidingPanel
       visible={visible}
-      position={{ top: 48, right: 12 }}
+      position={{ top, right: 12 }}
       zIndex={Z.sidePanel}
       width={260}
     >

@@ -42,6 +42,18 @@ test('keeps explicit newlines and collapses extra spaces', () => {
   assert.deepEqual(wrapText('satu   dua\ntiga', 20, measure), ['satu dua', 'tiga'])
 })
 
+test('a blank line between paragraphs is kept as an empty line', () => {
+  assert.deepEqual(wrapText('a\n\nb', 10, measure), ['a', '', 'b'])
+  assert.deepEqual(wrapText('a\n\n\nb', 10, measure), ['a', '', '', 'b'])
+})
+
+test('a broken word fills each line to the full width (no line is cut one character early)', () => {
+  assert.deepEqual(wrapText('x'.repeat(16), 8, measure), ['x'.repeat(8), 'x'.repeat(8)])
+  assert.deepEqual(wrapText('y'.repeat(9), 9, measure), ['y'.repeat(9)])
+  const lines = wrapText('z'.repeat(20), 8, measure)
+  assert.deepEqual(lines.map(l => l.length), [8, 8, 4])
+})
+
 test('empty text yields one empty line so callers can always draw', () => {
   assert.deepEqual(wrapText('', 10, measure), [''])
 })

@@ -1,9 +1,14 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
+import { agentLabelBottom } from '@/lib/agent-label'
+import { agentDisplayName } from '@/lib/readable-labels'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
 const AUTOFIT_AGENT_PADDING = 22
+
+/** Height of the bottom control bar plus margin; auto-fit keeps content above it */
+const CONTROL_BAR_RESERVE = 96
 
 export interface Transform {
   x: number
@@ -107,6 +112,9 @@ export function useCanvasCamera({
       maxX = Math.max(maxX, agent.x + r)
       minY = Math.min(minY, agent.y - r)
       maxY = Math.max(maxY, agent.y + r)
+      // The wrapped name hangs below the hexagon; frame it too
+      const baseR = agent.isMain ? NODE.radiusMain : NODE.radiusSub
+      maxY = Math.max(maxY, agent.y + agentLabelBottom(agentDisplayName(agent.name), baseR, agent.tokensUsed > 0))
       if (agent.messageBubbles.length > 0) {
         const visibleCount = agent.messageBubbles.filter(b => {
           const age = (simTimeRef.current ?? 0) - b.time
@@ -148,10 +156,12 @@ export function useCanvasCamera({
     const boundsH = maxY - minY + padding * 2
     const centerX = (minX + maxX) / 2
     const centerY = (minY + maxY) / 2
-    const scale = Math.min(dimensions.width / boundsW, dimensions.height / boundsH, 2)
+    // Keep clear of the control bar along the bottom edge
+    const usableH = Math.max(dimensions.height - CONTROL_BAR_RESERVE, 120)
+    const scale = Math.min(dimensions.width / boundsW, usableH / boundsH, 2)
     const result = {
       x: dimensions.width / 2 - centerX * scale,
-      y: dimensions.height / 2 - centerY * scale,
+      y: usableH / 2 - centerY * scale,
       scale,
     }
     fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }

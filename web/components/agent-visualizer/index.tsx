@@ -22,7 +22,8 @@ import { COLORS } from "@/lib/colors"
 
 import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
-import { TopBar } from "./top-bar"
+import { TopBar, type TopBarLayout } from "./top-bar"
+import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 
 export function AgentVisualizer() {
@@ -234,6 +235,16 @@ export function AgentVisualizer() {
     return all.sort((a, b) => a.timestamp - b.timestamp)
   }, [conversations, showTranscript])
 
+  // The top bar can wrap onto several rows. Floating panels (file list, cost) sit under it;
+  // on narrow screens they also clear the message card, which is as wide as the screen.
+  const [panelTop, setPanelTop] = useState(48)
+  const handleTopLayout = useCallback((l: TopBarLayout) => {
+    const narrow = l.width < 720
+    const top = Math.max(48, Math.ceil((narrow ? l.stackBottom : l.barsBottom) + 8))
+    setCostPanelTop(top)
+    setPanelTop(top)
+  }, [])
+
   // Context menu items
   const contextMenuItems = selection.contextMenu ? (
     selection.contextMenu.agentId ? [
@@ -295,14 +306,6 @@ export function AgentVisualizer() {
         onDiscoveryClick={selection.handleDiscoveryClick}
         selectedDiscoveryId={selection.selectedDiscoveryId}
         showCostOverlay={showCostOverlay}
-      />
-
-      {/* Message feed panel (top-left) */}
-      <MessageFeedPanel
-        conversations={conversations}
-        agents={agents}
-        onAgentClick={selection.handleAgentClick}
-        selectedAgentId={selection.selectedAgentId}
       />
 
       {/* Agent detail card (floating, tethered to node) */}
@@ -389,6 +392,7 @@ export function AgentVisualizer() {
         fileAttention={fileAttention}
         onClose={() => setShowFileAttention(false)}
         onOpenFile={bridge.isVSCode ? openFile : undefined}
+        top={panelTop}
       />
 
       {/* Session transcript panel (slide-in from right) */}
@@ -426,7 +430,16 @@ export function AgentVisualizer() {
         onTogglePanel={toggleExclusivePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
-      />
+        onLayout={handleTopLayout}
+      >
+        {/* Message feed card: in flow under the bars so it never overlaps the tabs */}
+        <MessageFeedPanel
+          conversations={conversations}
+          agents={agents}
+          onAgentClick={selection.handleAgentClick}
+          selectedAgentId={selection.selectedAgentId}
+        />
+      </TopBar>
     </div>
     </OpenFileProvider>
   )

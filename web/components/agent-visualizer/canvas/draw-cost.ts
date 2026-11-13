@@ -2,8 +2,15 @@ import { Agent, ToolCallNode, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { COST_RATE, MODEL_FAMILY_COST, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
-import { toolLabel } from '@/lib/readable-labels'
+import { toolLabel, agentDisplayName } from '@/lib/readable-labels'
 import { wrapTextCanvas } from './draw-misc'
+
+/** Top edge of the cost panel. The top bar can grow (wrapped tabs, wrapped toggles),
+ *  so the page reports where it ends instead of a fixed 48px. */
+let costPanelTop: number = COST_PANEL.yStart
+export function setCostPanelTop(y: number) {
+  costPanelTop = Math.max(COST_PANEL.yStart, Math.round(y))
+}
 
 /** Blended $/M-token rate for a model ID — first matching family wins,
  *  unknown models fall back to the Sonnet-class rate. */
@@ -162,7 +169,7 @@ export function drawCostSummaryPanel(
   const canvasW = ctx.canvas.width / dpr
   const panelW = COST_PANEL.width
   const panelX = canvasW - panelW - COST_PANEL.xMargin
-  const panelY = COST_PANEL.yStart
+  const panelY = costPanelTop
   const lineH = COST_PANEL.lineHeight
   const headerH = COST_PANEL.headerHeight
   const sectionGap = COST_PANEL.sectionGap
@@ -174,7 +181,7 @@ export function drawCostSummaryPanel(
   ctx.font = '8px monospace'
   const nameW = barW - 56
   const rowHeight = (lines: string[]) => Math.max(lineH, lines.length * COST_PANEL.nameLineHeight + 6)
-  const agentLines = agentBreakdown.slice(0, agentRows).map(a => wrapTextCanvas(ctx, a.name, nameW))
+  const agentLines = agentBreakdown.slice(0, agentRows).map(a => wrapTextCanvas(ctx, agentDisplayName(a.name), nameW))
   const toolLines = toolList.slice(0, toolRows).map(t => wrapTextCanvas(ctx, toolLabel(t.name), nameW))
   const agentBlockH = agentLines.reduce((s, l) => s + rowHeight(l), 0)
   const toolBlockH = toolLines.reduce((s, l) => s + rowHeight(l), 0)

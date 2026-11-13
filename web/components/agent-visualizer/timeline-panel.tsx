@@ -1,10 +1,12 @@
 'use client'
 
-import { useRef, useEffect, useMemo, useCallback } from 'react'
+import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { TimelineEntry, Z } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTimelineModels } from '@/lib/timeline-models'
 import { wrapText } from '@/lib/wrap-text'
+import { agentDisplayName } from '@/lib/readable-labels'
+import { pickMarkerInterval, timelineLabelWidth } from '@/lib/timeline-markers'
 import { PanelHeader, SlidingPanel } from './shared-ui'
 
 interface TimelinePanelProps {
@@ -18,7 +20,6 @@ interface TimelinePanelProps {
 
 const ROW_HEIGHT = 22
 const HEADER_HEIGHT = 20
-const LABEL_WIDTH = 150
 const NAME_LINE_HEIGHT = 11
 const MODEL_LINE_HEIGHT = 10
 const ROW_PAD_Y = 5
@@ -67,17 +68,18 @@ function getScratchCtx(): CanvasRenderingContext2D | null {
  * Agent names carry task titles, so they are wrapped across lines and each row
  * grows to fit (owner request O3). The title is never cut.
  */
-function layoutRows(entries: TimelineEntry[]): TimelineLayout {
+function layoutRows(entries: TimelineEntry[], labelWidth: number): TimelineLayout {
   const ctx = getScratchCtx()
-  const maxW = LABEL_WIDTH - 12
+  const maxW = labelWidth - 12
   let top = HEADER_HEIGHT
   const rows: RowLayout[] = entries.map((entry) => {
-    let nameLines = [entry.agentName]
+    const displayName = agentDisplayName(entry.agentName)
+    let nameLines = [displayName]
     let modelLines: string[] = []
     const models = formatTimelineModels(entry.models)
     if (ctx) {
       ctx.font = FONT
-      nameLines = wrapText(entry.agentName, maxW, (s) => ctx.measureText(s).width)
+      nameLines = wrapText(displayName, maxW, (s) => ctx.measureText(s).width)
       if (models) {
         ctx.font = MODEL_FONT
         modelLines = wrapText(models, maxW, (s) => ctx.measureText(s).width)
@@ -104,6 +106,7 @@ function drawTimeline(
   width: number,
   height: number,
   dpr: number,
+  LABEL_WIDTH: number,
 ): TimeRange | null {
   ctx.clearRect(0, 0, width * dpr, height * dpr)
   ctx.save()
@@ -130,7 +133,7 @@ function drawTimeline(
   const barWidth = width - LABEL_WIDTH
 
   // Time markers
-  const markerInterval = timeSpan > 60 ? 10 : timeSpan > 20 ? 5 : timeSpan > 10 ? 2 : 1
+  const markerInterval = pickMarkerInterval(timeSpan, barWidth)
   const markers: number[] = []
   for (let t = Math.ceil(minTime / markerInterval) * markerInterval; t <= maxTime; t += markerInterval) {
     markers.push(t)
@@ -245,7 +248,22 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
     return Array.from(timelineEntries.values()).sort((a, b) => a.startTime - b.startTime)
   }, [visible, timelineEntries])
 
-  const layout = useMemo(() => layoutRows(sortedEntries), [sortedEntries])
+  // Panel width drives the name column, so measure it (the panel is up to 700px, less on a phone)
+  const [panelWidth, setPanelWidth] = useState(700)
+  useEffect(() => {
+    if (!visible) return
+    const el = canvasRef.current?.parentElement
+    if (!el) return
+    const update = () => { if (el.clientWidth > 0) setPanelWidth(el.clientWidth) }
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [visible])
+  const LABEL_WIDTH = timelineLabelWidth(panelWidth)
+
+  const layout = useMemo(() => layoutRows(sortedEntries, LABEL_WIDTH), [sortedEntries, LABEL_WIDTH])
   const canvasHeight = layout.height
 
   // Block labels are clipped to their block; hovering a block shows its full text
@@ -263,7 +281,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
       }
     }
     if (e.currentTarget.title !== title) e.currentTarget.title = title
-  }, [sortedEntries, layout, currentTime])
+  }, [sortedEntries, layout, currentTime, LABEL_WIDTH])
 
   useEffect(() => {
     if (!visible) return
@@ -281,9 +299,9 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
     canvas.style.width = `${width}px`
     canvas.style.height = `${canvasHeight}px`
 
-    rangeRef.current = drawTimeline(ctx, sortedEntries, layout, currentTime, width, canvasHeight, dpr)
+    rangeRef.current = drawTimeline(ctx, sortedEntries, layout, currentTime, width, canvasHeight, dpr, LABEL_WIDTH)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw on every prop change (component only re-renders on data/time updates)
-  }, [visible, sortedEntries, layout, currentTime, canvasHeight])
+  }, [visible, sortedEntries, layout, currentTime, canvasHeight, LABEL_WIDTH, panelWidth])
 
   if (!visible) return null
 
@@ -309,8 +327,8 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
 
         {/* Legend (static DOM) */}
         <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-          <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
-          <div className="flex items-center gap-3">
+          {panelWidth >= 480 && <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />

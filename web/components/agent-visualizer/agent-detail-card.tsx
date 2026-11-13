@@ -3,7 +3,7 @@
 import { CARD, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
 import { formatTokens, formatModelName } from '@/lib/utils'
-import { toolLabel, stateLabel } from '@/lib/readable-labels'
+import { toolLabel, stateLabel, agentDisplayName } from '@/lib/readable-labels'
 import { GlassCard } from './glass-card'
 import { PanelHeader, ProgressBar } from './shared-ui'
 
@@ -52,7 +52,7 @@ export function AgentDetailCard({
         />
         <div className="flex flex-col">
           <span className="text-xs font-mono break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere' }}>
-            {agent.name}
+            {agentDisplayName(agent.name)}
           </span>
           {agent.model && (
             <span className="text-[9px] font-mono" style={{ color: COLORS.textDim }}>

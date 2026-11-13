@@ -3,6 +3,7 @@
 import { createContext, useContext } from 'react'
 import { COLORS } from '@/lib/colors'
 import { truncatePath } from '@/lib/utils'
+import { toolLabel } from '@/lib/readable-labels'
 
 // Context for file-open callback — provided by parent components
 type OpenFileCallback = (filePath: string, line?: number) => void
@@ -18,7 +19,7 @@ interface ToolContentRendererProps {
 
 export function ToolContentRenderer({ toolName, inputData, args, compact = false }: ToolContentRendererProps) {
   if (!inputData) {
-    return <span className="opacity-60">{args || toolName}</span>
+    return <span className="opacity-60">{args || toolLabel(toolName)}</span>
   }
 
   switch (toolName) {
@@ -43,7 +44,7 @@ export function ToolContentRenderer({ toolName, inputData, args, compact = false
     case 'AskUserQuestion':
       return <AskUserContent data={inputData} />
     default:
-      return <span className="opacity-60">{args || toolName}</span>
+      return <span className="opacity-60">{args || toolLabel(toolName)}</span>
   }
 }
 

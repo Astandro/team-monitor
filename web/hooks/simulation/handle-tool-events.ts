@@ -89,7 +89,7 @@ export function handleToolCallStart(
     }
 
     appendConversation(state.conversations, agentName, {
-      type: 'tool_call', content: `> ${toolName} ${args}`, timestamp: currentTime,
+      type: 'tool_call', content: `> ${toolCallLine(toolName, args)}`, timestamp: currentTime,
       toolName, inputData,
     })
   }
@@ -103,7 +103,7 @@ export function handleToolCallEnd(
 ): void {
   const agentName = asString(payload.agent)
   const toolName = asString(payload.tool)
-  const result = asString(payload.result, 'Done')
+  const result = asString(payload.result, 'Selesai')
   const tokenCost = typeof payload.tokenCost === 'number' ? payload.tokenCost : undefined
   const isError = asBoolean(payload.isError)
   const errorMessage = typeof payload.errorMessage === 'string' ? payload.errorMessage : undefined
@@ -145,7 +145,7 @@ export function handleToolCallEnd(
         const lastBlock = entry.blocks[entry.blocks.length - 1]
         if (lastBlock && !lastBlock.endTime) {
           lastBlock.color = COLORS.error
-          lastBlock.label = `${toolName}: FAILED`
+          lastBlock.label = `${toolLabel(toolName)}: gagal`
         }
       }
       pushTimelineBlock(entry, currentTime, { type: 'thinking', label: 'Berpikir...', color: COLORS.thinking }, ctx)
@@ -165,7 +165,7 @@ export function handleToolCallEnd(
 
     appendConversation(state.conversations, agentName, {
       type: 'tool_result',
-      content: `< ${result}${tokenCost ? ` (${tokenCost} tokens)` : ''}`,
+      content: `< ${result}${tokenCost ? ` (${tokenCost} token)` : ''}`,
       timestamp: currentTime,
       toolName,
     })
