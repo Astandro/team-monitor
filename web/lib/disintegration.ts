@@ -116,58 +116,100 @@ export function disintegrationLook(id: string, progress: number, reducedMotion: 
 }
 
 /*
- * Owner request 13 Nov (item 7): while a node or member card disintegrates, small quiet light bursts flash from it,
- * more often as the deadline nears, and the name flickers slowly with a small "disintegrating" tag. Subtle: a burst
- * is a faint ring for a fraction of a second; the name never drops below 55%. Reduced motion: none of it (plain fade).
+ * Owner correction 13 Nov (item 4, replaces Haruki's item 7): while a node or member disintegrates
+ * (a) the "disintegrating" tag is an alert: red tint, matching border, readable text; it is the tag that pulses
+ *     slowly (faster near the deadline), the name stays steady;
+ * (b) a slow nebula explosion repeats on the node: a bright core, then soft clouds of gas (magenta, violet, teal,
+ *     gold) that swell and fade over a few seconds, more often as the deadline nears.
+ * Reduced motion: no nebula, the tag stays as a static alert, the node keeps its plain fade.
+ * Canvas cost per leaving node per frame while a nebula shows: five radial-gradient circles, nothing per pixel.
  */
 
 /** Small tag next to a disintegrating name (graph label and panel card). */
 export const DISINTEGRATING_TAG = 'disintegrating'
 
-/** Seconds between bursts: one every 12 s at the start of the hour, one every 2.5 s near the end. */
+/** Seconds between nebula explosions: one every 14 s at the start of the hour, one every 5 s near the end. */
 export function burstPeriod(progress: number): number {
   const p = Math.min(1, Math.max(0, progress))
-  return 12 - 9.5 * p
+  return 14 - 9 * p
 }
 
-/** Seconds one burst lasts (a flash that expands and fades). */
-export const BURST_LIFE = 0.7
+/** Seconds one nebula explosion takes to swell and fade (slow, a few seconds). */
+export const BURST_LIFE = 4
+
+/** Nebula gas colours (dark sky); the core is a warm white. */
+export const NEBULA_COLORS = ['#E35BD6', '#8E6CFF', '#2FD3C4', '#F5C451'] as const
+export const NEBULA_CORE = '#FFF4DC'
+
+export interface NebulaCloud {
+  /** Cloud centre offset from the node centre, px at scale 1 */
+  dx: number
+  dy: number
+  /** Cloud radius, px at scale 1 */
+  radius: number
+  color: string
+  /** Peak alpha at the cloud centre (the gradient fades it to 0 at the edge) */
+  alpha: number
+}
 
 export interface Burst {
-  /** 0..1 through the flash */
+  /** 0..1 through the explosion */
   phase: number
-  /** Ring alpha; peaks at 0.35 */
-  alpha: number
-  /** Extra radius beyond the node edge, px at scale 1 */
-  spread: number
+  /** Bright core: radius px and alpha (it flares first and fades before the clouds) */
+  core: { radius: number; alpha: number }
+  clouds: NebulaCloud[]
 }
 
+const easeOut = (x: number) => 1 - (1 - x) ** 3
+
 /**
- * The burst showing at `time` seconds, or null between bursts. Each node has its own offset so a group of leaving
- * nodes does not flash in step. None under reduced motion, before the clock starts or once the node is gone.
+ * The nebula showing at `time` seconds for a node of radius `r`, or null between explosions. Each node has its own
+ * offset (no two flare in step) and each explosion its own cloud directions. None under reduced motion, before the
+ * clock starts or once the node is gone.
  */
-export function burstAt(id: string, progress: number, time: number, reducedMotion: boolean): Burst | null {
+export function burstAt(id: string, progress: number, time: number, reducedMotion: boolean, r = 24): Burst | null {
   if (reducedMotion || progress <= 0 || progress >= 1) return null
   const period = burstPeriod(progress)
   const t = time + unitHash(id, 7) * period
-  const into = t - Math.floor(t / period) * period
+  const cycle = Math.floor(t / period)
+  const into = t - cycle * period
   if (into >= BURST_LIFE) return null
   const phase = into / BURST_LIFE
-  return { phase, alpha: 0.35 * (1 - phase), spread: 4 + 14 * phase }
+  const grow = easeOut(phase)
+  // swell in over the first fifth, then a long fade
+  const env = phase < 0.2 ? phase / 0.2 : 1 - (phase - 0.2) / 0.8
+  const core = {
+    radius: r * (0.5 + 0.9 * easeOut(Math.min(1, phase / 0.35))),
+    alpha: phase < 0.06 ? 0.9 * (phase / 0.06) : Math.max(0, 0.9 * (1 - (phase - 0.06) / 0.4)),
+  }
+  const clouds: NebulaCloud[] = NEBULA_COLORS.map((color, k) => {
+    const angle = (unitHash(id, 300 + cycle * 7 + k) + k / NEBULA_COLORS.length) * Math.PI * 2
+    const reach = r * (0.4 + 1.1 * grow) * (0.7 + 0.6 * unitHash(id, 400 + cycle * 5 + k))
+    return {
+      dx: Math.cos(angle) * reach,
+      dy: Math.sin(angle) * reach,
+      radius: r * (0.8 + (2.2 + unitHash(id, 500 + k)) * grow),
+      color,
+      alpha: 0.42 * env,
+    }
+  })
+  return { phase, core, clouds }
 }
 
-/** Seconds per slow blink of the name: 4 s at the start, 1.6 s near the end. */
+/** Seconds per slow pulse of the alert tag: 3 s at the start, 1.4 s near the end. */
 export function flickerPeriod(progress: number): number {
   const p = Math.min(1, Math.max(0, progress))
-  return 4 - 2.4 * p
+  return 3 - 1.6 * p
 }
 
-/** Multiplier for the name's alpha: a slow blink between 55% and 100%; always 1 under reduced motion. */
-export function nameFlicker(id: string, progress: number, time: number, reducedMotion: boolean): number {
-  if (reducedMotion || progress <= 0 || progress >= 1) return 1
+/**
+ * How strong the alert tag's pulse is right now, 0..1 (0 = base tint, 1 = the stronger tint with a ring). Always 0
+ * under reduced motion: the tag stays a static alert. The text colour never changes, so it reads at every point.
+ */
+export function tagPulse(id: string, progress: number, time: number, reducedMotion: boolean): number {
+  if (reducedMotion || progress <= 0 || progress >= 1) return 0
   const period = flickerPeriod(progress)
-  const wave = 0.5 + 0.5 * Math.cos(((time / period) + unitHash(id, 11)) * Math.PI * 2)
-  return 0.55 + 0.45 * wave
+  return 0.5 - 0.5 * Math.cos(((time / period) + unitHash(id, 11)) * Math.PI * 2)
 }
 
 /** "Keluar otomatis 15.05 (23 menit lagi)" for the detail card; times in the viewer's local clock. */

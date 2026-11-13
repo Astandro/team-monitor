@@ -110,7 +110,7 @@ export function AgentCanvas({
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
     transformRef, userHasNavigatedRef, panVelocityRef,
-    screenToCanvas, doZoomToFit, updateCamera,
+    screenToCanvas, doZoomToFit, updateCamera, holdCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
     agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
@@ -121,8 +121,19 @@ export function AgentCanvas({
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
-    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    simTimeRef, screenToCanvas, doZoomToFit, holdCamera, mainCanvasRef,
   })
+
+  // Read-only handle for browser checks: the camera (x, y, scale) and where the nodes are, so touch QA can compare
+  // before/after a gesture and find the Orchestrator on screen. Copies only; nothing here changes the graph.
+  useEffect(() => {
+    type Snap = { camera: { x: number; y: number; scale: number }; nodes: { id: string; x: number; y: number; isMain: boolean; finished: boolean }[] }
+    const c = mainCanvasRef.current as (HTMLCanvasElement & { tmGraph?: () => Snap }) | null
+    if (c) c.tmGraph = () => ({
+      camera: { ...transformRef.current },
+      nodes: [...drawPropsRef.current.agents.values()].map(a => ({ id: a.id, x: a.x, y: a.y, isMain: !!a.isMain, finished: !!a.finished })),
+    })
+  }, [transformRef])
 
   // Keep drawPropsRef in sync with interaction state
   drawPropsRef.current.isDragging = isDragging
@@ -355,7 +366,9 @@ export function AgentCanvas({
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: isDragging ? 'grabbing' : 'grab' }}>
       <canvas
         ref={mainCanvasRef}
-        style={{ width: dimensions.width, height: dimensions.height }}
+        // touch-action on the canvas only: one finger pans the graph, two pinch it, the page never scrolls or zooms here
+        style={{ width: dimensions.width, height: dimensions.height, touchAction: 'none' }}
+        data-graph-canvas=""
         {...handlers}
         className="w-full h-full"
       />

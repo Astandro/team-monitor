@@ -1,5 +1,5 @@
 import { Agent, NODE, ANIM } from '@/lib/agent-types'
-import { COLORS, getStateColor, contextSegments } from '@/lib/colors'
+import { COLORS, getStateColor, contextSegments, getGraphTheme } from '@/lib/colors'
 import {
   AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY, COMPLETED_SUBAGENT_OPACITY,
 } from '@/lib/canvas-constants'
@@ -7,7 +7,8 @@ import { alphaHex, formatTokens } from '@/lib/utils'
 import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
-import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, nameFlicker, type Burst, type Fragment } from '@/lib/disintegration'
+import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, NEBULA_COLORS, NEBULA_CORE, tagPulse, type Burst, type Fragment } from '@/lib/disintegration'
+import { ALERT_TOKENS, mixHex } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
 
 let _claudeSparkPath: Path2D | null = null
@@ -309,17 +310,39 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
   }
 }
 
-/** A quiet light burst: one faint ring growing off the node edge and fading (item 7). Cheap: one arc stroke. */
-function drawBurst(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, b: Burst) {
-  ctx.beginPath()
-  ctx.strokeStyle = color + alphaHex(Math.min(1, b.alpha))
-  ctx.lineWidth = 2 * (1 - b.phase) + 0.5
-  ctx.arc(agent.x, agent.y, r + b.spread, 0, Math.PI * 2)
-  ctx.stroke()
+/**
+ * A slow nebula explosion behind a leaving node (item 4b): a few soft clouds of coloured gas and a warm core, each one
+ * radial gradient fill. Additive on the dark sky, plain blending on the light canvas (additive would wash out).
+ */
+function drawNebula(ctx: CanvasRenderingContext2D, agent: Agent, b: Burst) {
+  const dark = getGraphTheme() === 'dark'
+  const prevOp = ctx.globalCompositeOperation
+  const prevAlpha = ctx.globalAlpha
+  ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
+  const k = dark ? 1 : 0.75
+  const cloud = (x: number, y: number, radius: number, color: string, alpha: number) => {
+    if (alpha <= 0.005 || radius <= 0) return
+    const g = ctx.createRadialGradient(x, y, 0, x, y, radius)
+    g.addColorStop(0, color + alphaHex(Math.min(1, alpha * k)))
+    g.addColorStop(0.45, color + alphaHex(Math.min(1, alpha * k * 0.45)))
+    g.addColorStop(1, color + '00')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+  for (const c of b.clouds) cloud(agent.x + c.dx, agent.y + c.dy, c.radius, c.color, c.alpha)
+  cloud(agent.x, agent.y, b.core.radius, dark ? NEBULA_CORE : NEBULA_COLORS[3], b.core.alpha)
+  ctx.globalCompositeOperation = prevOp
+  ctx.globalAlpha = prevAlpha
 }
 
-/** Small "disintegrating" tag under a leaving node's name and role, in the muted colour. */
-function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
+/**
+ * The "disintegrating" alert tag under a leaving node's name and role (item 4a): a red pill with a matching border and
+ * readable text; the pill pulses (stronger tint plus a soft ring), the text does not. Static under reduced motion.
+ */
+function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number) {
   const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
   const hasBar = agent.tokensUsed > 0
   const top = hasBar
@@ -328,11 +351,29 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   ctx.font = '10px monospace'
   const id = canvasIdentity(agent)
   const lines = wrapTextCanvas(ctx, id.name, maxLabelW).length + (id.role ? wrapTextCanvas(ctx, id.role, maxLabelW).length : 0)
-  ctx.font = 'italic 9px monospace'
-  ctx.fillStyle = COLORS.textMuted
+  const t = ALERT_TOKENS[getGraphTheme() === 'dark' ? 'dark' : 'light']
+  ctx.font = 'bold 9px sans-serif'
+  const w = ctx.measureText(DISINTEGRATING_TAG).width + 10
+  const h = 13
+  const x = agent.x - w / 2
+  const y = agent.y + top + lines * AGENT_DRAW.labelLineHeight + 2
+  if (pulse > 0) {
+    ctx.beginPath()
+    ctx.roundRect(x - 2.5, y - 2.5, w + 5, h + 5, 6)
+    ctx.fillStyle = t.line + alphaHex(0.3 * pulse)
+    ctx.fill()
+  }
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, 4)
+  ctx.fillStyle = mixHex(t.bg, t.bgHi, pulse)
+  ctx.fill()
+  ctx.strokeStyle = t.line
+  ctx.lineWidth = 1
+  ctx.stroke()
+  ctx.fillStyle = t.ink
   ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillText(DISINTEGRATING_TAG, agent.x, agent.y + top + lines * AGENT_DRAW.labelLineHeight + 1)
+  ctx.textBaseline = 'middle'
+  ctx.fillText(DISINTEGRATING_TAG, agent.x, y + h / 2 + 0.5)
 }
 
 function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {
@@ -446,6 +487,14 @@ export function drawAgents(
     const bodyAlpha = agent.opacity * (look ? look.body : 1)
 
     ctx.save()
+    // The nebula sits behind the node (item 4b)
+    if (look) {
+      const nebula = burstAt(id, progress, time, still, r)
+      if (nebula) {
+        ctx.globalAlpha = agent.opacity
+        drawNebula(ctx, agent, nebula)
+      }
+    }
     ctx.globalAlpha = bodyAlpha
 
     drawDepthShadow(ctx, agent, r)
@@ -455,8 +504,6 @@ export function drawAgents(
       ctx.globalAlpha = agent.opacity
       drawBrokenOutline(ctx, agent, r, color, look.pieces)
       drawFragments(ctx, agent, r, color, fragments(id, progress, time, still))
-      const burst = burstAt(id, progress, time, still)
-      if (burst) drawBurst(ctx, agent, r, color, burst)
       ctx.globalAlpha = bodyAlpha
     } else {
       drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
@@ -473,14 +520,14 @@ export function drawAgents(
 
     // A finished sub-agent's node is dimmed, but its name stays readable (muted text at full strength): the owner
     // wants to see who was on the team, and a dimmed label failed contrast on the light canvas.
-    // While it disintegrates the name blinks slowly and carries a small tag (item 7); reduced motion: steady name.
+    // While it disintegrates the name stays steady and the alert tag under it pulses (item 4a); reduced motion: static tag.
     if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) {
-      ctx.globalAlpha = look ? look.label * nameFlicker(id, progress, time, still) : 1
+      ctx.globalAlpha = look ? look.label : 1
     }
     drawAgentLabel(ctx, agent, r, isHovered)
     if (look && progress < 1) {
       ctx.globalAlpha = look.label
-      drawDisintegratingTag(ctx, agent, r)
+      drawDisintegratingTag(ctx, agent, r, tagPulse(id, progress, time, still))
     }
     ctx.globalAlpha = bodyAlpha
 

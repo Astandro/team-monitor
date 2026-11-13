@@ -17,8 +17,11 @@ export const FIT = {
   compactPadding: 36,
   wideMaxScale: 2,
   compactMaxScale: 1.25,
-  /** Below this the names under the hexagons get too small to read on a phone */
-  compactMinScale: 0.8,
+  /**
+   * Floor on a phone. 0.6 keeps the names under the hexagons readable and still fits sub-agents at the usual spawn
+   * distance on both sides of a centred Orchestrator (was 0.8, which cut them off at 390 px).
+   */
+  compactMinScale: 0.6,
   minUsableHeight: 120,
 } as const
 
@@ -68,6 +71,17 @@ export interface CameraTransform {
   x: number
   y: number
   scale: number
+}
+
+/**
+ * The smallest box centred on `anchor` that still holds `box`. The compact frame uses it to put the Orchestrator
+ * in the middle of the phone with the sub-agents at work around it (owner feedback 13 Nov: the Orchestrator sat off
+ * to the side when the box centre fell between it and a far sub-agent).
+ */
+export function boxCentredOn(box: Box, anchor: { x: number; y: number }): Box {
+  const halfW = Math.max(anchor.x - box.minX, box.maxX - anchor.x, 0)
+  const halfH = Math.max(anchor.y - box.minY, box.maxY - anchor.y, 0)
+  return { minX: anchor.x - halfW, maxX: anchor.x + halfW, minY: anchor.y - halfH, maxY: anchor.y + halfH }
 }
 
 export function fitTransform(box: Box, dims: { width: number; height: number }, insets: FitInsets, compact: boolean): CameraTransform {

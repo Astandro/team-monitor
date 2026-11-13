@@ -4,6 +4,8 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
 import { burstPeriod, DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES } from '@/lib/disintegration'
 import { OWNER_LABEL } from '@/lib/team/labels'
+import { groupMembers } from '@/lib/team/groups'
+import { BotAvatar } from '../bot-avatar'
 import { dashArrayFromPieces } from '@/lib/team/members'
 import { ANSWERED_OPEN_BY_DEFAULT, answeredSummary, panelSections, splitDecisions, type SectionKey } from '@/lib/team/sections'
 import { newBubbleKeys, themeButton, type ThemePref } from '@/lib/team/session'
@@ -20,10 +22,18 @@ interface PanelProps {
   onHide?: () => void
 }
 
-function Avatar({ tone, initial, working, size }: { tone: string; initial: string; working?: boolean; size?: 'lead' }) {
+function Avatar({ tone, initial, name, coordinator, working, size }: {
+  tone: string
+  initial: string
+  /** Bot avatar for this name (web/lib/bot-avatar.ts); without a name the initial stays */
+  name?: string
+  coordinator?: boolean
+  working?: boolean
+  size?: 'lead'
+}) {
   return (
-    <div className={`tm-av ${tone}${working ? ' working' : ''}${size === 'lead' ? ' big' : ''}`} aria-hidden="true">
-      {initial}
+    <div className={`tm-av ${tone}${name ? ' has-bot' : ''}${working ? ' working' : ''}${size === 'lead' ? ' big' : ''}`} aria-hidden="true">
+      {name ? <BotAvatar name={name} coordinator={coordinator} /> : initial}
       {working !== undefined && <span className={`st ${working ? 'work' : 'idle'}`} />}
     </div>
   )
@@ -52,7 +62,7 @@ function LeavingAvatar({ m, reduce }: { m: MemberVM; reduce: boolean }) {
   return (
     <div className={`tm-av leaving${reduce ? '' : ' bursting'}`} style={motion} aria-hidden="true">
       <span className={`body ${m.tone}`} style={{ opacity: look.body }}>
-        {m.initial}
+        <BotAvatar name={m.nick} coordinator={m.isLead} />
       </span>
       <svg className="edge" viewBox="0 0 34 34" preserveAspectRatio="none">
         <rect
@@ -80,27 +90,39 @@ function Member({ m, lead, reduce }: { m: MemberVM; lead?: boolean; reduce: bool
       {leaving ? (
         <LeavingAvatar m={m} reduce={reduce} />
       ) : (
-        <Avatar tone={m.tone} initial={m.initial} working={m.working} size={lead ? 'lead' : undefined} />
+        <Avatar
+          tone={m.tone}
+          initial={m.initial}
+          name={m.nick}
+          coordinator={m.isLead}
+          working={m.working}
+          size={lead ? 'lead' : undefined}
+        />
       )}
       <div className="who">
         <div className="line" style={label < 1 ? { opacity: Math.max(label, 0.35) } : undefined}>
-          <span
-            className={`nm${leaving && !reduce ? ' flicker' : ''}`}
-            style={leaving && !reduce ? ({ '--tm-flicker': `${flickerPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties) : undefined}
-          >
-            {m.nick}
-          </span>
-          {leaving && <span className="tm-chip tag">{DISINTEGRATING_TAG}</span>}
+          <span className="nm">{m.nick}</span>
+          {leaving && (
+            // Item 4 (owner correction): the tag is the alert and it is what blinks; the name stays steady
+            <span
+              className={`tm-alert-tag${reduce ? '' : ' blink'}`}
+              style={reduce ? undefined : ({ '--tm-flicker': `${flickerPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties)}
+            >
+              {DISINTEGRATING_TAG}
+            </span>
+          )}
           {sub && <span className="rl"> {sub}</span>}
         </div>
         {leaving ? (
           <div className="tk idle">{m.leaving}</div>
-        ) : (
-          <div className={`tk${m.working && m.task ? '' : ' idle'}`}>
-            <span className="sr-only">{m.working ? 'Lagi ngerjain: ' : 'Status: '}</span>
-            {m.working && m.task ? m.task : 'Siaga'}
+        ) : m.working ? (
+          <div className="tk">
+            <span className="sr-only">Lagi ngerjain: </span>
+            {m.task || 'Lagi kerja'}
           </div>
-        )}
+        ) : lead ? (
+          <div className="tk idle">Siaga</div>
+        ) : null}
       </div>
     </div>
   )
@@ -120,7 +142,7 @@ function PanelIcon({ dir }: { dir: 'hide' | 'show' }) {
 function Bubble({ t, fresh }: { t: TaskVM; fresh: boolean }) {
   return (
     <div className={`tm-bubble${t.status === 'running' ? ' running' : ''}${fresh ? ' enter' : ''}`}>
-      <Avatar tone={t.tone} initial={t.initial} />
+      <Avatar tone={t.tone} initial={t.initial} name={t.avatarName || undefined} coordinator={t.avatarLead} />
       <div className="bd">
         <div className="tt">{t.title}</div>
         <div className="meta">
@@ -394,15 +416,20 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef, onHide }: Panel
               <Member m={vm.lead} lead reduce={reduce} />
             </div>
           )}
-          {vm.members.length > 0 && (
-            <ul className={`members${vm.lead ? ' under-lead' : ''}`}>
-              {vm.members.map((m) => (
-                <li key={m.id}>
-                  <Member m={m} reduce={reduce} />
-                </li>
-              ))}
-            </ul>
-          )}
+          {groupMembers(vm.members).map((g) => (
+            <div className={`tm-group ${g.key}${vm.lead ? ' under-lead' : ''}`} key={g.key} role="group" aria-labelledby={`tm-group-${g.key}`}>
+              <h3 className="tm-group-title" id={`tm-group-${g.key}`}>
+                {g.label} <span className="ct">{g.members.length}</span>
+              </h3>
+              <ul className={`members${vm.lead ? ' under-lead' : ''}`}>
+                {g.members.map((m) => (
+                  <li key={m.id}>
+                    <Member m={m} reduce={reduce} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
           {!vm.lead && vm.members.length === 0 && <div className="tm-empty">Belum ada anggota tim di catatan.</div>}
         </section>
       </>

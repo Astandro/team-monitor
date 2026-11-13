@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
-import { compactFocus, fitTransform, isCompactGraph } from '@/lib/graph-fit'
+import { boxCentredOn, compactFocus, fitTransform, isCompactGraph } from '@/lib/graph-fit'
 import { agentLabelBottom } from '@/lib/agent-label'
 import { identityLine } from '@/lib/agent-identity'
 import { canvasIdentity } from '@/components/agent-visualizer/canvas/identity'
@@ -113,7 +113,16 @@ export function useCanvasCamera({
         focusScope = getDescendantIds(agents, selectedAgentId)
       }
     }
-    if (!focusScope) focusScope = compactFocus(agents, compact)
+    // Phone frame without a selection: centred on the Orchestrator, the sub-agents at work around it
+    let anchor: { x: number; y: number } | null = null
+    if (!focusScope) {
+      focusScope = compactFocus(agents, compact)
+      if (compact) {
+        for (const agent of agents.values()) {
+          if (agent.isMain) { anchor = { x: agent.x, y: agent.y }; break }
+        }
+      }
+    }
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
     for (const [id, agent] of agents) {
@@ -163,7 +172,8 @@ export function useCanvasCamera({
       return null
     }
     // Keep clear of the control bar along the bottom edge and of the controls along the top
-    const result = fitTransform({ minX, maxX, minY, maxY }, dimensions, { top: fitTop, bottom: CONTROL_BAR_RESERVE }, compact)
+    const frameBox = anchor ? boxCentredOn({ minX, maxX, minY, maxY }, anchor) : { minX, maxX, minY, maxY }
+    const result = fitTransform(frameBox, dimensions, { top: fitTop, bottom: CONTROL_BAR_RESERVE }, compact)
     fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, frameKey, result }
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef])
@@ -233,6 +243,13 @@ export function useCanvasCamera({
     }
   }, [computeFitTransform])
 
+  /** A finger took the camera: stop any auto-fit glide and pan inertia so they do not fight the gesture */
+  const holdCamera = useCallback(() => {
+    userHasNavigatedRef.current = true
+    targetTransformRef.current = null
+    panVelocityRef.current = { vx: 0, vy: 0, active: false }
+  }, [])
+
   return {
     transformRef,
     userHasNavigatedRef,
@@ -240,5 +257,6 @@ export function useCanvasCamera({
     screenToCanvas,
     doZoomToFit,
     updateCamera,
+    holdCamera,
   }
 }

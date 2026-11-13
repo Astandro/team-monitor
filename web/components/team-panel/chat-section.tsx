@@ -2,6 +2,7 @@
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react'
 import { counterText, enterSends, MAX_MESSAGE_LENGTH, type ChatItem, type MessageResult } from '@/lib/team/chat'
+import { BotAvatar } from '../bot-avatar'
 
 type SendState =
   | { kind: 'idle' }
@@ -111,7 +112,12 @@ export const ChatSection = forwardRef<ChatSectionHandle, {
                 <span className="sr-only">{m.who}: </span>
                 <div className="tx">{m.text}</div>
                 <div className="mt">
-                  {!m.mine && <span className="who">{m.who}</span>}
+                  {!m.mine && (
+                    <span className="who">
+                      <BotAvatar name={m.who} coordinator size={18} className="tm-chat-av" />
+                      {m.who}
+                    </span>
+                  )}
                   {m.time && <time>{m.time}</time>}
                   {m.status && <span className={`st${m.read ? ' read' : ''}`}>{m.status}</span>}
                 </div>
