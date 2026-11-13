@@ -40,6 +40,10 @@ A decision is answerable only while `approvals.<Dn>.status` is `"open"` and no `
   as before (the whole description as the node name).
 - Finished sub-agents can be offboarded from the UI; the list is kept in `~/.team-monitor/offboarded.json`
   (written by the monitor only; transcripts are never touched).
+- A finished sub-agent nobody offboarded is offboarded by the server `autoOffboardMinutes` after it finished
+  (`~/.team-monitor/config.json`, whole number 1-10080, default 60, read at start), listed with reason "auto". A
+  sub-agent that runs again before then is kept and its clock restarts. When a session ends (no transcript writes
+  for 5 minutes), its sub-agents still running count as finished.
 
 ## 3. Wait for an answer or a chat message (background shell task)
 

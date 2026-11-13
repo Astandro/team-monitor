@@ -51,26 +51,60 @@ export function slugify(name: string): string {
 
 interface RawEntry { id?: unknown; name?: unknown; path?: unknown }
 
-/** Read config.json. A missing file means no projects; a broken one is reported, not fatal. */
-export function readConfigProjects(home: string, warn: (msg: string) => void = console.warn): RawEntry[] {
+/** config.json parsed, or null when it is missing or unreadable (reported, not fatal). */
+function readConfigJson(home: string, warn: (msg: string) => void): { file: string; data: Record<string, unknown> | null } {
   const file = path.join(home, 'config.json')
   let text: string
   try {
     const st = fs.statSync(file)
-    if (st.size > 1024 * 1024) { warn(`[team] ${file} is larger than 1 MB, ignored`); return [] }
+    if (st.size > 1024 * 1024) { warn(`[team] ${file} is larger than 1 MB, ignored`); return { file, data: null } }
     text = fs.readFileSync(file, 'utf-8')
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') warn(`[team] cannot read ${file}: ${(e as Error).message}`)
-    return []
+    return { file, data: null }
   }
   try {
-    const parsed = JSON.parse(text) as { projects?: unknown }
-    if (!parsed || !Array.isArray(parsed.projects)) { warn(`[team] ${file}: "projects" must be an array`); return [] }
-    return parsed.projects.filter((p): p is RawEntry => !!p && typeof p === 'object')
+    const parsed = JSON.parse(text) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      warn(`[team] ${file} must hold a JSON object`)
+      return { file, data: null }
+    }
+    return { file, data: parsed as Record<string, unknown> }
   } catch (e) {
     warn(`[team] ${file} is not valid JSON: ${(e as Error).message}`)
-    return []
+    return { file, data: null }
   }
+}
+
+/** Read config.json. A missing file means no projects; a broken one is reported, not fatal. */
+export function readConfigProjects(home: string, warn: (msg: string) => void = console.warn): RawEntry[] {
+  const { file, data } = readConfigJson(home, warn)
+  // A config with only other settings (e.g. autoOffboardMinutes) has no projects; that is not an error.
+  if (!data || data.projects === undefined) return []
+  if (!Array.isArray(data.projects)) { warn(`[team] ${file}: "projects" must be an array`); return [] }
+  return data.projects.filter((p): p is RawEntry => !!p && typeof p === 'object')
+}
+
+/** Default and bounds of `autoOffboardMinutes` in config.json (spec ui-cleanup item 6). */
+export const AUTO_OFFBOARD_DEFAULT_MINUTES = 60
+export const AUTO_OFFBOARD_MIN_MINUTES = 1
+export const AUTO_OFFBOARD_MAX_MINUTES = 7 * 24 * 60
+
+/**
+ * Minutes after a sub-agent finished before the server offboards it (`autoOffboardMinutes` in config.json).
+ * Missing: 60. Anything but a whole number from 1 to 10080 (one week) is reported and the default is used.
+ * Read at start; a change applies after a restart.
+ */
+export function readAutoOffboardMinutes(home: string, warn: (msg: string) => void = console.warn): number {
+  // A broken file is already reported by readConfigProjects at start; say nothing twice.
+  const { file, data } = readConfigJson(home, () => {})
+  const v = data?.autoOffboardMinutes
+  if (v === undefined) return AUTO_OFFBOARD_DEFAULT_MINUTES
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < AUTO_OFFBOARD_MIN_MINUTES || v > AUTO_OFFBOARD_MAX_MINUTES) {
+    warn(`[team] ${file}: "autoOffboardMinutes" must be a whole number from ${AUTO_OFFBOARD_MIN_MINUTES} to ${AUTO_OFFBOARD_MAX_MINUTES}; using ${AUTO_OFFBOARD_DEFAULT_MINUTES}`)
+    return AUTO_OFFBOARD_DEFAULT_MINUTES
+  }
+  return v
 }
 
 /**

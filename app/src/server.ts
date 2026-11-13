@@ -11,6 +11,7 @@ import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
 import { serveStatic } from './static'
 import { listenErrorMessage, TeamSetup } from './team'
+import { AutoOffboarder } from './team/auto-offboard'
 
 interface ServerOptions {
   port: number
@@ -37,8 +38,17 @@ export async function startServer(options: ServerOptions) {
     projects: () => teamSetup.team.graphProjects(),
     // Offboarded agents stay off the graph stream (spec offboard-names item 1)
     offboarded: teamSetup.team.offboard ?? undefined,
+    autoOffboardMinutes: teamSetup.team.autoOffboardMinutes,
   })
   teamSetup.team.graph = relay.graph
+
+  // Finished sub-agents leave the graph by themselves after autoOffboardMinutes (spec ui-cleanup item 6). The
+  // first sweep runs now, before anyone connects: agents whose deadline passed while the server was down go first.
+  const autoOffboard = teamSetup.team.offboard
+    ? new AutoOffboarder(teamSetup.team.offboard, relay.graph, teamSetup.team.autoOffboardMinutes)
+    : null
+  const caughtUp = autoOffboard?.start() ?? []
+  if (caughtUp.length) console.log(`Auto offboarded ${caughtUp.length} finished agent(s) whose ${teamSetup.team.autoOffboardMinutes} minutes had passed.`)
 
   // The team handler runs the Host check first (loopback only, as upstream, or
   // the remote allow-list), then login and /api/team/*, then this fallback.
@@ -60,6 +70,7 @@ export async function startServer(options: ServerOptions) {
   // Port taken or address not on this machine: one plain line, no stack.
   server.on('error', (err: NodeJS.ErrnoException) => {
     console.error(listenErrorMessage(err, teamSetup.listenHost, port, teamSetup.tokenFile))
+    autoOffboard?.stop()
     teamSetup.dispose()
     relay.dispose()
     process.exit(1)
@@ -90,6 +101,7 @@ export async function startServer(options: ServerOptions) {
     if (shuttingDown) return
     shuttingDown = true
     server.close()
+    autoOffboard?.stop()
     teamSetup.dispose()
     relay.dispose()
     void telemetry.dispose().finally(() => process.exit(0))

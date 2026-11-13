@@ -35,7 +35,12 @@ export interface OffboardRecord {
   finishedAt: string | null
   /** ISO time it was offboarded. */
   offboardedAt: string
+  /** "manual": from the UI (Offboard button, offboard-all); "auto": by the server `autoOffboardMinutes` after it
+   *  finished (spec ui-cleanup item 6). Records saved before this field existed read as "manual". */
+  reason: OffboardReason
 }
+
+export type OffboardReason = 'manual' | 'auto'
 
 export class OffboardError extends Error {
   /** `message` goes to the client (no paths); `detail` is for the server log only. */
@@ -50,11 +55,13 @@ function isNullableString(v: unknown): v is string | null {
   return v === null || typeof v === 'string'
 }
 
-function validStored(v: unknown): v is StoredRecord {
+/** A stored entry; `reason` may be missing (files written before auto offboarding: read as "manual"). */
+function validStored(v: unknown): v is Omit<StoredRecord, 'reason'> & { reason?: OffboardReason } {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false
   const r = v as Record<string, unknown>
   return typeof r.name === 'string' && isNullableString(r.project) && isNullableString(r.role) && isNullableString(r.task)
     && isNullableString(r.finishedAt) && typeof r.offboardedAt === 'string'
+    && (r.reason === undefined || r.reason === 'manual' || r.reason === 'auto')
 }
 
 export class OffboardStore implements OffboardLookup {
@@ -100,7 +107,7 @@ export class OffboardStore implements OffboardLookup {
       if (!SESSION_ID_RE.test(sid) || !agents || typeof agents !== 'object' || Array.isArray(agents)) { skipped++; continue }
       for (const [agent, rec] of Object.entries(agents as Record<string, unknown>)) {
         if (!agent || !validStored(rec)) { skipped++; continue }
-        this.put({ session: sid, agent, ...pickStored(rec) })
+        this.put({ session: sid, agent, ...pickStored({ ...rec, reason: rec.reason ?? 'manual' }) })
       }
     }
     if (skipped) this.log(`[team] ${this.file}: ${skipped} malformed entr${skipped === 1 ? 'y' : 'ies'} ignored`)
@@ -183,7 +190,10 @@ export class OffboardStore implements OffboardLookup {
 }
 
 function pickStored(r: StoredRecord): StoredRecord {
-  return { project: r.project, name: r.name, role: r.role, task: r.task, finishedAt: r.finishedAt, offboardedAt: r.offboardedAt }
+  return {
+    project: r.project, name: r.name, role: r.role, task: r.task, finishedAt: r.finishedAt, offboardedAt: r.offboardedAt,
+    reason: r.reason,
+  }
 }
 
 // ─── Request bodies ─────────────────────────────────────────────────────────
@@ -218,7 +228,9 @@ function iso(ms: number | undefined): string | null {
   return typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : null
 }
 
-function recordFor(session: string, project: string | null, a: GraphAgent, offboardedAt: string): OffboardRecord {
+export function recordFor(
+  session: string, project: string | null, a: GraphAgent, offboardedAt: string, reason: OffboardReason = 'manual',
+): OffboardRecord {
   return {
     session,
     agent: a.name,
@@ -228,6 +240,7 @@ function recordFor(session: string, project: string | null, a: GraphAgent, offbo
     task: a.task ?? null,
     finishedAt: iso(a.finishedAt),
     offboardedAt,
+    reason,
   }
 }
 

@@ -22,7 +22,7 @@ const MEI = 'Mei (QA Engineer): review'
 
 const rec = (agent: string, extra: Partial<OffboardRecord> = {}): OffboardRecord => ({
   session: S, agent, project: 'proj', name: agent.split(' ')[0], role: 'Engineer', task: 't',
-  finishedAt: '2026-11-13T01:00:00.000Z', offboardedAt: '2026-11-13T02:00:00.000Z', ...extra,
+  finishedAt: '2026-11-13T01:00:00.000Z', offboardedAt: '2026-11-13T02:00:00.000Z', reason: 'manual', ...extra,
 })
 
 /** A graph view over a GraphAgents registry that records announcements. */
@@ -177,7 +177,7 @@ describe('offboardAgent / offboardFinished', () => {
     assert.equal(created, true)
     assert.deepEqual(record, {
       session: S, agent: HIRO, project: 'proj', name: 'Hiro', role: 'Frontend Engineer', task: 'panel',
-      finishedAt: '2026-11-13T03:00:00.000Z', offboardedAt: '2026-11-13T04:00:00.000Z',
+      finishedAt: '2026-11-13T03:00:00.000Z', offboardedAt: '2026-11-13T04:00:00.000Z', reason: 'manual',
     })
     assert.equal(new OffboardStore(home).isOffboarded(S, HIRO), true)
     assert.deepEqual(announced, [{ session: S, agents: [HIRO] }])

@@ -13,7 +13,7 @@ import {
 } from './offboard'
 import type { GraphView } from '../../../scripts/graph-agents'
 import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookies, sessionKey, tokenMatches } from './auth'
-import { hasState, ProjectEntry } from './config'
+import { AUTO_OFFBOARD_DEFAULT_MINUTES, hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
 import type { StatusOptions } from './heartbeat'
@@ -35,6 +35,9 @@ export class TeamService {
   offboard: OffboardStore | null = null
   /** The relay's view of the graph, attached once the relay runs (server.ts); null = offboarding answers 503. */
   graph: GraphView | null = null
+  /** Minutes after finishing before the server offboards a sub-agent (config.json `autoOffboardMinutes`; spec
+   *  ui-cleanup item 6). Set by setupTeam; also returned by `GET /api/team/offboarded`. */
+  autoOffboardMinutes: number = AUTO_OFFBOARD_DEFAULT_MINUTES
   /** Chat messages accepted per minute, across all projects (spec-chat: 429 above 20). */
   messageLimiter = new MessageLimiter()
 
@@ -453,7 +456,7 @@ function handleOffboardedList(res: http.ServerResponse, query: URLSearchParams, 
   if (project !== null && !team.watcher(project)) return sendError(res, 404, 'unknown project')
   if (session !== null && !SESSION_ID_RE.test(session)) return sendError(res, 400, 'session must be a session id')
   const filter = { ...(project !== null ? { project } : {}), ...(session !== null ? { session } : {}) }
-  sendJSON(res, 200, { offboarded: team.offboard ? team.offboard.list(filter) : [] })
+  sendJSON(res, 200, { offboarded: team.offboard ? team.offboard.list(filter) : [], autoOffboardMinutes: team.autoOffboardMinutes })
 }
 
 // ─── Login ──────────────────────────────────────────────────────────────────

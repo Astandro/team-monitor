@@ -23,7 +23,7 @@ import {
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
 import { mainSpawnPayload, matchProjectDir, projectSessionLabel, sameCoordinator, watchTargets, type WatchedProject } from './session-projects'
-import { GraphAgents, NO_OFFBOARDING, type GraphView, type OffboardLookup } from './graph-agents'
+import { GraphAgents, NO_OFFBOARDING, type AutoOffboardGraph, type OffboardLookup } from './graph-agents'
 import type { TelemetryClient } from './telemetry'
 
 const MAX_EVENT_BUFFER = 5000
@@ -108,6 +108,12 @@ function broadcastEvent(event: AgentEvent) {
   const sid = event.sessionId?.slice(0, SESSION_ID_DISPLAY) || '?'
   log(`[event] ${event.type} (session ${sid})`)
 
+  const now = Date.now()
+  const finishedAt = event.type === 'agent_complete' ? (subagentFinishedAt(event) ?? now) : undefined
+  // A sub-agent's completion carries finishedAt / autoOffboardAt (spec ui-cleanup item 6); buffered with them, so a
+  // replay has them too.
+  if (finishedAt !== undefined) event = graphAgents.annotateCompletion(event, finishedAt, autoOffboardMs)
+
   if (event.sessionId) {
     let buf = eventBuffer.get(event.sessionId) || []
     buf.push(event)
@@ -117,10 +123,18 @@ function broadcastEvent(event: AgentEvent) {
     eventBuffer.set(event.sessionId, buf)
   }
 
-  const { send, hide } = graphAgents.admit(event, offboardLookup, Date.now(), subagentFinishedAt(event))
+  const { send, hide } = graphAgents.admit(event, offboardLookup, now, finishedAt)
   if (send) broadcast(JSON.stringify({ type: 'agent-event', event }))
   if (hide.length && event.sessionId) announceOffboarded(event.sessionId, hide)
+  if ((event.type === 'agent_spawn' || event.type === 'agent_complete') && event.payload?.isMain !== true
+    && event.payload?.name !== ORCHESTRATOR_NAME) {
+    for (const fn of [...agentsChangedListeners]) { try { fn() } catch (e) { log('[relay] agents listener failed:', e) } }
+  }
 }
+
+/** Auto offboarding (spec ui-cleanup item 6): the interval, and who hears about sub-agent spawns and completions. */
+let autoOffboardMs: number | undefined
+const agentsChangedListeners = new Set<() => void>()
 
 function announceOffboarded(sessionId: string, agents: string[]) {
   broadcast(JSON.stringify({ type: 'agents-offboarded', sessionId, agents }))
@@ -224,6 +238,7 @@ function resetInactivityTimer(sessionId: string) {
     if (!session.sessionCompleted && session.sessionDetected) {
       log(`[session] ${sessionId.slice(0, SESSION_ID_DISPLAY)} inactive`)
       session.sessionCompleted = true
+      finishRunningSubagents(session)
       broadcastEvent({
         time: elapsed(sessionId),
         type: 'agent_complete',
@@ -233,6 +248,27 @@ function resetInactivityTimer(sessionId: string) {
       broadcastSessionLifecycle('ended', sessionId, session.label)
     }
   }, INACTIVITY_TIMEOUT_MS)
+}
+
+/**
+ * A session that ended (no transcript writes, its sub-agents' included, for INACTIVITY_TIMEOUT_MS) finishes every
+ * sub-agent still running on the graph: each gets an `agent_complete` with `sessionEnded: true` (and, like every
+ * sub-agent completion, `finished`/`finishedAt`/`autoOffboardAt`; finishedAt = its transcript's last write). So the
+ * server, the Offboard endpoints, auto offboarding and the UI agree on "finished". Its watcher is marked completed,
+ * so a new write to its transcript revives it with a fresh spawn (a resume), which also resets its clock.
+ */
+function finishRunningSubagents(session: WatchedSession) {
+  for (const name of graphAgents.runningSubagents(session.sessionId)) {
+    for (const state of session.subagentWatchers.values()) {
+      if (state.agentName === name) state.completed = true
+    }
+    broadcastEvent({
+      time: elapsed(session.sessionId),
+      type: 'agent_complete',
+      payload: { name, sessionEnded: true },
+      sessionId: session.sessionId,
+    })
+  }
 }
 
 function watchSession(sessionId: string, filePath: string) {
@@ -420,8 +456,8 @@ function removeDiscoveryFile() {
 export interface Relay {
   /** Handle an incoming SSE connection */
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
-  /** Agents per Claude session, for the offboard endpoints (spec offboard-names item 1). */
-  graph: GraphView
+  /** Agents per Claude session, for the offboard endpoints (spec offboard-names item 1) and auto offboarding. */
+  graph: AutoOffboardGraph
   /** Clean up all resources */
   dispose: () => void
 }
@@ -441,6 +477,9 @@ export interface RelayOptions {
   projects?: () => WatchedProject[]
   /** Offboarded agents (standalone app): their events are left out of the graph stream while they are not running. */
   offboarded?: OffboardLookup
+  /** Auto offboard interval (spec ui-cleanup item 6): a sub-agent's `agent_complete` then carries `autoOffboardAt`.
+   *  The offboarding itself is done by the app's AutoOffboarder through `graph`. */
+  autoOffboardMinutes?: number
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -460,6 +499,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   }
   relayCreated = true
   offboardLookup = options.offboarded ?? NO_OFFBOARDING
+  autoOffboardMs = typeof options.autoOffboardMinutes === 'number' && options.autoOffboardMinutes > 0
+    ? options.autoOffboardMinutes * 60_000 : undefined
 
   const mode = resolveRuntimeMode(options.runtime)
   const wantClaude = mode === 'claude' || mode === 'auto'
@@ -591,6 +632,11 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       agents: (sessionId) => (sessions.has(sessionId) ? graphAgents.agents(sessionId) : null),
       sessionProject: (sessionId) => sessionProjects.get(sessionId)?.id || null,
       announceOffboarded,
+      sessions: () => [...sessions.keys()],
+      onAgentsChanged: (listener) => {
+        agentsChangedListeners.add(listener)
+        return () => { agentsChangedListeners.delete(listener) }
+      },
     },
 
     dispose() {
@@ -598,6 +644,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       // callers or hot-reload could call this twice.
       if (relayDisposed) return
       relayDisposed = true
+      agentsChangedListeners.clear()
       const models = [...observedModels].sort().join(',').slice(0, 128)
       const runtimes = [wantClaude && 'claude', wantCodex && 'codex'].filter(Boolean).join(',')
       telemetry?.emit({
@@ -616,6 +663,11 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         projectDirWatchers.clear()
         for (const session of sessions.values()) {
           session.fileWatcher?.close()
+          session.subagentsDirWatcher?.close()
+          for (const st of session.subagentWatchers.values()) {
+            st.watcher?.close()
+            if (st.permissionTimer) clearTimeout(st.permissionTimer)
+          }
           if (session.pollTimer) clearInterval(session.pollTimer)
           if (session.inactivityTimer) clearTimeout(session.inactivityTimer)
         }
