@@ -122,7 +122,7 @@ export function redirectReason(project: string, ids: string[], questions: Approv
   return [
     `Not shown as a dialog: the owner answers from the team monitor (phone). Your question${ids.length === 1 ? ' is' : 's are'} now`,
     `open decision${ids.length === 1 ? '' : 's'} ${range} in ${project}: ${list}.`,
-    `Now: 1) run \`${waitCommand} --project "${project}"\` with run_in_background: true; it exits when an answer arrives`,
+    `Now: 1) run \`${waitCommand} --project "${project}" --answers-only\` with run_in_background: true; it exits when an answer arrives`,
     `(run it again for the next answer); 2) also put the same question${ids.length === 1 ? '' : 's'} in chat, naming ${range},`,
     'so the owner can answer there too; 3) record each answer in state.json. Do not call AskUserQuestion again for these.',
   ].join(' ')

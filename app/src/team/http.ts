@@ -6,6 +6,7 @@
 import type * as http from 'http'
 import { isLoopbackHost } from '../../../extension/src/request-guard'
 import { AnswerError, parseAnswerBody, writeAnswer } from './answers'
+import { ChatError, MAX_MESSAGE_BODY_BYTES, MessageLimiter, parseMessageBody, writeInboxMessage } from './chat'
 import {
   MAX_OFFBOARD_BODY_BYTES, OffboardError, OffboardStore, SESSION_ID_RE,
   offboardAgent, offboardFinished, parseOffboardAllBody, parseOffboardBody,
@@ -15,6 +16,7 @@ import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookie
 import { hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
+import type { StatusOptions } from './heartbeat'
 import { coordinatorFromState, titleFromState, type WatchedProject } from '../../../scripts/session-projects'
 
 export const MAX_ANSWER_BODY_BYTES = 16 * 1024
@@ -33,10 +35,12 @@ export class TeamService {
   offboard: OffboardStore | null = null
   /** The relay's view of the graph, attached once the relay runs (server.ts); null = offboarding answers 503. */
   graph: GraphView | null = null
+  /** Chat messages accepted per minute, across all projects (spec-chat: 429 above 20). */
+  messageLimiter = new MessageLimiter()
 
   constructor(
     readonly projects: ProjectEntry[],
-    opts: { debounceMs?: number; pollMs?: number; log?: (msg: string) => void } = {},
+    opts: { debounceMs?: number; pollMs?: number; log?: (msg: string) => void; heartbeat?: StatusOptions } = {},
   ) {
     for (const p of projects) {
       const w = new TeamStateWatcher({ projectId: p.id, projectPath: p.path, ...opts })
@@ -294,6 +298,11 @@ async function handleTeamApi(
     return handleAnswer(req, res, team, log)
   }
 
+  if (route === 'message') {
+    if (req.method !== 'POST') return sendError(res, 405, 'method not allowed', { Allow: 'POST' })
+    return handleMessage(req, res, team, log)
+  }
+
   if (route === 'offboard' || route === 'offboard-all') {
     if (req.method !== 'POST') return sendError(res, 405, 'method not allowed', { Allow: 'POST' })
     return handleOffboard(req, res, team, route === 'offboard-all', log)
@@ -323,7 +332,10 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
     'X-Content-Type-Options': 'nosniff',
   })
   const send = (snap: TeamSnapshot) => {
-    res.write(`data: ${JSON.stringify({ type: 'team_state', project: snap.project, state: snap.state, error: snap.error, updatedAt: snap.updatedAt })}\n\n`)
+    res.write(`data: ${JSON.stringify({
+      type: 'team_state', project: snap.project, state: snap.state, error: snap.error, updatedAt: snap.updatedAt,
+      chat: snap.chat, watcher: snap.watcher,
+    })}\n\n`)
   }
   send(w.snapshot())
   const unsubscribe = w.onChange(send)
@@ -336,7 +348,7 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
 }
 
 /**
- * Checks shared by every state-changing team request (answers, offboarding): `X-Team-Monitor: 1`, same origin,
+ * Checks shared by every state-changing team request (answers, chat messages, offboarding): `X-Team-Monitor: 1`, same origin,
  * JSON media type, size limit, valid JSON. Replies and returns null on failure.
  */
 async function readWriteRequest(req: http.IncomingMessage, res: http.ServerResponse, limit: number): Promise<{ body: unknown } | null> {
@@ -375,6 +387,31 @@ async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse,
       return sendError(res, e.status, e.message)
     }
     log(`[team] answer failed: ${(e as Error)?.stack ?? String(e)}`)
+    sendError(res, 500, 'internal error')
+  }
+}
+
+// ─── Chat (spec-chat) ───────────────────────────────────────────────────────
+
+async function handleMessage(req: http.IncomingMessage, res: http.ServerResponse, team: TeamService, log: (msg: string) => void): Promise<void> {
+  const read = await readWriteRequest(req, res, MAX_MESSAGE_BODY_BYTES)
+  if (!read) return
+  try {
+    const input = parseMessageBody(read.body)
+    const w = team.watcher(input.project)
+    if (!w) return sendError(res, 404, 'unknown project')
+    const wait = team.messageLimiter.retryAfter()
+    if (wait > 0) return sendError(res, 429, 'too many messages, try again shortly', { 'Retry-After': String(wait) })
+    const { id, sentAt } = writeInboxMessage(w.inboxDir, input.text)
+    team.messageLimiter.record()
+    w.refresh()
+    sendJSON(res, 200, { ok: true, id, sentAt })
+  } catch (e) {
+    if (e instanceof ChatError) {
+      if (e.detail) log(`[team] message refused (${e.status}): ${e.detail}`)
+      return sendError(res, e.status, e.message)
+    }
+    log(`[team] message failed: ${(e as Error)?.stack ?? String(e)}`)
     sendError(res, 500, 'internal error')
   }
 }
