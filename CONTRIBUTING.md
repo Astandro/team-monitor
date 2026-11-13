@@ -1,43 +1,22 @@
-# Contributing to Agent Flow
+# Contributing to Team Monitor
 
-Thank you for your interest in contributing to Agent Flow! This document provides guidelines for contributing to the project.
+This is a private repository. Work happens on a branch per task (`tm/<task>`), reviewed before merge into `main`.
 
-## Contributor License Agreement (CLA)
+## Checks before a merge
 
-Before your first contribution can be merged, you must sign the [Contributor License Agreement](CLA.md). When you open your first pull request, the CLA Assistant bot will guide you through the process. You only need to sign once.
+```bash
+npx -y pnpm@10 test
+npx -y pnpm@10 --dir extension test
+npx -y pnpm@10 --dir extension run lint
+npx -y pnpm@10 --dir web exec tsc --noEmit
+npx -y pnpm@10 run build:app
+```
 
-## How to Contribute
+## Commits
 
-### Reporting Bugs
-
-- Open an issue describing the bug, including steps to reproduce
-- Include your environment details (OS, VS Code version, Node version)
-
-### Suggesting Features
-
-- Open an issue describing the feature and its use case
-- Explain why this feature would be valuable to the project
-
-### Submitting Code
-
-1. Fork the repository
-2. Create a feature branch from `main` (`git checkout -b feature/my-feature`)
-3. Make your changes
-4. Test your changes thoroughly
-5. Commit with clear, descriptive messages
-6. Push to your fork and open a pull request against `main`
-
-### Pull Request Guidelines
-
-- Keep pull requests focused — one feature or fix per PR
-- Provide a clear description of what the PR does and why
-- Reference any related issues
-- Ensure existing functionality is not broken
-
-## Code of Conduct
-
-Be respectful and constructive in all interactions. We are committed to providing a welcoming and inclusive experience for everyone.
+- One focused change per commit, with a clear message.
+- Keep existing copyright headers.
 
 ## License
 
-By contributing to Agent Flow, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE), subject to the terms of the [CLA](CLA.md).
+Contributions are licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

@@ -57,7 +57,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // staring at a "disconnected" visualizer with no explanation.
   if (runtimes.length === 0 && failures.length > 0) {
     vscode.window.showWarningMessage(
-      `Agent Visualizer: ${failures.join(' and ')} runtime${failures.length > 1 ? 's' : ''} failed to start. See the Output panel for details.`,
+      `Team Monitor: ${failures.join(' and ')} runtime${failures.length > 1 ? 's' : ''} failed to start. See the Output panel for details.`,
     )
   } else if (failures.length > 0) {
     log.info(`Partial startup — ${failures.join(', ')} failed but ${runtimes.map(r => r.mode).join(', ')} active`)

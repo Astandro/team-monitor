@@ -1,3 +1,5 @@
+Upstream trademark policy, kept for reference.
+
 # Trademark Policy
 
 ## Trademarks
