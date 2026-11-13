@@ -6,6 +6,7 @@ import {
 import { COLORS } from '@/lib/colors'
 import { AGENT_SPAWN_DISTANCE } from '@/lib/canvas-constants'
 import { withTimelineModel } from '@/lib/timeline-models'
+import { spawnIdentity } from '@/lib/agent-identity'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { edgeId, asString, asBoolean } from './types'
 
@@ -21,6 +22,7 @@ export function handleAgentSpawn(
   const task = typeof payload.task === 'string' ? payload.task : undefined
   const model = typeof payload.model === 'string' ? payload.model : undefined
   const runtime = payload.runtime === 'codex' ? 'codex' as const : undefined
+  const identity = spawnIdentity(payload)
 
   // If the agent already exists (e.g. session resuming after inactivity),
   // reactivate it instead of replacing — preserves accumulated stats.
@@ -29,6 +31,7 @@ export function handleAgentSpawn(
     state.agents.set(name, {
       ...existing,
       state: 'idle',
+      ...identity,
       ...(task ? { task } : {}),
       ...(model ? { model, tokensMax: ctx.getContextWindowSize(model) } : {}),
       ...(runtime ? { runtime } : {}),
@@ -86,6 +89,7 @@ export function handleAgentSpawn(
     ...(runtime ? { runtime } : {}),
     ...(model ? { model } : {}),
     task,
+    ...identity,
     spawnTime: currentTime,
     opacity: 0, scale: 0.3,
     messageBubbles: [],

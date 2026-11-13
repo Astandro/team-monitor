@@ -1,6 +1,8 @@
 // Data contract of <project>/.agent-team/state.json as served by /api/team/*.
 // Everything is optional on purpose: the coordinator writes the file by hand and the panel must never crash on it.
 
+import type { ChatEntry, WatcherInfo } from './chat'
+
 export type TaskStatus = 'todo' | 'running' | 'review' | 'done' | 'blocked'
 
 export interface TeamMeta {
@@ -11,6 +13,8 @@ export interface TeamMeta {
   stageLabel?: string
   budget?: string
   updatedAt?: string
+  /** The coordinator instance of this project (D23): {name, role}. */
+  coordinator?: { name?: string; role?: string }
 }
 
 export interface TeamStage {
@@ -84,4 +88,8 @@ export interface TeamStatePayload {
   state?: TeamState | null
   error?: string | null
   updatedAt?: string
+  /** Chat thread, oldest first (spec-chat). Next to `state`, so it works when state.json is missing. */
+  chat?: ChatEntry[]
+  /** Is the coordinator's inbox watcher running. */
+  watcher?: WatcherInfo
 }

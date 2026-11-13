@@ -23,6 +23,17 @@ export interface SessionInfo {
   projectId?: string
   /** The session's first prompt, kept for the detail view; the label is the project title or folder name. */
   prompt?: string
+  /** The session's coordinator instance (state.json meta.coordinator), shown on the main node. */
+  coordinator?: { name: string; role: string }
+}
+
+/** `session-updated` message fields the UI keeps. */
+export interface SessionUpdate {
+  sessionId: string
+  label: string
+  projectId?: string
+  prompt?: string
+  coordinator?: { name: string; role: string }
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'watching'

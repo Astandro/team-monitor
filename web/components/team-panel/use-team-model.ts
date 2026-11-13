@@ -16,7 +16,35 @@ import {
 } from '@/lib/team/session'
 import type { TeamProject, TeamState, TeamStatePayload } from '@/lib/team/types'
 import { buildTeamVM, type TeamVM } from '@/lib/team/view-model'
+import {
+  buildThread,
+  coordinatorName as coordinatorNameOf,
+  pruneLocal,
+  submitMessage,
+  watcherNotice,
+  type ChatEntry,
+  type ChatItem,
+  type LocalMessage,
+  type MessageResult,
+} from '@/lib/team/chat'
+import { OFFBOARDED_EVENT, offboardRows, type OffboardRecord, type OffboardRow } from '@/lib/team/offboard'
+import type { PostFetch } from '@/lib/team/post'
 import { readStored, writeStored } from './storage'
+
+export type OffboardedList =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; rows: OffboardRow[] }
+
+const NO_CHAT: ChatEntry[] = []
+const NO_LOCAL: LocalMessage[] = []
+const postFetch: PostFetch = (url, init) => fetch(url, init)
+const fixturePost: PostFetch = async (_url, init) => {
+  await new Promise((r) => setTimeout(r, 500))
+  const body = JSON.parse(init.body) as { text: string }
+  if (/error/i.test(body.text)) return { status: 429, json: async () => ({ ok: false }), headers: { get: () => '30' } }
+  return { status: 200, json: async () => ({ ok: true, id: `fx${Date.now()}`, sentAt: new Date().toISOString() }) }
+}
 
 // Replaced by a constant at build time (web/vite.config.app.ts). In a normal build this is false, the fixture
 // branches below are removed, and the sample data does not end up in the page.
@@ -40,6 +68,17 @@ export interface TeamModel {
   sendAnswer: (decisionId: string, answer: string) => Promise<AnswerResult>
   retryProjects: () => void
   fixture: boolean
+  /** True once the selected project's first payload arrived (the chat can show) */
+  hasPayload: boolean
+  /** Raw chat of the selected project (null until its first payload); the sound tracker diffs it */
+  chat: ChatEntry[] | null
+  thread: ChatItem[]
+  coordinatorName: string
+  /** "Sora lagi nggak aktif, pesan disimpan…" or empty */
+  watcherNotice: string
+  sendMessage: (text: string) => Promise<MessageResult>
+  offboarded: OffboardedList
+  reloadOffboarded: () => void
 }
 
 function goToLogin() {
@@ -123,7 +162,14 @@ export function useTeamModel(): TeamModel {
           if (data.type !== 'team_state' || (data.project && data.project !== selectedId)) return
           attempt = 0
           setConnection('live')
-          setPayload({ project: selectedId, state: data.state ?? null, error: data.error ?? null, updatedAt: data.updatedAt })
+          setPayload({
+            project: selectedId,
+            state: data.state ?? null,
+            error: data.error ?? null,
+            updatedAt: data.updatedAt,
+            chat: Array.isArray(data.chat) ? data.chat : [],
+            watcher: data.watcher,
+          })
           setNow(Date.now())
         } catch {
           /* ignore a frame we cannot read */
@@ -191,6 +237,72 @@ export function useTeamModel(): TeamModel {
     writeStored(PROJECT_KEY, id)
   }, [])
 
+  // ─── Chat (spec-chat) ───
+  const chat: ChatEntry[] | null = useMemo(() => (current ? (current.chat ?? NO_CHAT) : null), [current])
+  const [localMessages, setLocalMessages] = useState<{ project: string; list: LocalMessage[] }>({ project: '', list: [] })
+  const shownLocal = localMessages.project === selectedId ? localMessages.list : NO_LOCAL
+  // drop sent messages once the stream delivered them
+  useEffect(() => {
+    if (!chat || shownLocal.length === 0) return
+    const pruned = pruneLocal(shownLocal, chat)
+    if (pruned.length !== shownLocal.length) setLocalMessages({ project: selectedId ?? '', list: pruned })
+  }, [chat, shownLocal, selectedId])
+  const coordinatorName = coordinatorNameOf(state?.meta)
+  const thread = useMemo(
+    () => buildThread(chat, { now, coordinatorName, local: shownLocal }),
+    [chat, now, coordinatorName, shownLocal],
+  )
+
+  const sendMessage = useCallback(
+    async (text: string): Promise<MessageResult> => {
+      if (!selectedId) {
+        return { ok: false, kind: 'error', status: 0, message: 'Belum ada proyek yang dipilih.', retryAfter: null }
+      }
+      const result = await submitMessage(FIXTURE ? fixturePost : postFetch, selectedId, text)
+      if (result.ok) {
+        const msg = { id: result.id, text: text.replace(/\r\n?/g, '\n').trim(), sentAt: result.sentAt }
+        setLocalMessages((prev) => ({
+          project: selectedId,
+          list: [...(prev.project === selectedId ? prev.list : []), msg],
+        }))
+        setNow(Date.now())
+      } else if (result.kind === 'login') goToLogin()
+      return result
+    },
+    [selectedId],
+  )
+
+  // ─── "Selesai kontrak" (offboarded agents of this project) ───
+  const [offboarded, setOffboarded] = useState<OffboardedList>({ status: 'loading' })
+  const [offboardedRaw, setOffboardedRaw] = useState<OffboardRecord[] | null>(null)
+  const loadOffboarded = useCallback(async () => {
+    if (!selectedId) return
+    if (FIXTURE) {
+      setOffboardedRaw([])
+      return
+    }
+    try {
+      const res = await fetch(`/api/team/offboarded?project=${encodeURIComponent(selectedId)}`, { credentials: 'same-origin' })
+      if (res.status === 401) return goToLogin()
+      if (!res.ok) throw new Error(String(res.status))
+      const body = (await res.json()) as { offboarded?: OffboardRecord[] }
+      setOffboardedRaw(Array.isArray(body.offboarded) ? body.offboarded : [])
+    } catch {
+      setOffboarded({ status: 'error', message: 'Daftar Selesai kontrak belum bisa dimuat.' })
+    }
+  }, [selectedId])
+  useEffect(() => {
+    setOffboardedRaw(null)
+    setOffboarded({ status: 'loading' })
+    void loadOffboarded()
+    const onOffboarded = () => void loadOffboarded()
+    window.addEventListener(OFFBOARDED_EVENT, onOffboarded)
+    return () => window.removeEventListener(OFFBOARDED_EVENT, onOffboarded)
+  }, [loadOffboarded])
+  useEffect(() => {
+    if (offboardedRaw) setOffboarded({ status: 'ready', rows: offboardRows(offboardedRaw, now) })
+  }, [offboardedRaw, now])
+
   return {
     view,
     connection,
@@ -205,5 +317,13 @@ export function useTeamModel(): TeamModel {
     sendAnswer,
     retryProjects: () => void loadProjects(),
     fixture: FIXTURE,
+    hasPayload: current !== null,
+    chat,
+    thread,
+    coordinatorName,
+    watcherNotice: watcherNotice(current?.watcher, coordinatorName),
+    sendMessage,
+    offboarded,
+    reloadOffboarded: () => void loadOffboarded(),
   }
 }

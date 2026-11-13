@@ -27,6 +27,12 @@ import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { sessionsForProject, sessionToShow } from "@/lib/session-filter"
+import { agentIdentity, identityLine, parseCoordinator } from "@/lib/agent-identity"
+import { canOffboard, finishedSubAgents, offboardAgent, offboardAllFinished, type OffboardResult } from "@/lib/team/offboard"
+import type { PostFetch } from "@/lib/team/post"
+import { setCanvasCoordinator } from "./canvas/identity"
+
+const postFetch: PostFetch = (url, init) => fetch(url, init)
 
 export function AgentVisualizer({ projectId = null }: {
   /** Team project chosen in the panel's switcher: only its sessions are shown (sessions without a project stay). */
@@ -147,6 +153,44 @@ export function AgentVisualizer({ projectId = null }: {
     }
   }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount])
 
+  // Offboarded agents (D22): their events are already out of the session buffer; rebuild the shown session
+  // from it (same as a cold start), and forget the cached snapshot of any other session it touched.
+  const offboardRevision = bridge.offboardRevision
+  useLayoutEffect(() => {
+    if (!offboardRevision) return
+    const sid = offboardRevision.sessionId
+    sessionCacheRef.current.delete(sid)
+    if (sid !== bridge.selectedSessionId) return
+    selection.clearAgent()
+    setIsReviewing(false)
+    restart()
+    bridge.flushSessionEvents(sid)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
+  }, [offboardRevision])
+
+  // The selected session's coordinator names the main node (prefer the session's over the spawn payload)
+  const coordinator = useMemo(
+    () => parseCoordinator(bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.coordinator),
+    [bridge.sessions, bridge.selectedSessionId],
+  )
+  useLayoutEffect(() => setCanvasCoordinator(coordinator), [coordinator])
+
+  // Offboarding works in the standalone app (it has the endpoints), on live data, with a session shown
+  const offboardSession = !bridge.isVSCode && !bridge.useMockData ? bridge.selectedSessionId : null
+  const { applyOffboarded } = bridge
+  const runOffboard = useCallback(async (agentId: string | null): Promise<OffboardResult> => {
+    if (!offboardSession) return { ok: false, kind: 'error', status: 0, message: 'Belum ada sesi yang dipilih.' }
+    const r = agentId === null
+      ? await offboardAllFinished(postFetch, offboardSession)
+      : await offboardAgent(postFetch, offboardSession, agentId)
+    if (r.ok) applyOffboarded(offboardSession, r.agents.length > 0 ? r.agents : agentId ? [agentId] : [])
+    else if (r.kind === 'login') window.location.assign('/login')
+    return r
+  }, [offboardSession, applyOffboarded])
+  const [menuOffboardError, setMenuOffboardError] = useState('')
+  useEffect(() => setMenuOffboardError(''), [offboardSession])
+  const handleOffboardAll = useCallback(() => runOffboard(null), [runOffboard])
+
   // Timeline events — incremental: only processes new conversation messages
   const timelineCacheRef = useRef<{
     counts: Map<string, number>
@@ -264,10 +308,24 @@ export function AgentVisualizer({ projectId = null }: {
     setPanelTop(top)
   }, [])
 
-  // Context menu items
+  const finishedCount = useMemo(() => finishedSubAgents(agents).length, [agents])
+
+  // Context menu items (right click / long press on a node)
+  const menuAgentId = selection.contextMenu?.agentId ?? null
+  const menuAgent = menuAgentId ? agents.get(menuAgentId) : undefined
   const contextMenuItems = selection.contextMenu ? (
-    selection.contextMenu.agentId ? [
+    menuAgentId ? [
       { label: 'Tampilkan atau sembunyikan statistik', onClick: () => setShowStats(prev => !prev) },
+      ...(offboardSession && canOffboard(menuAgent) ? [
+        { label: '', onClick: () => {}, separator: true },
+        {
+          label: 'Offboard',
+          onClick: () => {
+            setMenuOffboardError('')
+            void runOffboard(menuAgentId).then(r => { if (!r.ok) setMenuOffboardError(r.message) })
+          },
+        },
+      ] : []),
     ] : [
       { label: 'Pas-kan ke layar', onClick: () => setZoomToFitTrigger(n => n + 1) },
       { label: 'Tampilkan atau sembunyikan statistik', onClick: () => setShowStats(prev => !prev) },
@@ -332,6 +390,8 @@ export function AgentVisualizer({ projectId = null }: {
         <div {...stopPropagationHandlers}>
           <AgentDetailCard
             agent={selectedAgent}
+            coordinator={coordinator}
+            onOffboard={offboardSession ? runOffboard : undefined}
             onClose={selection.clearAgent}
           />
         </div>
@@ -362,7 +422,7 @@ export function AgentVisualizer({ projectId = null }: {
       {/* Chat panel (bottom-right, shown when agent selected) */}
       <AgentChatPanel
         visible={!!selectedAgent}
-        agentName={selectedAgent?.name ?? ''}
+        agentName={selectedAgent ? identityLine(agentIdentity(selectedAgent, coordinator)) : ''}
         agentState={selectedAgent?.state ?? 'idle'}
         conversation={selectedConversation}
         runtime={selectedAgent?.runtime ?? sessionRuntime}
@@ -449,6 +509,9 @@ export function AgentVisualizer({ projectId = null }: {
         onTogglePanel={toggleExclusivePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
         onToggleMute={handleToggleMute}
+        finishedCount={offboardSession ? finishedCount : 0}
+        onOffboardAll={handleOffboardAll}
+        offboardNotice={menuOffboardError}
         onLayout={handleTopLayout}
       >
         {/* Message feed card: in flow under the bars so it never overlaps the tabs */}
