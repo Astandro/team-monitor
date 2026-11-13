@@ -9,7 +9,7 @@ import * as path from 'path'
 import * as os from 'os'
 
 import { HookServer } from '../extension/src/hook-server'
-import { AgentEvent, SessionInfo, WatchedSession } from '../extension/src/protocol'
+import { AgentEvent, CoordinatorInfo, SessionInfo, WatchedSession } from '../extension/src/protocol'
 import { TranscriptParser } from '../extension/src/transcript-parser'
 import { readNewFileLines } from '../extension/src/fs-utils'
 import { scanSubagentsDir, rebuildSubagentsOnAttach, readSubagentNewLines, newestSubagentMtime } from '../extension/src/subagent-watcher'
@@ -22,7 +22,8 @@ import {
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
-import { matchProjectDir, projectSessionLabel, watchTargets, type WatchedProject } from './session-projects'
+import { mainSpawnPayload, matchProjectDir, projectSessionLabel, sameCoordinator, watchTargets, type WatchedProject } from './session-projects'
+import { GraphAgents, NO_OFFBOARDING, type GraphView, type OffboardLookup } from './graph-agents'
 import type { TelemetryClient } from './telemetry'
 
 const MAX_EVENT_BUFFER = 5000
@@ -81,6 +82,23 @@ function broadcast(data: string) {
 
 const eventBuffer = new Map<string, AgentEvent[]>()
 
+/** Agents per session, and the offboard lookup that hides finished, offboarded ones (spec offboard-names item 1). */
+const graphAgents = new GraphAgents()
+let offboardLookup: OffboardLookup = NO_OFFBOARDING
+
+/** When a sub-agent finished: its transcript's last write (right for agents rebuilt after a restart), else now. */
+function subagentFinishedAt(event: AgentEvent): number | undefined {
+  if (event.type !== 'agent_complete' || !event.sessionId) return undefined
+  const session = sessions.get(event.sessionId)
+  const name = event.payload?.name
+  if (!session || typeof name !== 'string') return undefined
+  for (const [filePath, state] of session.subagentWatchers) {
+    if (state.agentName !== name) continue
+    try { return fs.statSync(filePath).mtimeMs } catch { return undefined }
+  }
+  return undefined
+}
+
 function broadcastEvent(event: AgentEvent) {
   sessionEventCount++
   if (event.type === 'model_detected') {
@@ -99,17 +117,31 @@ function broadcastEvent(event: AgentEvent) {
     eventBuffer.set(event.sessionId, buf)
   }
 
-  broadcast(JSON.stringify({ type: 'agent-event', event }))
+  const { send, hide } = graphAgents.admit(event, offboardLookup, Date.now(), subagentFinishedAt(event))
+  if (send) broadcast(JSON.stringify({ type: 'agent-event', event }))
+  if (hide.length && event.sessionId) announceOffboarded(event.sessionId, hide)
+}
+
+function announceOffboarded(sessionId: string, agents: string[]) {
+  broadcast(JSON.stringify({ type: 'agents-offboarded', sessionId, agents }))
+}
+
+/** Main-agent spawn payload; carries the project's coordinator instance when state.json names one. */
+function mainSpawn(session: WatchedSession): Record<string, unknown> {
+  return mainSpawnPayload(ORCHESTRATOR_NAME, session.label, session.model, sessionProjects.get(session.sessionId)?.coordinator)
 }
 
 /** Project of each watched Claude session (spec graph-theme items 3-4). Codex sessions are not in here. */
 const sessionProjects = new Map<string, WatchedProject>()
 
 /** What a viewer reads for a session: its project title or folder name. The first prompt is kept as `prompt`. */
-function sessionView(sessionId: string, fallbackLabel: string): { label: string; projectId?: string; prompt?: string } {
+function sessionView(sessionId: string, fallbackLabel: string): { label: string; projectId?: string; prompt?: string; coordinator?: CoordinatorInfo } {
   const project = sessionProjects.get(sessionId)
   if (!project) return { label: fallbackLabel }
-  return { label: projectSessionLabel(project), projectId: project.id || undefined, prompt: sessions.get(sessionId)?.label }
+  return {
+    label: projectSessionLabel(project), projectId: project.id || undefined, prompt: sessions.get(sessionId)?.label,
+    ...(project.coordinator ? { coordinator: { ...project.coordinator } } : {}),
+  }
 }
 
 function broadcastSessionLifecycle(type: 'started' | 'ended' | 'updated', sessionId: string, label: string) {
@@ -181,7 +213,7 @@ function resetInactivityTimer(sessionId: string) {
     broadcastEvent({
       time: elapsed(sessionId),
       type: 'agent_spawn',
-      payload: { name: ORCHESTRATOR_NAME, isMain: true, task: session.label, ...(session.model ? { model: session.model } : {}) },
+      payload: mainSpawn(session),
       sessionId,
     })
     broadcastSessionLifecycle('started', sessionId, session.label)
@@ -235,7 +267,7 @@ function watchSession(sessionId: string, filePath: string) {
   broadcastSessionLifecycle('started', sessionId, session.label)
   broadcastEvent({
     time: 0, type: 'agent_spawn',
-    payload: { name: ORCHESTRATOR_NAME, isMain: true, task: session.label, ...(session.model ? { model: session.model } : {}) },
+    payload: mainSpawn(session),
     sessionId,
   })
   session.sessionDetected = true
@@ -310,7 +342,7 @@ function watchProjectDir(dirPath: string) {
 function scanForActiveSessions(targets: WatchedProject[]) {
   for (const [sessionId, old] of sessionProjects) {
     const now = targets.find((t) => t.path === old.path)
-    if (now && projectSessionLabel(now) !== projectSessionLabel(old)) {
+    if (now && (projectSessionLabel(now) !== projectSessionLabel(old) || !sameCoordinator(now.coordinator, old.coordinator))) {
       sessionProjects.set(sessionId, now)
       broadcastSessionLifecycle('updated', sessionId, sessions.get(sessionId)?.label ?? '')
     }
@@ -388,6 +420,8 @@ function removeDiscoveryFile() {
 export interface Relay {
   /** Handle an incoming SSE connection */
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
+  /** Agents per Claude session, for the offboard endpoints (spec offboard-names item 1). */
+  graph: GraphView
   /** Clean up all resources */
   dispose: () => void
 }
@@ -405,6 +439,8 @@ export interface RelayOptions {
   /** Registered team projects (read on every scan). When it returns any, the graph shows the sessions of all of
    *  them instead of only the start folder's (spec graph-theme item 3). */
   projects?: () => WatchedProject[]
+  /** Offboarded agents (standalone app): their events are left out of the graph stream while they are not running. */
+  offboarded?: OffboardLookup
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -423,6 +459,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     throw new Error('createRelay() can only be called once per process')
   }
   relayCreated = true
+  offboardLookup = options.offboarded ?? NO_OFFBOARDING
 
   const mode = resolveRuntimeMode(options.runtime)
   const wantClaude = mode === 'claude' || mode === 'auto'
@@ -440,7 +477,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     }
 
     hookServer.onEvent((event: AgentEvent) => {
-      broadcast(JSON.stringify({ type: 'agent-event', event }))
+      // Hook events are not buffered or observed; they are only dropped when they are about a hidden agent.
+      if (graphAgents.isVisible(event, offboardLookup)) broadcast(JSON.stringify({ type: 'agent-event', event }))
     })
 
     writeDiscoveryFile(hookPort, workspace)
@@ -543,9 +581,16 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       for (const s of sorted) {
         const buffered = eventBuffer.get(s.id)
         if (buffered) {
-          sendSSE(res, { type: 'agent-event-batch', events: buffered })
+          // Offboarded agents that are not running are left out, so a reload or restart does not bring them back.
+          sendSSE(res, { type: 'agent-event-batch', events: graphAgents.visibleEvents(buffered, offboardLookup) })
         }
       }
+    },
+
+    graph: {
+      agents: (sessionId) => (sessions.has(sessionId) ? graphAgents.agents(sessionId) : null),
+      sessionProject: (sessionId) => sessionProjects.get(sessionId)?.id || null,
+      announceOffboarded,
     },
 
     dispose() {

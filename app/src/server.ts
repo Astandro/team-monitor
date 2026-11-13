@@ -35,7 +35,10 @@ export async function startServer(options: ServerOptions) {
   const relay = await createRelay({
     workspace, verbose: options.verbose, telemetry,
     projects: () => teamSetup.team.graphProjects(),
+    // Offboarded agents stay off the graph stream (spec offboard-names item 1)
+    offboarded: teamSetup.team.offboard ?? undefined,
   })
+  teamSetup.team.graph = relay.graph
 
   // The team handler runs the Host check first (loopback only, as upstream, or
   // the remote allow-list), then login and /api/team/*, then this fallback.

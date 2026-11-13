@@ -5,6 +5,8 @@
  * Webview → Extension: user commands (inject, connect/disconnect)
  */
 
+import { parseInstanceName } from './instance-name'
+
 // ─── Agent Event Types (from real agent sessions) ────────────────────────────
 
 export type AgentEventType =
@@ -38,6 +40,14 @@ export interface SessionInfo {
   projectId?: string
   /** The session's first prompt when the label is a project title instead. */
   prompt?: string
+  /** The coordinator instance of the session's project (`meta.coordinator` in its state.json), when set. */
+  coordinator?: CoordinatorInfo
+}
+
+/** Name and role of the coordinator instance (spec offboard-names item 2); role defaults to "Orchestrator". */
+export interface CoordinatorInfo {
+  name: string
+  role: string
 }
 
 // ─── Extension → Webview Messages ────────────────────────────────────────────
@@ -51,7 +61,9 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-list'; sessions: SessionInfo[] }
   | { type: 'session-started'; session: SessionInfo }
   | { type: 'session-ended'; sessionId: string }
-  | { type: 'session-updated'; sessionId: string; label: string }
+  | { type: 'session-updated'; sessionId: string; label: string; projectId?: string; prompt?: string; coordinator?: CoordinatorInfo }
+  /** Standalone app only: these finished subagents were offboarded; drop their nodes (spec offboard-names item 1). */
+  | { type: 'agents-offboarded'; sessionId: string; agents: string[] }
 
 export interface VisualizerConfig {
   mode: 'live' | 'replay'
@@ -125,6 +137,10 @@ export interface AgentEventEmitter {
  *
  * This two-event sequence is required every time a subagent is spawned and was
  * previously duplicated in SessionWatcher and TranscriptParser.
+ *
+ * When the child name (the Agent `description`) has the form "<Name> (<role>): <task>",
+ * the spawn payload also carries `displayName`, `role` and the parsed `task`
+ * (spec offboard-names item 2); otherwise the payload is unchanged.
  */
 export function emitSubagentSpawn(
   emitter: AgentEventEmitter,
@@ -138,10 +154,13 @@ export function emitSubagentSpawn(
     type: 'subagent_dispatch',
     payload: { parent, child, task },
   }, sessionId)
+  const instance = parseInstanceName(child)
   emitter.emit({
     time: emitter.elapsed(sessionId),
     type: 'agent_spawn',
-    payload: { name: child, parent, task },
+    payload: instance
+      ? { name: child, parent, task: instance.task || task, displayName: instance.displayName, role: instance.role }
+      : { name: child, parent, task },
   }, sessionId)
 }
 

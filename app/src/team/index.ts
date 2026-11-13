@@ -6,6 +6,7 @@ import type * as http from 'http'
 import { LoginLimiter, loadOrCreateToken, SessionStore } from './auth'
 import { buildRegistry, ensureHome, readConfigProjects, teamHome } from './config'
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
+import { OffboardStore } from './offboard'
 import { defaultTailscaleBin, makeTailscaleRunner, resolveRemoteConfig, TailscaleRunner } from './remote'
 
 export interface TeamCliOptions {
@@ -67,6 +68,7 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
 
   const projects = buildRegistry(readConfigProjects(home, warn), opts.projects)
   const team = new TeamService(projects, deps.watcherTiming)
+  team.offboard = new OffboardStore(home, warn)
   if (projects.length) log(`Team projects: ${projects.map((p) => p.id).join(', ')}`)
 
   return {

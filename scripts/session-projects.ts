@@ -9,6 +9,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { foldPathCase } from '../extension/src/fs-utils'
+import type { CoordinatorInfo } from '../extension/src/protocol'
 
 export interface WatchedProject {
   /** Registry id, or '' for the start-folder fallback. */
@@ -19,6 +20,46 @@ export interface WatchedProject {
   path: string
   /** `meta.title` from the project's `.agent-team/state.json`, when it has one. */
   title?: string
+  /** `meta.coordinator` from the same file, when it names one (spec offboard-names item 2). */
+  coordinator?: CoordinatorInfo
+}
+
+export const COORDINATOR_DEFAULT_ROLE = 'Orchestrator'
+export const COORDINATOR_FIELD_MAX = 60
+
+/**
+ * `meta.coordinator` of a parsed state.json: `{"name": "Sora", "role": "Orchestrator"}`. The name must be a
+ * non-empty string (at most 60 characters after trimming); a missing, empty or non-string role becomes
+ * "Orchestrator". Anything else gives undefined, so the graph keeps the plain "Orchestrator" label.
+ */
+export function coordinatorFromState(state: unknown): CoordinatorInfo | undefined {
+  if (!state || typeof state !== 'object') return undefined
+  const meta = (state as { meta?: unknown }).meta
+  if (!meta || typeof meta !== 'object') return undefined
+  const c = (meta as { coordinator?: unknown }).coordinator
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return undefined
+  const rawName = (c as { name?: unknown }).name
+  const rawRole = (c as { role?: unknown }).role
+  const name = typeof rawName === 'string' ? rawName.replace(/\s+/g, ' ').trim() : ''
+  if (!name || name.length > COORDINATOR_FIELD_MAX) return undefined
+  const role = typeof rawRole === 'string' ? rawRole.replace(/\s+/g, ' ').trim().slice(0, COORDINATOR_FIELD_MAX) : ''
+  return { name, role: role || COORDINATOR_DEFAULT_ROLE }
+}
+
+/**
+ * Payload of the main agent's `agent_spawn`. With a coordinator it also carries `coordinator` and, like a named
+ * sub-agent, `displayName` and `role`; the node name stays "orchestrator".
+ */
+export function mainSpawnPayload(name: string, task: string, model: string | null, coordinator: CoordinatorInfo | undefined): Record<string, unknown> {
+  return {
+    name, isMain: true, task,
+    ...(model ? { model } : {}),
+    ...(coordinator ? { coordinator: { ...coordinator }, displayName: coordinator.name, role: coordinator.role } : {}),
+  }
+}
+
+export function sameCoordinator(a: CoordinatorInfo | undefined, b: CoordinatorInfo | undefined): boolean {
+  return a?.name === b?.name && a?.role === b?.role
 }
 
 export function encodeProjectPath(p: string): string {

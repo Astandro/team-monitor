@@ -28,6 +28,18 @@ file at 1 MB, and keeps showing the last good state (with an error) if the JSON 
 
 A decision is answerable only while `approvals.<Dn>.status` is `"open"` and no `answers/<Dn>.json` exists yet.
 
+### 2a. Instance names (D22/D23)
+
+- Coordinator: put `"coordinator": {"name": "Sora", "role": "Orchestrator"}` in `meta` (name required, at most 60
+  characters; role optional, default "Orchestrator"). The graph's main node shows it; a change is picked up within
+  about a second. Every session of the project shows the same coordinator, since it comes from the project's file.
+- Sub-agents: start the Agent `description` with `<Name> (<role>): <task>`, e.g.
+  `Hiro (Frontend Engineer): offboard button`. Name = one word starting with a capital letter (at most 40
+  characters), role = the full standard role without parentheses (at most 60), then a colon. Anything else is shown
+  as before (the whole description as the node name).
+- Finished sub-agents can be offboarded from the UI; the list is kept in `~/.team-monitor/offboarded.json`
+  (written by the monitor only; transcripts are never touched).
+
 ## 3. Wait for an answer (background shell task)
 
 Run this with `run_in_background: true`. It exits when an answer arrives, so its completion wakes the coordinator:
