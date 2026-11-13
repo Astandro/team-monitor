@@ -39,7 +39,7 @@ Team monitor:
   --bind <mode>        With --remote: "tailscale" (Tailscale IPv4) or "loopback" (behind tailscale serve)
   --host-allow <name>  With --remote: extra accepted Host name (repeatable)
   --tailscale-bin <p>  Path to the tailscale CLI
-  wait-answer ...      Wait for a decision answer (see docs/coordinator.md)
+  wait-answer ...      Wait for a decision answer or a chat message (see docs/coordinator.md)
   ask ...              Add an open decision D<n> to state.json, optionally --wait for it
 `)
       process.exit(0)

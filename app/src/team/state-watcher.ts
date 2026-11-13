@@ -8,10 +8,16 @@
  *   and `error` is set.
  * - Answers in `answers/<Dn>.json` are overlaid onto open approvals. The server
  *   never writes state.json (architecture call A2).
+ * - Chat (spec-chat): `state.chat` is served as the `chat` array (state.json
+ *   entries plus unread `inbox/` messages, sorted by time) and removed from the
+ *   served `state`. `watcher` says whether the coordinator's background watcher
+ *   is alive (see heartbeat.ts).
  */
 import * as fs from 'fs'
 import * as path from 'path'
 import { agentTeamDir } from './config'
+import { buildChat, ChatEntry, listInbox, readUnread } from './chat'
+import { HEARTBEAT_FILE, readWatcherStatus, StatusOptions, WatcherStatus } from './heartbeat'
 
 export const MAX_STATE_BYTES = 1024 * 1024
 export const MAX_ANSWER_FILE_BYTES = 16 * 1024
@@ -24,6 +30,10 @@ export interface TeamSnapshot {
   state: TeamState | null
   error: string | null
   updatedAt: string
+  /** Chat thread, oldest first. */
+  chat: ChatEntry[]
+  /** Is the coordinator's background watcher alive ("Sora lagi nggak aktif" when not). */
+  watcher: WatcherStatus
 }
 
 export interface AnswerRecord { answer: string; answeredAt: string }
@@ -35,6 +45,8 @@ export interface WatcherOptions {
   pollMs?: number
   /** Server-side log for error details (default console.warn). */
   log?: (msg: string) => void
+  /** Liveness rules for the coordinator's watcher (tests inject a clock and a pid check). */
+  heartbeat?: StatusOptions
 }
 
 const TOO_LARGE = `state.json is larger than ${MAX_STATE_BYTES} bytes`
@@ -47,12 +59,16 @@ export class TeamStateWatcher {
   readonly projectId: string
   readonly dir: string
   readonly answersDir: string
+  readonly inboxDir: string
   private readonly debounceMs: number
   private readonly pollMs: number
+  private readonly heartbeatOpts: StatusOptions
 
   private raw: TeamState | null = null
   private error: string | null = null
   private answers = new Map<string, AnswerRecord>()
+  private chat: ChatEntry[] = []
+  private watcherStatus: WatcherStatus = { alive: false, since: null }
   private updatedAt = new Date().toISOString()
   private lastPayload = ''
   private lastSignature = ''
@@ -60,6 +76,7 @@ export class TeamStateWatcher {
   private listeners = new Set<Listener>()
   private dirWatcher: fs.FSWatcher | null = null
   private answersWatcher: fs.FSWatcher | null = null
+  private inboxWatcher: fs.FSWatcher | null = null
   private pollTimer: NodeJS.Timeout | null = null
   private debounceTimer: NodeJS.Timeout | null = null
   private disposed = false
@@ -71,8 +88,10 @@ export class TeamStateWatcher {
     this.projectId = opts.projectId
     this.dir = agentTeamDir(opts.projectPath)
     this.answersDir = path.join(this.dir, 'answers')
+    this.inboxDir = path.join(this.dir, 'inbox')
     this.debounceMs = opts.debounceMs ?? 100
     this.pollMs = opts.pollMs ?? 3000
+    this.heartbeatOpts = opts.heartbeat ?? {}
   }
 
   start(): void {
@@ -91,7 +110,8 @@ export class TeamStateWatcher {
     if (this.debounceTimer) clearTimeout(this.debounceTimer)
     this.dirWatcher?.close()
     this.answersWatcher?.close()
-    this.dirWatcher = this.answersWatcher = null
+    this.inboxWatcher?.close()
+    this.dirWatcher = this.answersWatcher = this.inboxWatcher = null
     this.listeners.clear()
   }
 
@@ -100,9 +120,12 @@ export class TeamStateWatcher {
     return () => { this.listeners.delete(fn) }
   }
 
-  /** State as served: answers overlaid on approvals. */
+  /** State as served: answers overlaid on approvals, chat moved out of `state` into `chat`, watcher liveness. */
   snapshot(): TeamSnapshot {
-    return { project: this.projectId, state: this.overlaid(), error: this.error, updatedAt: this.updatedAt }
+    return {
+      project: this.projectId, state: this.overlaid(), error: this.error, updatedAt: this.updatedAt,
+      chat: this.chat, watcher: this.watcherStatus,
+    }
   }
 
   /** State exactly as the coordinator wrote it (last good parse). */
@@ -119,6 +142,7 @@ export class TeamStateWatcher {
     if (this.disposed) return
     if (!this.dirWatcher) this.dirWatcher = this.tryWatch(this.dir, () => { this.dirWatcher = null })
     if (!this.answersWatcher) this.answersWatcher = this.tryWatch(this.answersDir, () => { this.answersWatcher = null })
+    if (!this.inboxWatcher) this.inboxWatcher = this.tryWatch(this.inboxDir, () => { this.inboxWatcher = null })
   }
 
   private tryWatch(dir: string, onGone: () => void): fs.FSWatcher | null {
@@ -152,11 +176,21 @@ export class TeamStateWatcher {
         if (ANSWER_FILE_RE.test(name)) statPart(path.join(this.answersDir, name))
       }
     } catch { /* no answers yet */ }
+    // Inbox files never change after the rename, so their names are enough.
+    for (const f of listInbox(this.inboxDir)) parts.push(f.name)
+    statPart(path.join(this.dir, HEARTBEAT_FILE))
     return parts.join('|')
   }
 
+  private currentWatcherStatus(): WatcherStatus {
+    return readWatcherStatus(this.dir, this.heartbeatOpts)
+  }
+
+  /** The poll also reloads when the watcher went stale or its grace ran out (no file event for that). */
   private reloadIfChanged(): void {
-    if (this.signature() !== this.lastSignature) this.reload()
+    const ws = this.currentWatcherStatus()
+    const wsChanged = ws.alive !== this.watcherStatus.alive || ws.since !== this.watcherStatus.since
+    if (wsChanged || this.signature() !== this.lastSignature) this.reload()
   }
 
   private reload(): void {
@@ -164,9 +198,12 @@ export class TeamStateWatcher {
     this.lastSignature = this.signature()
     this.loadState()
     this.answers = readAnswers(this.answersDir)
+    const inbox = listInbox(this.inboxDir)
+    this.chat = buildChat(this.raw, readUnread(this.inboxDir, this.raw), inbox)
+    this.watcherStatus = this.currentWatcherStatus()
 
     const snap = this.snapshot()
-    const payload = JSON.stringify([snap.state, snap.error])
+    const payload = JSON.stringify([snap.state, snap.error, snap.chat, snap.watcher])
     if (payload === this.lastPayload) return
     this.lastPayload = payload
     this.updatedAt = new Date().toISOString()
@@ -228,7 +265,11 @@ export class TeamStateWatcher {
   }
 
   private overlaid(): TeamState | null {
-    return overlayAnswers(this.raw, this.answers)
+    const s = overlayAnswers(this.raw, this.answers)
+    if (!s || !Object.prototype.hasOwnProperty.call(s, 'chat')) return s
+    // Served once, as the top-level `chat` array.
+    const { chat: _chat, ...rest } = s
+    return rest
   }
 }
 

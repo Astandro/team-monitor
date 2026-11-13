@@ -1,7 +1,8 @@
-# Coordinator side: team state and decision answers
+# Coordinator side: team state, decision answers and chat
 
 The monitor reads `<project>/.agent-team/` and never writes `state.json`. The coordinator owns that file; the
-monitor only writes answers to `<project>/.agent-team/answers/<Dn>.json`.
+monitor only writes answers to `<project>/.agent-team/answers/<Dn>.json` and the owner's chat messages to
+`<project>/.agent-team/inbox/<sentAt ms>-<id>.json`.
 
 ## 1. Register the project
 
@@ -40,9 +41,10 @@ A decision is answerable only while `approvals.<Dn>.status` is `"open"` and no `
 - Finished sub-agents can be offboarded from the UI; the list is kept in `~/.team-monitor/offboarded.json`
   (written by the monitor only; transcripts are never touched).
 
-## 3. Wait for an answer (background shell task)
+## 3. Wait for an answer or a chat message (background shell task)
 
-Run this with `run_in_background: true`. It exits when an answer arrives, so its completion wakes the coordinator:
+Run this with `run_in_background: true`. It exits when an answer or an owner's chat message arrives, so its
+completion wakes the coordinator (chat details and the full loop: section 3a):
 
 ```sh
 node ~/projects/team-monitor/app/dist/app.js wait-answer --project ~/projects/my-app --timeout 3600
@@ -68,13 +70,71 @@ D3.json
 |---|---|
 | `--project <path>` | Project folder (default: current directory). |
 | `--timeout <s>` | Give up after this many seconds: exit code 124, message on stderr. Omit to wait forever. |
-| `--only-new` | Ignore answers already on disk. |
+| `--only-new` | Ignore answers and messages already on disk. |
+| `--answers-only` | Answers only, as before chat existed: messages do not end it and no heartbeat is written. Use it for any wait that is not the coordinator's one chat watcher (a sub-agent, the `ask` hook's redirect). |
 
-Exit codes: `0` answer, `124` timeout, `2` bad usage or missing project folder.
+Exit codes: `0` answer or message, `124` timeout, `2` bad usage or missing project folder. `130`/`143`/`129` when
+stopped by SIGINT/SIGTERM/SIGHUP.
 
 By default an answer file that is already on disk for a decision still `open` in `state.json` is reported at
-once. That way an answer given while no wait was running is never missed. It also means the coordinator must
-record the answer before waiting again, or the same answer is reported again.
+once, and so is every unread chat message. That way nothing sent while no wait was running is missed. It also
+means the coordinator must record the answer (section 4) or the message (section 3a) before waiting again, or the
+same thing is reported again. When both are pending, the answer comes first.
+
+## 3a. Chat with the owner (spec-chat)
+
+The owner types in the monitor's chat panel (phone or Mac). The monitor writes one file per message:
+
+```
+<project>/.agent-team/inbox/1763010129883-3fa9c2e17b04.json
+{"id": "3fa9c2e17b04", "text": "Sora, tolong cek PR-nya", "sentAt": "2026-11-13T05:02:09.883Z"}
+```
+
+`id` is 12 hex characters; `text` is 1 to 4000 characters, line breaks kept. The monitor never edits or deletes
+inbox files; leave them in place (they are the record of what was sent).
+
+`wait-answer` (without `--answers-only`) ends on a message and prints, for every unread message, oldest first:
+
+```
+inbox/1763010129883-3fa9c2e17b04.json
+{
+  "id": "3fa9c2e17b04",
+  "text": "Sora, tolong cek PR-nya",
+  "sentAt": "2026-11-13T05:02:09.883Z"
+}
+```
+
+**Read / unread.** A message is unread until `state.json` has `chat.<id>` with `"from": "owner"`. The panel shows
+"Terkirim" while unread and "Dibaca Sora" once it is recorded.
+
+**The loop** (one chat watcher per project, always running while the session is alive):
+
+1. Start the watcher with `run_in_background: true` (no timeout, or a long one):
+   `node ~/projects/team-monitor/app/dist/app.js wait-answer --project ~/projects/my-app`
+2. When it ends, read its output:
+   - `D<n>.json` + JSON: an answer. Record it (section 4).
+   - one or more `inbox/<file>` + JSON: messages. For each, copy it into `state.json` (atomic write, section 2):
+     `"chat": {"<id>": {"from": "owner", "text": "<text>", "t": "<sentAt>", "readAt": "<now ISO>"}}`.
+     That marks it "Dibaca Sora" in the panel at once.
+   - exit `124` (timeout): nothing arrived.
+3. Start the watcher again right away (step 1), before doing the work the message asks for, so the next message is
+   not missed and the panel keeps saying Sora is listening.
+4. Treat the message like a chat message from the owner. Reply in the thread by adding to `state.json`:
+   `"chat": {"<reply id>": {"from": "sora", "text": "<reply, plain text, line breaks allowed>", "t": "<now ISO>"}}`.
+   Use your own ids for replies (for example `r001`, `r002`); never reuse a message id. Answer in the terminal too
+   if the owner is there.
+
+Keep `chat` entries in `state.json` (the 1 MB cap applies; trim old entries to stay well under it). The panel shows
+`chat` sorted by `t`; an entry without `from` or `text` is not shown.
+
+**"Sora lagi nggak aktif".** While it waits, `wait-answer` keeps `.agent-team/.watcher`:
+`{"pid", "startedAt", "beatAt"}`, rewritten every 10 s. When it ends it adds `"endedAt"` and `"reason"`
+(`message`, `answer`, `timeout`, `signal` or `error`). The panel says Sora is listening while a watcher is running
+(beat younger than 30 s and the process alive), and for 5 minutes after one ended with `message`, `answer` or
+`timeout` (Sora is handling it and starts the next watcher). Otherwise (no watcher ever, stopped by a signal,
+killed, stale) it says "Sora lagi nggak aktif, pesan disimpan". So: always restart the watcher within 5 minutes
+of a wake (step 3), and do not run a second chat watcher next to it. A sub-agent or anything else that waits for
+answers uses `--answers-only` and leaves `.watcher` alone.
 
 ## 4. Record the answer
 
@@ -95,7 +155,7 @@ node ~/projects/team-monitor/app/dist/app.js ask --project ~/projects/my-app \
 It adds the next free `D<n>` to `approvals` (`status: "open"`, `askedAt` now, `order` n) and prints the id. The id
 is one above the highest `D<n>` already there (gaps are not reused) and never one that already has an answer file.
 With `--wait` (run it with `run_in_background: true`) it then waits for the answer to that decision only and prints
-it like `wait-answer` (answers to other decisions do not end it).
+it like `wait-answer` (answers to other decisions and chat messages do not end it; it writes no heartbeat).
 
 | Option | Meaning |
 |---|---|
@@ -150,7 +210,7 @@ Rebuild with `pnpm run build:app` after pulling, since the hook runs from `app/d
 Mode, in `~/.team-monitor/config.json` (next to `projects`; read on every call, no restart needed):
 
 - `"askHook": "redirect"` (default): the dialog is denied. Claude Code shows the agent the reason, which says the
-  questions are now decisions `Dn..Dm`, to run `wait-answer --project <path>` in the background, and to put the
+  questions are now decisions `Dn..Dm`, to run `wait-answer --project <path> --answers-only` in the background, and to put the
   questions in chat too. A dialog cannot be answered from the phone, so this is the mode that makes phone answers
   work.
 - `"askHook": "mirror"`: the decisions are added and the dialog runs as usual (exit 0, no output). Answer in either

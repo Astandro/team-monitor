@@ -121,7 +121,8 @@ test('redirect mode: adds one decision per question and returns a valid PreToolU
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny')
     const reason: string = out.hookSpecificOutput.permissionDecisionReason
     assert.match(reason, /D3\.\.D4/)
-    assert.ok(reason.includes(`node /x/app.js wait-answer --project "${project}"`), reason)
+    // --answers-only: an agent that asked must not be woken by (or report liveness for) the owner's chat.
+    assert.ok(reason.includes(`node /x/app.js wait-answer --project "${project}" --answers-only`), reason)
     assert.match(reason, /run_in_background/)
 
     const s = readState(project)
