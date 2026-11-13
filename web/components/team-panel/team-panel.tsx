@@ -12,13 +12,11 @@ import { ANSWERED_OPEN_BY_DEFAULT, answeredSummary, panelSections, splitDecision
 import { newBubbleKeys, themeButton, type ThemePref } from '@/lib/team/session'
 import type { DecisionVM, MemberVM, TaskVM } from '@/lib/team/view-model'
 import type { TeamModel } from './use-team-model'
-import { ChatSection, type ChatSectionHandle } from './chat-section'
 
 interface PanelProps {
   model: TeamModel
   theme: ThemePref
   onCycleTheme: () => void
-  chatRef?: React.Ref<ChatSectionHandle>
   /** Desktop only: hide the panel so the graph takes the full width. */
   onHide?: () => void
 }
@@ -335,7 +333,7 @@ function OffboardedList({ model }: { model: TeamModel }) {
   )
 }
 
-export function TeamPanel({ model, theme, onCycleTheme, chatRef, onHide }: PanelProps) {
+export function TeamPanel({ model, theme, onCycleTheme, onHide }: PanelProps) {
   const { vm, view } = model
   const reduce = usePrefersReducedMotion()
   const seenRef = useRef<Set<string> | null>(null)
@@ -440,15 +438,6 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef, onHide }: Panel
         </section>
       </>
     ),
-    chat: (
-      <ChatSection
-        ref={chatRef}
-        thread={model.thread}
-        coordinatorName={model.coordinatorName}
-        watcherNotice={model.watcherNotice}
-        send={model.sendMessage}
-      />
-    ),
     queue: (
       <details className="tm-list">
         <summary>
@@ -536,15 +525,6 @@ export function TeamPanel({ model, theme, onCycleTheme, chatRef, onHide }: Panel
           Proyek ini belum punya catatan tim. Begitu koordinator menulis <code>.agent-team/state.json</code>, tampilannya
           muncul di sini sendiri.
         </Empty>
-      )}
-      {view === 'no-data' && model.hasPayload && (
-        <ChatSection
-          ref={chatRef}
-          thread={model.thread}
-          coordinatorName={model.coordinatorName}
-          watcherNotice={model.watcherNotice}
-          send={model.sendMessage}
-        />
       )}
 
       {ready && (

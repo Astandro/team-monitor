@@ -11,7 +11,7 @@ type SendState =
   | { kind: 'error'; message: string; until?: number }
 
 export interface ChatSectionHandle {
-  /** Bring the message box into view and focus it (the phone's floating button). */
+  /** Focus the message box (the desktop bubble opens the panel and lands here). */
   focus: () => void
 }
 
@@ -30,13 +30,21 @@ function useCoarsePointer(): boolean {
  * Chat with the coordinator (spec-chat, D25): the thread, newest at the bottom, and a message box.
  * Messages are plain text (never HTML) with their line breaks. Status under the owner's messages comes from the
  * server only ("Terkirim" once written, "Dibaca <name>" once the coordinator recorded it).
+ * It fills its container (spec-chat-layout): the phone's Chat tab or the desktop chat panel. The thread takes the
+ * room that is left and scrolls on its own; the message box stays at the bottom.
  */
 export const ChatSection = forwardRef<ChatSectionHandle, {
   thread: ChatItem[]
   coordinatorName: string
   watcherNotice: string
   send: (text: string) => Promise<MessageResult>
-}>(function ChatSection({ thread, coordinatorName, watcherNotice, send }, ref) {
+  /** Right of the title: the desktop panel's close button. */
+  headerAction?: React.ReactNode
+  /** id of the title; the section is labelled by it */
+  titleId?: string
+  /** The chat just came on screen (tab chosen, panel opened): jump to the newest message. */
+  shown?: boolean
+}>(function ChatSection({ thread, coordinatorName, watcherNotice, send, headerAction, titleId = 'tm-chat-title', shown = true }, ref) {
   const [text, setText] = useState('')
   const [state, setState] = useState<SendState>({ kind: 'idle' })
   const [, setTick] = useState(0)
@@ -48,10 +56,7 @@ export const ChatSection = forwardRef<ChatSectionHandle, {
   const coarse = useCoarsePointer()
 
   useImperativeHandle(ref, () => ({
-    focus: () => {
-      sectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      boxRef.current?.focus({ preventScroll: true })
-    },
+    focus: () => boxRef.current?.focus({ preventScroll: true }),
   }))
 
   // newest at the bottom: follow new messages
@@ -59,7 +64,7 @@ export const ChatSection = forwardRef<ChatSectionHandle, {
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [lastId, thread.length])
+  }, [lastId, thread.length, shown])
 
   // a 429 keeps the send button off until the server's wait is over
   const blockedUntil = state.kind === 'error' && state.until ? state.until : 0
@@ -93,8 +98,11 @@ export const ChatSection = forwardRef<ChatSectionHandle, {
   }
 
   return (
-    <section className="tm-chat" id="chat" ref={sectionRef} aria-labelledby="tm-chat-title">
-      <h2 id="tm-chat-title">Chat dengan {coordinatorName}</h2>
+    <section className="tm-chat" id="chat" ref={sectionRef} aria-labelledby={titleId}>
+      <header className="tm-chat-head">
+        <h2 id={titleId}>Chat dengan {coordinatorName}</h2>
+        {headerAction}
+      </header>
       <div className="tm-chat-card">
         {watcherNotice && (
           <div className="tm-chat-off" role="status">
