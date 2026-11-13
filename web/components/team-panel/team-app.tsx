@@ -33,51 +33,40 @@ export function TeamApp() {
   const [calm, setCalm] = useState(() => readStored('tm-calm') === '1')
   const [pane, setPane] = useState<Pane>('tim')
 
-  const cycleTheme = useCallback(() => {
-    setTheme((t) => {
-      const n = nextThemePref(t)
-      writeStored('tm-theme', n)
-      return n
-    })
-  }, [])
-  const toggleCalm = useCallback(() => {
-    setCalm((c) => {
-      writeStored('tm-calm', c ? '0' : '1')
-      return !c
-    })
-  }, [])
+  const cycleTheme = useCallback(() => setTheme((t) => nextThemePref(t)), [])
+  const toggleCalm = useCallback(() => setCalm((c) => !c), [])
+  // remembered after the state changed, not inside the state updaters
+  useEffect(() => writeStored('tm-theme', theme), [theme])
+  useEffect(() => writeStored('tm-calm', calm ? '1' : '0'), [calm])
 
   const open = model.view === 'ready' ? model.vm.openDecisions : 0
 
   return (
     <div className={`tm-root tm-app${calm ? ' tm-calm' : ''}`} data-tm-theme={resolveTheme(theme, systemDark)}>
       <div className="tm-panes">
-        <main className="tm-pane tm-pane-team" id="tm-panel-tim" data-active={pane === 'tim'} aria-label="Tim">
+        <main className="tm-pane tm-pane-team tm-themed" id="tm-panel-tim" data-active={pane === 'tim'} aria-label="Tim">
           <TeamPanel model={model} theme={theme} onCycleTheme={cycleTheme} calm={calm} onToggleCalm={toggleCalm} />
         </main>
         <section className="tm-pane tm-pane-graph" id="tm-panel-grafik" data-active={pane === 'grafik'} aria-label="Grafik">
           <AgentVisualizer />
         </section>
       </div>
-      <nav className="tm-nav" role="tablist" aria-label="Tampilan">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={pane === 'tim'}
-          aria-controls="tm-panel-tim"
-          onClick={() => setPane('tim')}
-        >
+      {/* Two plain toggle buttons (not a half-finished tab pattern): Tab/Enter/Space work natively */}
+      <nav className="tm-nav tm-themed" aria-label="Tampilan">
+        <button type="button" aria-pressed={pane === 'tim'} aria-controls="tm-panel-tim" onClick={() => setPane('tim')}>
           Tim
           {open > 0 && (
-            <span className="count" aria-label={`${open} keputusan butuh kamu`}>
-              {open}
-            </span>
+            <>
+              <span className="count" aria-hidden="true">
+                {open}
+              </span>
+              <span className="sr-only">, {open} keputusan butuh kamu</span>
+            </>
           )}
         </button>
         <button
           type="button"
-          role="tab"
-          aria-selected={pane === 'grafik'}
+          aria-pressed={pane === 'grafik'}
           aria-controls="tm-panel-grafik"
           onClick={() => setPane('grafik')}
         >

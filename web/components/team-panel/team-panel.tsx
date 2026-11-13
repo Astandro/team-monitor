@@ -83,7 +83,13 @@ function Decision({
         <h3>{d.title}</h3>
         {d.question && <p>{d.question}</p>}
         <div className="done-line" role="status">
-          Jawaban: <strong>{d.answer}</strong>
+          {d.answer ? (
+            <>
+              Jawaban: <strong>{d.answer}</strong>
+            </>
+          ) : (
+            <strong>Sudah dijawab</strong>
+          )}
         </div>
       </div>
     )
@@ -95,8 +101,8 @@ function Decision({
       {d.question && <p>{d.question}</p>}
       {d.options.length > 0 && (
         <div className="opts">
-          {d.options.map((o) => (
-            <button key={o.label} type="button" className="opt" disabled={sending} onClick={() => void go(o.label)}>
+          {d.options.map((o, i) => (
+            <button key={i} type="button" className="opt" disabled={sending} onClick={() => void go(o.label)}>
               <span>{o.label}</span>
               {o.recommended && <span className="rec">{d.recommendedBy}</span>}
             </button>
@@ -187,15 +193,14 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: Pa
           <div className="tm-banner err">Terputus, menyambung ulang…</div>
         )}
         {model.connection === 'connecting' && view === 'loading' && <div className="tm-banner">Menyambung…</div>}
-        {model.stateError && (
-          <div className="tm-banner err">
-            Catatan tim lagi nggak bisa dibaca, yang tampil data terakhir yang valid. Detail: {model.stateError}
-          </div>
+        {model.stateError && <div className="tm-banner err">{model.stateError}</div>}
+        {process.env.TEAM_MONITOR_FIXTURE === '1' && (
+          <div className="tm-banner">Data contoh untuk lihat tampilan, bukan data asli.</div>
         )}
-        {model.fixture && <div className="tm-banner">Data contoh untuk lihat tampilan, bukan data asli.</div>}
       </div>
 
       {view === 'loading' && !model.listError && <div className="tm-banner">Lagi memuat daftar proyek…</div>}
+      {view === 'connecting' && <div className="tm-banner">Lagi memuat catatan tim…</div>}
       {view === 'no-projects' && (
         <Empty title="Belum ada proyek">
           Monitor belum tahu folder proyek mana yang dipantau. Jalankan dengan <code>--project &lt;folder&gt;</code> atau isi
@@ -265,15 +270,17 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: Pa
           </section>
 
           <h2>Lagi dikerjain</h2>
-          {vm.live.length === 0 ? (
-            <div className="tm-empty">Nggak ada yang lagi jalan. Tim lagi siaga.</div>
-          ) : (
-            <div className="tm-bubbles">
-              {vm.live.map((t) => (
-                <Bubble key={t.id} t={t} fresh={fresh.has(`${t.id}:${t.status}`)} />
-              ))}
-            </div>
-          )}
+          <div aria-live="polite">
+            {vm.live.length === 0 ? (
+              <div className="tm-empty">Nggak ada yang lagi jalan. Tim lagi siaga.</div>
+            ) : (
+              <div className="tm-bubbles">
+                {vm.live.map((t) => (
+                  <Bubble key={t.id} t={t} fresh={fresh.has(`${t.id}:${t.status}`)} />
+                ))}
+              </div>
+            )}
+          </div>
 
           <details className="tm-list">
             <summary>

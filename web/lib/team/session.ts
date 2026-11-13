@@ -38,16 +38,50 @@ export function pickProject(projects: TeamProject[], saved: string | null): Team
   return keep ?? projects.find((p) => p.hasState) ?? projects[0]
 }
 
-export type PanelView = 'loading' | 'no-projects' | 'no-data' | 'ready'
+/** 'loading' = project list not here yet; 'connecting' = project chosen, its first state not here yet. */
+export type PanelView = 'loading' | 'connecting' | 'no-projects' | 'no-data' | 'ready'
 
 export function panelView(
   projectsLoaded: boolean,
   projects: TeamProject[],
   hasStateForSelected: boolean,
+  payloadReceived: boolean,
 ): PanelView {
   if (!projectsLoaded) return 'loading'
   if (projects.length === 0) return 'no-projects'
+  // "no data" is only true once the server has answered; before that we simply do not know yet
+  if (!payloadReceived) return 'connecting'
   return hasStateForSelected ? 'ready' : 'no-data'
+}
+
+/** Answers just sent from this browser, kept per project so a late reply never lands in another project. */
+export type LocalAnswers = Record<string, Record<string, string>>
+
+export function addLocalAnswer(all: LocalAnswers, project: string, decisionId: string, answer: string): LocalAnswers {
+  return { ...all, [project]: { ...(all[project] ?? {}), [decisionId]: answer } }
+}
+
+const NO_ANSWERS: Record<string, string> = {}
+
+export function localAnswersFor(all: LocalAnswers, project: string | null): Record<string, string> {
+  return (project && all[project]) || NO_ANSWERS
+}
+
+/** Plain Indonesian for the few fixed error texts the server serves in `error`. No file names, no English. */
+export function plainStateError(raw: string): string {
+  const t = raw.toLowerCase()
+  const reason = t.includes('not valid json')
+    ? 'isinya bukan JSON yang valid'
+    : t.includes('json object')
+      ? 'isinya harus berupa objek JSON'
+      : t.includes('larger than')
+        ? 'ukurannya kebesaran'
+        : t.includes('not a file')
+          ? 'ternyata bukan berkas biasa'
+          : t.includes('cannot be read')
+            ? 'berkasnya nggak bisa dibuka'
+            : ''
+  return `Catatan tim lagi nggak bisa dibaca${reason ? ` (${reason})` : ''}. Yang tampil data terakhir yang valid.`
 }
 
 /**

@@ -1,7 +1,11 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
+  addLocalAnswer,
   hasTeamData,
+  localAnswersFor,
+  plainStateError,
+  type LocalAnswers,
   newBubbleKeys,
   nextThemePref,
   panelView,
@@ -24,10 +28,49 @@ test('pickProject keeps the saved choice, else the first with data, else the fir
 })
 
 test('panelView: loading, no projects, no data yet, ready', () => {
-  assert.equal(panelView(false, [], false), 'loading')
-  assert.equal(panelView(true, [], false), 'no-projects')
-  assert.equal(panelView(true, [P('a', false)], false), 'no-data')
-  assert.equal(panelView(true, [P('a', true)], true), 'ready')
+  assert.equal(panelView(false, [], false, false), 'loading')
+  assert.equal(panelView(true, [], false, false), 'no-projects')
+  assert.equal(panelView(true, [P('a', false)], false, true), 'no-data')
+  assert.equal(panelView(true, [P('a', true)], true, true), 'ready')
+})
+
+test('panelView never claims "no data" before the server answered (TM-P-01)', () => {
+  // project listed with state, stream not connected yet: still connecting, not "Belum ada data tim"
+  assert.equal(panelView(true, [P('a', true)], false, false), 'connecting')
+  assert.equal(panelView(true, [P('a', false)], false, false), 'connecting')
+  // once the server answered with an empty state it is genuinely no data
+  assert.equal(panelView(true, [P('a', true)], false, true), 'no-data')
+})
+
+test('local answers are kept per project, so a late reply cannot close another project\'s decision (TM-P-04)', () => {
+  let all: LocalAnswers = {}
+  all = addLocalAnswer(all, 'a', 'D1', '5 MB')
+  assert.deepEqual(localAnswersFor(all, 'a'), { D1: '5 MB' })
+  assert.deepEqual(localAnswersFor(all, 'b'), {})
+  assert.deepEqual(localAnswersFor(all, null), {})
+  all = addLocalAnswer(all, 'b', 'D1', 'lain')
+  all = addLocalAnswer(all, 'a', 'D2', 'ya')
+  assert.deepEqual(localAnswersFor(all, 'a'), { D1: '5 MB', D2: 'ya' })
+  assert.deepEqual(localAnswersFor(all, 'b'), { D1: 'lain' })
+})
+
+test('state error banner is plain Indonesian, with no English text and no file name (TM-P-05)', () => {
+  const raws = [
+    'state.json is not valid JSON',
+    'state.json must contain a JSON object',
+    'state.json is larger than 1048576 bytes',
+    'state.json cannot be read',
+    'state.json is not a file',
+    'something unexpected',
+  ]
+  const out = raws.map(plainStateError)
+  for (const t of out) {
+    assert.ok(!t.includes('state.json') && !/valid|must|larger|cannot|unexpected/.test(t.replaceAll('yang valid', '')), t)
+    assert.ok(t.startsWith('Catatan tim lagi nggak bisa dibaca'))
+  }
+  assert.ok(out[0].includes('bukan JSON yang valid'))
+  assert.ok(out[2].includes('kebesaran'))
+  assert.equal(new Set(out.slice(0, 5)).size, 5, 'each known error has its own reason')
 })
 
 test('hasTeamData is false for null, empty and all-empty sections', () => {

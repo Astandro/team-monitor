@@ -42,6 +42,33 @@ test('long titles are kept whole (O3)', () => {
   assert.ok(kaito && kaito.task.endsWith('tombol bagikan'))
 })
 
+test('long decision titles, questions and options are kept whole (O3, TM-P-02)', () => {
+  const long = 'Apakah kita sepakat memakai satu batas ukuran gambar untuk semua jenis halaman di seluruh aplikasi ini?'
+  const opt = 'Pakai batas sepuluh megabyte untuk semua gambar sampul dan galeri proyek tanpa kecuali apa pun'
+  const vm = buildTeamVM(
+    { approvals: { D1: { title: long, question: long + ' Tolong jawab.', options: [opt], recommended: opt, status: 'open' } } },
+    { now: NOW },
+  )
+  const d = vm.decisions[0]
+  assert.equal(d.title, long)
+  assert.equal(d.question, long + ' Tolong jawab.')
+  assert.equal(d.options[0].label, opt)
+  assert.equal(d.options[0].recommended, true)
+  const answered = buildTeamVM({ approvals: { D1: { title: long, status: 'answered', answer: opt } } }, { now: NOW })
+  assert.equal(answered.decisions[0].title, long)
+  assert.equal(answered.decisions[0].answer, opt)
+})
+
+test('an agent with neither nick nor name gets a plain placeholder, never its id (TM-P-03)', () => {
+  const vm = buildTeamVM({ agents: { agent_x7: { model: 'Opus 5.5', status: 'idle', order: 1 } } }, { now: NOW })
+  const m = vm.members[0]
+  assert.equal(m.nick, 'Anggota tim')
+  assert.equal(m.initial, 'A')
+  // the id may stay as an internal key, but nothing the viewer reads may contain it
+  const { id: _id, ...shown } = m
+  assert.ok(!JSON.stringify(shown).includes('agent_x7'))
+})
+
 test('a member working on a task key shows the task title, never the key (O2)', () => {
   const vm = buildTeamVM(fixture(), { now: NOW })
   const yuki = vm.members.find((m) => m.nick === 'Yuki')

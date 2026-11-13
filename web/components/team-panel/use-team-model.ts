@@ -3,7 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { submitAnswer, type AnswerResult, type FetchLike } from '@/lib/team/answer'
 import { makeFixtureFetch, makeFixtureState, FIXTURE_PROJECTS } from '@/lib/team/fixtures/sample'
-import { hasTeamData, panelView, pickProject, reconnectDelay, type PanelView } from '@/lib/team/session'
+import {
+  addLocalAnswer,
+  hasTeamData,
+  localAnswersFor,
+  panelView,
+  pickProject,
+  plainStateError,
+  reconnectDelay,
+  type LocalAnswers,
+  type PanelView,
+} from '@/lib/team/session'
 import type { TeamProject, TeamState, TeamStatePayload } from '@/lib/team/types'
 import { buildTeamVM, type TeamVM } from '@/lib/team/view-model'
 import { readStored, writeStored } from './storage'
@@ -41,7 +51,7 @@ export function useTeamModel(): TeamModel {
   const [chosen, setChosen] = useState<string | null>(() => (typeof window === 'undefined' ? null : readStored(PROJECT_KEY)))
   const [payload, setPayload] = useState<TeamStatePayload | null>(null)
   const [connection, setConnection] = useState<Connection>('connecting')
-  const [localAnswers, setLocalAnswers] = useState<Record<string, string>>({})
+  const [localAnswers, setLocalAnswers] = useState<LocalAnswers>({})
   const [now, setNow] = useState(() => Date.now())
 
   const selected = useMemo(() => pickProject(projects, chosen), [projects, chosen])
@@ -85,10 +95,9 @@ export function useTeamModel(): TeamModel {
   // live state of the selected project
   useEffect(() => {
     setPayload(null)
-    setLocalAnswers({})
     if (!selectedId) return
     if (FIXTURE) {
-      setPayload({ state: makeFixtureState(selectedId, Date.now()), error: null })
+      setPayload({ project: selectedId, state: makeFixtureState(selectedId, Date.now()), error: null })
       setConnection('live')
       return
     }
@@ -112,7 +121,7 @@ export function useTeamModel(): TeamModel {
           if (data.type !== 'team_state' || (data.project && data.project !== selectedId)) return
           attempt = 0
           setConnection('live')
-          setPayload({ state: data.state ?? null, error: data.error ?? null, updatedAt: data.updatedAt })
+          setPayload({ project: selectedId, state: data.state ?? null, error: data.error ?? null, updatedAt: data.updatedAt })
           setNow(Date.now())
         } catch {
           /* ignore a frame we cannot read */
@@ -147,11 +156,16 @@ export function useTeamModel(): TeamModel {
     }
   }, [selectedId, loadProjects])
 
-  const state: TeamState | null = payload?.state ?? null
-  const dataReady = payload !== null && hasTeamData(state)
-  const view = panelView(loaded, projects, dataReady)
+  // a payload that belongs to the previously selected project does not count for this one
+  const current = payload !== null && payload.project === selectedId ? payload : null
+  const state: TeamState | null = current?.state ?? null
+  const view = panelView(loaded, projects, hasTeamData(state), current !== null)
   const projectName = selected?.name ?? ''
-  const vm = useMemo(() => buildTeamVM(state, { now, localAnswers, projectName }), [state, now, localAnswers, projectName])
+  const shownAnswers = localAnswersFor(localAnswers, selectedId)
+  const vm = useMemo(
+    () => buildTeamVM(state, { now, localAnswers: shownAnswers, projectName }),
+    [state, now, shownAnswers, projectName],
+  )
 
   const fetchRef = useRef<FetchLike>(
     FIXTURE ? makeFixtureFetch() : (url, init) => fetch(url, init) as ReturnType<FetchLike>,
@@ -161,7 +175,9 @@ export function useTeamModel(): TeamModel {
     async (decisionId: string, answer: string): Promise<AnswerResult> => {
       if (!selectedId) return { ok: false, kind: 'error', status: 0, message: 'Belum ada proyek yang dipilih.' }
       const result = await submitAnswer(fetchRef.current, selectedId, decisionId, answer)
-      if (result.ok) setLocalAnswers((prev) => ({ ...prev, [decisionId]: answer.trim() }))
+      // keyed by the project this answer was sent to, so a reply that lands after a switch cannot close
+      // a same-named decision in another project
+      if (result.ok) setLocalAnswers((prev) => addLocalAnswer(prev, selectedId, decisionId, answer.trim()))
       else if (result.kind === 'login') goToLogin()
       return result
     },
@@ -177,7 +193,7 @@ export function useTeamModel(): TeamModel {
     view,
     connection,
     listError,
-    stateError: payload?.error ?? '',
+    stateError: current?.error ? plainStateError(current.error) : '',
     projects,
     selectedId,
     selectProject,
