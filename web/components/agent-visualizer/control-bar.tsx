@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
+import { useGraphTheme } from '@/hooks/use-graph-theme'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -49,6 +50,7 @@ const EventMarkers = memo(function EventMarkers({ events, totalDuration, classNa
   /** Pass events.length to bust memo when array is mutated in place */
   eventCount?: number
 }) {
+  useGraphTheme()
   // Down-sample to MAX_SCRUBBER_DOTS evenly spaced events when list is large
   const visible = events.length > MAX_SCRUBBER_DOTS
     ? Array.from({ length: MAX_SCRUBBER_DOTS }, (_, i) => events[Math.floor(i * events.length / MAX_SCRUBBER_DOTS)])
@@ -117,7 +119,6 @@ function LiveControlBar({
             className="w-2 h-2 rounded-full transition-opacity duration-500"
             style={{
               background: COLORS.liveDot,
-              boxShadow: pulseOn ? `0 0 8px ${COLORS.liveDot}, 0 0 16px rgba(255,68,68,0.3)` : `0 0 4px ${COLORS.liveDot}80`,
               opacity: pulseOn ? 1 : 0.6,
             }}
           />

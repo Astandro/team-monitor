@@ -104,11 +104,69 @@ export function newestSubagentMtime(dir: string): number {
   return newest
 }
 
+function birthMs(filePath: string): number {
+  try {
+    const st = fs.statSync(filePath)
+    return st.birthtimeMs || st.mtimeMs
+  } catch { return 0 }
+}
+
+/** What a subagent's `.meta.json` sidecar says about how it was launched and whether it finished. */
+export interface SubagentMeta {
+  toolUseId?: string
+  finished?: boolean
+  model?: string
+}
+
+export function readSubagentMeta(jsonlPath: string): SubagentMeta {
+  try {
+    const meta = JSON.parse(fs.readFileSync(jsonlPath.replace(/\.jsonl$/, '.meta.json'), 'utf-8')) as Record<string, unknown>
+    const model = meta.pickedEffortModel
+    return {
+      toolUseId: typeof meta.toolUseId === 'string' ? meta.toolUseId : undefined,
+      finished: meta.finished === true,
+      model: typeof model === 'string' && model.startsWith('claude-') ? model : undefined,
+    }
+  } catch { return {} }
+}
+
+/**
+ * Whether a subagent found when a session is (re)attached has already finished.
+ * Claude Code writes `finished: true` into the meta sidecar when a subagent stops.
+ * Without it (older versions, or still running), the subagent counts as running
+ * while its own transcript has unmatched tool calls, its Agent/Task launch has no
+ * tool_result yet, or its background launch has no <task-notification> yet.
+ */
+export function isSubagentFinishedAtAttach(s: {
+  metaFinished: boolean
+  pendingInFile: number
+  launchPending: boolean
+  backgroundRunning: boolean
+}): boolean {
+  if (s.metaFinished) return true
+  return !(s.pendingInFile > 0 || s.launchPending || s.backgroundRunning)
+}
+
+/**
+ * Rebuild every subagent of a session that is being attached (page load after a
+ * server restart, or a session first seen with history). Each transcript under
+ * `subagents/` gets a node: finished ones are spawned and completed at once (the
+ * graph keeps them dimmed), running ones stay live and are tailed from here on.
+ */
+export function rebuildSubagentsOnAttach(
+  delegate: SubagentWatcherDelegate,
+  parser: TranscriptParser,
+  sessionId: string,
+): void {
+  scanSubagentsDir(delegate, parser, sessionId, new Set())
+}
+
 /** Scan the subagents directory for new JSONL files and start tailing them */
 export function scanSubagentsDir(
   delegate: SubagentWatcherDelegate,
   parser: TranscriptParser,
   sessionId: string,
+  rebuilt?: Set<string>,
 ): void {
   const session = delegate.getSession(sessionId)
   if (!session || !session.subagentsDir) return
@@ -133,9 +191,12 @@ export function scanSubagentsDir(
 
   try {
     // Recurse — Workflow subagents live under subagents/workflows/wf_<id>/.
-    for (const filePath of collectSubagentJsonlFiles(subDir)) {
+    const files = collectSubagentJsonlFiles(subDir)
+    // A rebuild spawns the nodes oldest first, the order the team was launched in.
+    if (rebuilt) files.sort((a, b) => birthMs(a) - birthMs(b))
+    for (const filePath of files) {
       if (session.subagentWatchers.has(filePath)) continue
-      startWatchingSubagentFile(delegate, parser, filePath, sessionId)
+      startWatchingSubagentFile(delegate, parser, filePath, sessionId, rebuilt)
     }
   } catch (err) { log.debug('Subagent dir scan failed:', err) }
 }
@@ -197,6 +258,7 @@ function startWatchingSubagentFile(
   parser: TranscriptParser,
   filePath: string,
   sessionId: string,
+  rebuilt?: Set<string>,
 ): void {
   const session = delegate.getSession(sessionId)
   if (!session) return
@@ -247,13 +309,34 @@ function startWatchingSubagentFile(
     }
   } catch (err) { log.debug('Subagent initial read failed:', err) }
 
-  // Only emit spawn for subagents that are still active (have pending work)
-  // AND haven't already been spawned by the transcript parser.
-  const alreadySpawned = session.spawnedSubagents.has(agentName)
-  state.spawnEmitted = pendingToolUseIds.size > 0 || alreadySpawned
-  if (pendingToolUseIds.size > 0 && !alreadySpawned) {
+  if (rebuilt) {
+    // Session attach: the pre-scan of the main transcript only recorded names in
+    // spawnedSubagents, nothing was emitted yet, so every subagent gets its node here.
+    state.spawnEmitted = true
     session.spawnedSubagents.add(agentName)
-    emitSubagentSpawn(delegate, ORCHESTRATOR_NAME, agentName, agentName, sessionId)
+    if (!rebuilt.has(agentName)) {
+      rebuilt.add(agentName)
+      const meta = readSubagentMeta(filePath)
+      emitSubagentSpawn(delegate, ORCHESTRATOR_NAME, agentName, agentName, sessionId)
+      if (meta.model && !session.modelDetectedAgents.has(agentName)) {
+        session.modelDetectedAgents.set(agentName, meta.model)
+        delegate.emit({ time: delegate.elapsed(sessionId), type: 'model_detected', payload: { agent: agentName, model: meta.model } }, sessionId)
+      }
+      const finished = isSubagentFinishedAtAttach({
+        metaFinished: meta.finished === true,
+        pendingInFile: pendingToolUseIds.size,
+        launchPending: meta.toolUseId ? session.pendingToolCalls.has(meta.toolUseId) : false,
+        backgroundRunning: meta.toolUseId ? parser.isBackgroundSubagentRunning(meta.toolUseId) : false,
+      })
+      if (finished) {
+        state.completed = true
+        delegate.emit({ time: delegate.elapsed(sessionId), type: 'agent_complete', payload: { name: agentName } }, sessionId)
+      }
+    }
+  } else {
+    // Only emit spawn for subagents that are still active (have pending work)
+    // AND haven't already been spawned by the transcript parser.
+    emitSpawnIfActive(delegate, session, state, agentName, pendingToolUseIds.size > 0, sessionId)
   }
 
   // Watch for new content
@@ -262,6 +345,22 @@ function startWatchingSubagentFile(
       readSubagentNewLines(delegate, parser, filePath, sessionId)
     })
   } catch (err) { log.debug('Subagent file watch failed:', err) }
+}
+
+function emitSpawnIfActive(
+  delegate: SubagentWatcherDelegate,
+  session: WatchedSession,
+  state: SubagentState,
+  agentName: string,
+  hasPendingWork: boolean,
+  sessionId: string,
+): void {
+  const alreadySpawned = session.spawnedSubagents.has(agentName)
+  state.spawnEmitted = hasPendingWork || alreadySpawned
+  if (hasPendingWork && !alreadySpawned) {
+    session.spawnedSubagents.add(agentName)
+    emitSubagentSpawn(delegate, ORCHESTRATOR_NAME, agentName, agentName, sessionId)
+  }
 }
 
 export function readSubagentNewLines(

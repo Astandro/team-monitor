@@ -34,6 +34,10 @@ export interface SessionInfo {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Team project the session belongs to (standalone app with registered projects). */
+  projectId?: string
+  /** The session's first prompt when the label is a project title instead. */
+  prompt?: string
 }
 
 // ─── Extension → Webview Messages ────────────────────────────────────────────

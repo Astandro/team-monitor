@@ -35,8 +35,49 @@
 .tm-pane{position:absolute;inset:0}
 .tm-pane[data-active="false"]{visibility:hidden;pointer-events:none}
 .tm-pane-team{overflow-y:auto;overflow-x:hidden;background:var(--bg);overscroll-behavior:contain}
-.tm-pane-graph{background:#0a0a1a}
 .tm-pane-graph > div{height:100%!important;width:100%!important}
+
+/* Graph chrome in the panel's look (spec graph-theme items 1-2): same tokens, font and radius. The tokens carry a
+   --g- prefix here because the graph also uses Tailwind, whose --muted / --accent / --radius mean other things.
+   The canvas itself takes the same values from web/lib/graph-palette.ts (a test keeps the two in sync). */
+.tm-pane-graph{
+  --g-bg:#F6F1E7; --g-surface:#FFFDF8; --g-sunk:#EFE8DA; --g-ink:#2A2620; --g-muted:#655D51; --g-line:#E2D9C8;
+  --g-accent:#1D6B66; --g-accent-soft:rgba(29,107,102,.14);
+  --g-shadow:0 1px 0 rgba(42,38,32,.04),0 6px 18px -10px rgba(42,38,32,.25);
+  --g-font:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --g-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--g-bg); color:var(--g-ink); font-family:var(--g-font); color-scheme:light;
+}
+.tm-root[data-tm-theme="dark"] .tm-pane-graph{
+  --g-bg:#15130F; --g-surface:#1E1B16; --g-sunk:#26221B; --g-ink:#EEE7D9; --g-muted:#A99F8E; --g-line:#332E25;
+  --g-accent:#62C3B9; --g-accent-soft:rgba(98,195,185,.16);
+  --g-shadow:0 1px 0 rgba(0,0,0,.3),0 8px 22px -12px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+/* Readable sans like the panel; code, paths and command output keep a monospace face (.tm-code). */
+.tm-pane-graph .font-mono{font-family:var(--g-font)}
+.tm-pane-graph .tm-code, .tm-pane-graph .tm-code *{font-family:var(--g-mono)}
+.tm-pane-graph .text-\[9px\]{font-size:11px}
+.tm-pane-graph .text-\[10px\]{font-size:12px}
+.tm-pane-graph .text-\[11px\]{font-size:13px}
+.tm-pane-graph .tracking-wider, .tm-pane-graph .tracking-widest{letter-spacing:.02em}
+.tm-pane-graph .glass-card{
+  background:var(--g-surface); border:1px solid var(--g-line); border-radius:14px; box-shadow:var(--g-shadow);
+  backdrop-filter:none; -webkit-backdrop-filter:none;
+}
+.tm-pane-graph .glass-card::before{display:none}
+.tm-pane-graph .glass-card input, .tm-pane-graph .glass-card textarea, .tm-pane-graph .glass-card select{
+  background:var(--g-sunk)!important; border:1px solid var(--g-line)!important; color:var(--g-ink)!important;
+  font-family:var(--g-font); border-radius:10px;
+}
+.tm-pane-graph .glass-card input::placeholder, .tm-pane-graph .glass-card textarea::placeholder{color:var(--g-muted)}
+.tm-pane-graph .glass-card input:focus, .tm-pane-graph .glass-card textarea:focus{border-color:var(--g-accent)!important;box-shadow:none}
+.tm-pane-graph .glass-card ::-webkit-scrollbar-thumb{background:var(--g-line)}
+.tm-pane-graph .hover\:bg-white\/5:hover{background:var(--g-sunk)}
+.tm-pane-graph button.rounded,.tm-pane-graph .rounded-lg{border-radius:10px}
+.tm-pane-graph button{cursor:pointer}
+.tm-pane-graph button:disabled{cursor:not-allowed}
+.tm-pane-graph :focus-visible{outline:2px solid var(--g-accent);outline-offset:2px}
 .tm-nav{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 10px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--line)}
 .tm-nav button{font:inherit;font-weight:600;font-size:14px;min-height:48px;border:1px solid transparent;border-radius:12px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:8px}
 .tm-nav button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}

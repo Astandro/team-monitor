@@ -19,6 +19,10 @@ export interface SessionInfo {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Team project the session belongs to (standalone app with registered projects). */
+  projectId?: string
+  /** The session's first prompt, kept for the detail view; the label is the project title or folder name. */
+  prompt?: string
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'watching'

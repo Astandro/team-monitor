@@ -124,56 +124,35 @@
   }
 }
 
-/* Glass card effect */
+/* Floating card (panels, popups, control bar). Default = the team panel's warm dark (the graph palette's default
+   theme, used where no page theme exists, e.g. the VS Code webview). The standalone app overrides these with its
+   theme tokens in team-panel.css. */
 .glass-card {
-  background: rgba(10, 15, 30, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(100, 200, 255, 0.15);
-  border-radius: 8px;
+  background: #1E1B16;
+  border: 1px solid #332E25;
+  border-radius: 14px;
   padding: 12px;
-  box-shadow:
-    0 0 20px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 rgba(100, 200, 255, 0.08);
-}
-
-.glass-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(100, 200, 255, 0.15),
-    transparent
-  );
-  border-radius: 8px 8px 0 0;
-  pointer-events: none;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3), 0 8px 22px -12px rgba(0, 0, 0, 0.7);
 }
 
 /* Glass card inputs */
 .glass-card input,
 .glass-card textarea,
 .glass-card select {
-  background: rgba(100, 200, 255, 0.05) !important;
-  border: 1px solid rgba(100, 200, 255, 0.15) !important;
-  color: #aaeeff !important;
-  font-family: monospace;
+  background: #26221B !important;
+  border: 1px solid #332E25 !important;
+  color: #EEE7D9 !important;
 }
 
 .glass-card input::placeholder,
 .glass-card textarea::placeholder {
-  color: rgba(102, 204, 255, 0.3);
+  color: #A99F8E;
 }
 
 .glass-card input:focus,
 .glass-card textarea:focus {
-  border-color: rgba(102, 204, 255, 0.3) !important;
+  border-color: #62C3B9 !important;
   outline: none;
-  box-shadow: 0 0 8px rgba(102, 204, 255, 0.1);
 }
 
 /* Custom scrollbar for glass cards */
@@ -186,12 +165,12 @@
 }
 
 .glass-card ::-webkit-scrollbar-thumb {
-  background: rgba(100, 200, 255, 0.15);
+  background: #332E25;
   border-radius: 2px;
 }
 
 .glass-card ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 200, 255, 0.25);
+  background: #A99F8E;
 }
 
 /* Hide scrollbar but keep scroll functionality */

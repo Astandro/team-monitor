@@ -1,17 +1,21 @@
 import type { SimulationState } from './types'
-import { TOOL_MIN_DISPLAY_S, TOOL_MAX_RUNNING_S, DISCOVERY_HOLD_S, BUBBLE_VISIBLE_S, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
+import { TOOL_MIN_DISPLAY_S, TOOL_MAX_RUNNING_S, DISCOVERY_HOLD_S, BUBBLE_VISIBLE_S, MIN_VISIBLE_OPACITY, COMPLETED_SUBAGENT_OPACITY } from '@/lib/canvas-constants'
 
 /** Snap visual properties to their analytically correct values at a given time (used during seek) */
 export function snapVisualState(state: SimulationState, targetTime: number): SimulationState {
 
   const newAgents = new Map(state.agents)
   for (const [id, agent] of newAgents) {
+    const snapped = { ...agent }
     if (agent.state === 'complete' && !agent.isMain) {
-      // Remove completed sub-agents entirely during seek
-      newAgents.delete(id)
+      // Finished sub-agents stay on the graph, dimmed (tm/keep-subagents). A seek or a replay of buffered events
+      // (page load, session switch) used to delete them here, so only the Orchestrator was left.
+      snapped.opacity = COMPLETED_SUBAGENT_OPACITY
+      snapped.scale = 0.8
+      snapped.messageBubbles = agent.messageBubbles.filter(b => targetTime - b.time <= BUBBLE_VISIBLE_S)
+      newAgents.set(id, snapped)
       continue
     }
-    const snapped = { ...agent }
     if (agent.state !== 'complete') {
       snapped.opacity = 1
       snapped.scale = 1

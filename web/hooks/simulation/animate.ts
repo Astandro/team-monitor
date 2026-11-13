@@ -27,6 +27,10 @@ export function animateAgents(agents: SimulationState['agents'], deltaTime: numb
       // Dim to a floor and stay: finished sub-agents remain visible (and are never cleaned up below).
       if (opacity > COMPLETED_SUBAGENT_OPACITY) { opacity = Math.max(COMPLETED_SUBAGENT_OPACITY, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }
       if (scale > 0.8) { scale = Math.max(0.8, scale - deltaTime * ANIM_SPEED.agentScaleOut); updated = true }
+      // Spawned and completed at once (rebuilt after a server restart): it starts at opacity 0, so fade it in to
+      // the floor instead of leaving it invisible (and deleted by the cleanup below, which removes opacity <= 0).
+      if (opacity < COMPLETED_SUBAGENT_OPACITY) { opacity = Math.min(COMPLETED_SUBAGENT_OPACITY, opacity + deltaTime * ANIM_SPEED.agentFadeIn); updated = true }
+      if (scale < 0.8) { scale = Math.min(0.8, scale + deltaTime * ANIM_SPEED.agentScaleIn); updated = true }
     }
     if (agent.state !== 'complete') { timeAlive += deltaTime; updated = true }
     // Prune expired message bubbles
@@ -82,26 +86,15 @@ function cleanupFaded(
   agents: SimulationState['agents'],
   toolCalls: SimulationState['toolCalls'],
   edges: SimulationState['edges'],
-  originalAgents: SimulationState['agents'],
   originalToolCalls: SimulationState['toolCalls'],
 ): { agents: SimulationState['agents']; toolCalls: SimulationState['toolCalls']; edges: SimulationState['edges'] } {
-  let newAgents = agents
+  const newAgents = agents
   let newToolCalls = toolCalls
   let filteredEdges = edges
 
-  // Cleanup faded agents (completed sub-agents) and their edges
-  const fadedAgentIds: string[] = []
-  for (const [id, agent] of newAgents) {
-    if (!agent.isMain && agent.state === 'complete' && agent.opacity <= 0) {
-      fadedAgentIds.push(id)
-    }
-  }
-  if (fadedAgentIds.length > 0) {
-    if (newAgents === originalAgents) newAgents = new Map(originalAgents)
-    const fadedSet = new Set(fadedAgentIds)
-    for (const id of fadedAgentIds) newAgents.delete(id)
-    filteredEdges = filteredEdges.filter(e => !fadedSet.has(e.from) && !fadedSet.has(e.to))
-  }
+  // Agents are never removed: finished sub-agents stay on the graph, dimmed (tm/keep-subagents). Upstream deleted
+  // completed sub-agents at opacity 0, which also caught ones spawned already finished (rebuilt after a server
+  // restart) before their first fade-in frame.
 
   // Cleanup faded tool calls (opacity <= 0) and their edges
   const fadedToolIds: string[] = []
@@ -161,7 +154,7 @@ export function computeNextFrame(prev: SimulationState, deltaTime: number, newTi
       const newToolCallsRaw = animateToolCalls(currentState.toolCalls, deltaTime, newTime)
 
       const { agents: newAgents, toolCalls: newToolCalls, edges: filteredEdges } =
-        cleanupFaded(newAgentsRaw, newToolCallsRaw, newEdgesRaw, currentState.agents, currentState.toolCalls)
+        cleanupFaded(newAgentsRaw, newToolCallsRaw, newEdgesRaw, currentState.toolCalls)
 
       const newDiscoveries = animateDiscoveries(currentState.discoveries, deltaTime, newTime)
       const newParticles = animateParticles(currentState.particles, deltaTime, currentState.speed)

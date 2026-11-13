@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { AgentVisualizer } from '@/components/agent-visualizer'
+import { applyGraphTheme } from '@/lib/colors'
 import { nextThemePref, parseThemePref, resolveTheme, type ThemePref } from '@/lib/team/session'
 import { readStored, writeStored } from './storage'
 import { TeamPanel } from './team-panel'
@@ -42,15 +43,18 @@ export function TeamApp() {
   useEffect(() => writeStored('tm-calm', calm ? '1' : '0'), [calm])
 
   const open = model.view === 'ready' ? model.vm.openDecisions : 0
+  const resolved = resolveTheme(theme, systemDark)
+  // One theme switch for the whole page: the graph palette follows the panel's, before the next paint.
+  useLayoutEffect(() => applyGraphTheme(resolved), [resolved])
 
   return (
-    <div className={`tm-root tm-app${calm ? ' tm-calm' : ''}`} data-tm-theme={resolveTheme(theme, systemDark)}>
+    <div className={`tm-root tm-app${calm ? ' tm-calm' : ''}`} data-tm-theme={resolved}>
       <div className="tm-panes">
         <main className="tm-pane tm-pane-team tm-themed" id="tm-panel-tim" data-active={pane === 'tim'} aria-label="Tim">
           <TeamPanel model={model} theme={theme} onCycleTheme={cycleTheme} calm={calm} onToggleCalm={toggleCalm} />
         </main>
         <section className="tm-pane tm-pane-graph" id="tm-panel-grafik" data-active={pane === 'grafik'} aria-label="Grafik">
-          <AgentVisualizer />
+          <AgentVisualizer projectId={model.selectedId} />
         </section>
       </div>
       {/* Two plain toggle buttons (not a half-finished tab pattern): Tab/Enter/Space work natively */}

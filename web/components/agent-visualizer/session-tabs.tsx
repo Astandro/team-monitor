@@ -47,6 +47,7 @@ export function SessionTabs({
             key={session.id}
             ref={(el) => setButtonRef(session.id, el)}
             onClick={() => onSelectSession(session.id)}
+            title={session.prompt ? `Prompt pertama: ${session.prompt}` : undefined}
             className="group px-1.5 py-0.5 rounded transition-all flex items-center gap-1"
             style={{
               flexShrink: 1,

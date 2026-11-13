@@ -10,6 +10,7 @@ import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookie
 import { hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
+import { titleFromState, type WatchedProject } from '../../../scripts/session-projects'
 
 export const MAX_ANSWER_BODY_BYTES = 16 * 1024
 const MAX_LOGIN_BODY_BYTES = 4 * 1024
@@ -41,6 +42,14 @@ export class TeamService {
 
   list() {
     return this.projects.map((p) => ({ id: p.id, name: p.name, hasState: hasState(p.path) }))
+  }
+
+  /** The projects the graph follows, with each one's current `meta.title` (spec graph-theme items 3-4). */
+  graphProjects(): WatchedProject[] {
+    return this.projects.map((p) => ({
+      id: p.id, name: p.name, path: p.path,
+      title: titleFromState(this.watchers.get(p.id)?.rawState()),
+    }))
   }
 
   trackSSE(res: http.ServerResponse): () => void {
