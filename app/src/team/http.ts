@@ -158,6 +158,8 @@ export interface HandlerOptions {
   log?: (msg: string) => void
   /** Hub intake (`--ingest`); null or absent = every /api/ingest/* route answers 404. */
   ingest?: IngestHandler | null
+  /** Cloud mode in a container (team/index.ts `acceptsAnyHost`): skip the Host check. Never set with `remote`. */
+  anyHost?: boolean
 }
 
 /** What the request handler needs from the hub intake (implemented by IngestService in ingest.ts). */
@@ -318,7 +320,9 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
       return void opts.ingest.handle(req, res, ingestPath.pathname, ingestPath.query)
     }
 
-    const hostOk = remote ? isAllowedRemoteHost(req.headers.host, remote.config) : isLoopbackHost(req.headers.host)
+    const hostOk = remote
+      ? isAllowedRemoteHost(req.headers.host, remote.config)
+      : (opts.anyHost === true || isLoopbackHost(req.headers.host))
     if (!hostOk) {
       res.writeHead(403, { 'Content-Type': 'text/plain' })
       res.end('Forbidden')

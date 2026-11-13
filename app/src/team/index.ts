@@ -18,6 +18,16 @@ export interface TeamCliOptions {
   tailscaleBin?: string
   /** Hub intake for cloud sources (`--ingest`); off by default. */
   ingest?: boolean
+  /** Started by `cloud start` (`--cloud`): with CLAUDE_CODE_REMOTE=true any Host header is accepted (still loopback
+   *  only), so the cloud app's preview pane can load the UI. Never with --remote or --ingest. */
+  cloud?: boolean
+}
+
+export class CloudModeError extends Error {}
+
+/** Accept any Host: only for a monitor started by cloud mode inside a cloud session. */
+export function acceptsAnyHost(opts: Pick<TeamCliOptions, 'cloud' | 'remote' | 'ingest'>, env: NodeJS.ProcessEnv): boolean {
+  return opts.cloud === true && !opts.remote && !opts.ingest && env.CLAUDE_CODE_REMOTE === 'true'
 }
 
 export interface TeamSetup {
@@ -46,8 +56,13 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
   const env = deps.env ?? process.env
   const log = deps.log ?? console.log
   const warn = deps.warn ?? console.warn
+  if (opts.cloud && (opts.remote || opts.ingest)) {
+    throw new CloudModeError('--cloud (cloud mode in a container) cannot be combined with --remote or --ingest.')
+  }
   const home = teamHome(env)
   ensureHome(home)
+  const anyHost = acceptsAnyHost(opts, env)
+  if (anyHost) log('Cloud mode: any Host header accepted (listening on loopback only).')
 
   let remote: RemoteAccess | null = null
   let listenHost = '127.0.0.1'
@@ -99,7 +114,7 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
     ingest,
     listenHost,
     tokenFile,
-    createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest }),
+    createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest, anyHost }),
     dispose: () => team.dispose(),
   }
 }

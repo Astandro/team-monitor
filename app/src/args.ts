@@ -19,6 +19,9 @@ export function parseArgs(argv: string[]) {
       const n = parseInt(argv[i + 1], 10)
       if (!isNaN(n) && n > 0 && n < 65536) port = n
       i++
+    } else if (arg === '--cloud') {
+      // Set by `cloud start` only (not a service option): see setupTeam.
+      team.cloud = true
     } else if (arg === '--no-open') {
       open = false
     } else if (arg === '--verbose' || arg === '-v') {
@@ -42,6 +45,10 @@ Team monitor:
   --ingest             Hub intake for cloud sessions on /api/ingest (token in ~/.team-monitor/ingest-token)
   wait-answer ...      Wait for a decision answer or a chat message (see docs/coordinator.md)
   ask ...              Add an open decision D<n> to state.json, optionally --wait for it
+
+Cloud sessions (see docs/cloud.md):
+  cloud start [--project <path>] [--port <n>]  Start the monitor (and forwarder to TEAM_MONITOR_HUB_URL) detached
+  cloud status [--port <n>] | cloud stop
 
 Setup (see docs/setup.md):
   project add <path> [--name <n>] | project remove <id> | project list

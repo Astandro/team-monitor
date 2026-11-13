@@ -18,8 +18,10 @@ import { runAskCli } from './team/ask'
 import { runProjectCli } from './team/projects'
 import { restartIfInstalled, runServiceCli } from './team/service'
 import { runDoctorCli } from './team/doctor'
+import { runCloudCli } from './team/cloud'
 
 const subcommands: Record<string, (argv: string[]) => Promise<number>> = {
+  'cloud': (argv) => runCloudCli(argv),
   'wait-answer': runWaitAnswerCli,
   'ask': runAskCli,
   'project': (argv) => runProjectCli(argv, { restartService: () => restartIfInstalled() }),
