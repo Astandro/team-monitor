@@ -320,6 +320,25 @@ describe('guards: SSE isolation, symlinks, no paths in client bodies', () => {
     }
   })
 
+  test('a dangling symlink at answers/D<n>.json counts as already answered: 409, nothing written at its target', async () => {
+    fs.mkdirSync(answersDir(ctx), { recursive: true, mode: 0o700 })
+    const link = path.join(answersDir(ctx), 'D1.json')
+    const target = path.join(ctx.root, 'dangling-target.json')
+    fs.symlinkSync(target, link)
+    try {
+      assert.equal(fs.existsSync(link), false, 'precondition: existsSync cannot see a dangling link')
+      writeState(ctx.project, sampleState())
+      ctx.team.watcher(PID)!.refresh()
+      const r = await answer(ctx, { project: PID, id: 'D1', answer: 'lewat link' })
+      assert.equal(r.status, 409, r.body)
+      assert.equal(fs.existsSync(target), false, 'nothing written at the link target')
+      assert.equal(fs.lstatSync(link).isSymbolicLink(), true, 'the link was not replaced')
+    } finally {
+      fs.unlinkSync(link)
+      fs.rmdirSync(answersDir(ctx)) // empty again; the next test needs the folder gone
+    }
+  })
+
   test('answers being a regular file gives a generic 500 without the path', async () => {
     fs.writeFileSync(answersDir(ctx), 'not a folder')
     try {
