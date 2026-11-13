@@ -73,7 +73,9 @@ the next wait if other decisions are still open.
 ## 5. Phone access (remote mode)
 
 - Behind `tailscale serve` (recommended, gives https): start with `--remote --bind loopback`, then run
-  `tailscale serve --bg <port>`. Open `https://<machine>.<tailnet>.ts.net/login` on the phone.
+  `tailscale serve --bg http://127.0.0.1:<port>`. Open `https://<machine>.<tailnet>.ts.net/login` on the phone.
+  If port 443 is already used by another serve on that machine, pick another HTTPS port:
+  `tailscale serve --bg --https=8443 http://127.0.0.1:<port>`, and open `https://<machine>.<tailnet>.ts.net:8443/login`.
 - Direct on the Tailscale address: `--remote --bind tailscale` (binds only to the address from `tailscale ip -4`).
   Plain http; the cookie then has no `Secure` flag.
 

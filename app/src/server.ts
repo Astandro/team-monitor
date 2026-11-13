@@ -62,7 +62,9 @@ export async function startServer(options: ServerOptions) {
     const url = `http://${teamSetup.listenHost}:${port}`
     console.log(`Server running at ${url}`)
     if (teamSetup.remote?.config.bindMode === 'loopback') {
-      console.log(`Remote mode behind tailscale serve: run "tailscale serve --bg ${port}" and open https://${teamSetup.remote.config.dnsName ?? '<machine>.ts.net'}/login`)
+      const dns = teamSetup.remote.config.dnsName ?? '<machine>.ts.net'
+      console.log(`Remote mode behind tailscale serve: run "tailscale serve --bg http://127.0.0.1:${port}" and open https://${dns}/login`)
+      console.log(`If port 443 is already used there: "tailscale serve --bg --https=8443 http://127.0.0.1:${port}" and open https://${dns}:8443/login`)
     } else if (teamSetup.remote) {
       console.log(`Remote mode: open http://${teamSetup.remote.config.dnsName ?? teamSetup.listenHost}:${port}/login on your phone`)
     }
