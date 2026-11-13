@@ -16,10 +16,10 @@ npx -y pnpm@10 run build:app
 node app/dist/app.js
 ```
 
-The app opens in your browser and starts a local server on port 3001. Start a Claude Code session in another terminal and events stream in as they happen.
+The app opens in your browser and starts a local server on port 3002 (the VS Code extension and dev relay still use 3001, which upstream agent-flow also uses, so both can run side by side). Start a Claude Code session in another terminal and events stream in as they happen.
 
 Options:
-- `--port <number>`: change the server port (default: 3001)
+- `--port <number>`: change the server port (default: 3002)
 - `--no-open`: do not open the browser automatically
 - `--verbose`: show detailed event logs
 
@@ -55,9 +55,11 @@ Requirements: Node.js 20+, Claude Code CLI. The VS Code extension in `extension/
 
 ## Telemetry
 
-Off by default. Nothing is written to disk and no network call is made unless you explicitly set `TEAM_MONITOR_TELEMETRY=true`. `AGENT_FLOW_TELEMETRY=false` and `DO_NOT_TRACK=1` always disable it, even after opt-in.
+None. Team Monitor does not collect or send usage data, and there is no setting to turn it on: nothing is written to disk and no network call is made, whatever environment variables are set. The upstream endpoint and key were removed from `scripts/telemetry.ts`.
 
-Note: the telemetry endpoint constants in `scripts/telemetry.ts` are inherited from upstream and point to the upstream project's Supabase. Do not opt in unless those are replaced.
+## Uninstalling the VS Code extension
+
+The extension's uninstall script removes agent-flow hooks from your Claude Code settings and deletes `~/.claude/agent-flow/`. That directory is shared with upstream agent-flow, so uninstalling the extension also removes the hooks of any agent-flow install on the same machine. Re-run `npx -y pnpm@10 run setup` afterwards if you still need them.
 
 ## License
 

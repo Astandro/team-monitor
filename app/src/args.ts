@@ -1,8 +1,10 @@
-import { DEFAULT_RELAY_PORT } from '../../extension/src/constants'
+/** Default port of the standalone app. The extension's DEFAULT_RELAY_PORT (3001) is left alone;
+ *  the standalone UI is same-origin and hooks find instances via discovery files, so this is free to differ. */
+export const APP_DEFAULT_PORT = 3002
 
 /** Parse CLI arguments. Keeps it simple — no dependencies. */
 export function parseArgs(argv: string[]) {
-  let port = DEFAULT_RELAY_PORT
+  let port = APP_DEFAULT_PORT
   let open = true
   let verbose = false
 
@@ -21,7 +23,7 @@ export function parseArgs(argv: string[]) {
 Usage: team-monitor [options]
 
 Options:
-  -p, --port <number>  Port for the server (default: ${DEFAULT_RELAY_PORT})
+  -p, --port <number>  Port for the server (default: ${APP_DEFAULT_PORT})
   --no-open            Don't open the browser automatically
   -v, --verbose        Show detailed event logs
   -h, --help           Show this help message
