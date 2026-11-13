@@ -1,0 +1,78 @@
+name: Release
+
+# On a version tag (v1.2.3, matching app/package.json): test, build, pack app/dist as team-monitor-<version>.tgz with
+# its .sha256 and the two lines a project pins in scripts/cloud/team-monitor-hook.sh, and attach them to a GitHub
+# release. The cloud hook downloads https://github.com/<repo>/releases/download/v<version>/team-monitor-<version>.tgz.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Version from the tag (must match app/package.json)
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            ''|*[!0-9A-Za-z.+-]*) echo "::error::tag $GITHUB_REF_NAME is not v<version>"; exit 1 ;;
+          esac
+          pkg=$(node -p "require('./app/package.json').version")
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match app/package.json version $pkg"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npx -y pnpm@10 install --frozen-lockfile
+
+      - name: Test
+        run: npx -y pnpm@10 run test
+
+      - name: Build
+        run: npx -y pnpm@10 run build:app
+
+      - name: Pack
+        run: sh scripts/cloud/pack-release.sh dist/release
+
+      - name: Release notes with the pin lines
+        run: |
+          {
+            echo "Pin this release in your copy of \`scripts/cloud/team-monitor-hook.sh\`:"
+            echo
+            echo '```sh'
+            cat "dist/release/team-monitor-$VERSION.pin.txt"
+            echo '```'
+            echo
+            echo "Setup of the hub, the cloud environment and the project: docs/cloud.md."
+          } > dist/release/notes.md
+          cat dist/release/notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/release/team-monitor-$VERSION.tgz" \
+            "dist/release/team-monitor-$VERSION.tgz.sha256" \
+            "dist/release/team-monitor-$VERSION.pin.txt" \
+            --title "team-monitor $VERSION" \
+            --notes-file dist/release/notes.md \
+            --verify-tag
