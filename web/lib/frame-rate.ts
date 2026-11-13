@@ -29,9 +29,9 @@ export function graphFrameRate(v: GraphVisibility): number {
 
 /**
  * Whether the graph pane is on screen in the standalone app: always from 1024 px (panel column + graph), below that
- * only while the Grafik tab is chosen.
+ * only while the Grafik tab is chosen (the Tim and Chat tabs hide it).
  */
-export function graphPaneVisible(pane: 'tim' | 'grafik', desktop: boolean): boolean {
+export function graphPaneVisible(pane: 'tim' | 'grafik' | 'chat', desktop: boolean): boolean {
   return desktop || pane === 'grafik'
 }
 

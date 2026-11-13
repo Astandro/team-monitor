@@ -13,13 +13,13 @@ import {
 import { buildTeamVM } from './view-model'
 import { makeFixtureState } from './fixtures/sample'
 
-test('section order: stages, live, open decisions, team, chat, queue, offboarded, answered (item 4)', () => {
-  assert.deepEqual(panelSections(2), ['stages', 'live', 'decisions', 'team', 'chat', 'queue', 'offboarded', 'answered'])
+test('section order: stages, live, open decisions, team, queue, offboarded, answered; no chat in the panel (item 4, spec-chat-layout)', () => {
+  assert.deepEqual(panelSections(2), ['stages', 'live', 'decisions', 'team', 'queue', 'offboarded', 'answered'])
   assert.deepEqual([...SECTION_ORDER], panelSections(1))
 })
 
 test('the answered group is left out when nothing was answered yet', () => {
-  assert.deepEqual(panelSections(0), ['stages', 'live', 'decisions', 'team', 'chat', 'queue', 'offboarded'])
+  assert.deepEqual(panelSections(0), ['stages', 'live', 'decisions', 'team', 'queue', 'offboarded'])
 })
 
 test('no log section anywhere (item 5)', () => {

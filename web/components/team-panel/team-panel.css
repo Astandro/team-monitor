@@ -92,11 +92,13 @@ html:has(.tm-app), body:has(.tm-app){height:100%;overflow:hidden;overscroll-beha
 .tm-pane-graph button{cursor:pointer}
 .tm-pane-graph button:disabled{cursor:not-allowed}
 .tm-pane-graph :focus-visible{outline:2px solid var(--g-accent);outline-offset:2px}
-.tm-nav{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 10px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--line)}
+.tm-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 10px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--line)}
 .tm-nav button{font:inherit;font-weight:600;font-size:14px;min-height:48px;border:1px solid transparent;border-radius:12px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:8px}
 .tm-nav button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
 .tm-nav button:hover{background:var(--sunk)}
 .tm-nav .count{min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--blocked);color:var(--surface);font-size:12px;display:inline-grid;place-items:center;font-variant-numeric:tabular-nums}
+/* Unread replies are news, not an alarm: the accent, so they never read as a decision waiting (that badge is red) */
+.tm-nav .count.unread{background:var(--accent)}
 @media (min-width:1024px){
   .tm-nav{display:none}
   .tm-panes{display:grid;grid-template-columns:352px minmax(0,1fr)}
@@ -330,13 +332,55 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-compose .send-state .err{color:var(--blocked)}
 .tm-chat-limits{margin:10px 2px 0;font-size:12px;color:var(--muted)}
 
-/* Floating "Pesan ke Sora" on phone and tablet, above the bottom bar */
-.tm-fab-wrap{position:fixed;right:16px;bottom:calc(72px + env(safe-area-inset-bottom));z-index:60;background:transparent}
-.tm-fab{font:inherit;font-weight:700;font-size:14px;min-height:48px;padding:0 18px;border-radius:24px;border:1px solid var(--accent);background:var(--accent);color:var(--bg);box-shadow:var(--shadow)}
-.tm-fab:hover{filter:brightness(1.08)}
-.tm-fab:active{transform:translateY(1px)}
-@media (min-width:1024px){.tm-fab-wrap{display:none}}
-@media (max-width:1023.98px){.tm-app .tm-wrap{padding-bottom:96px}}
+/* Chat pane (spec-chat-layout). The thread takes the height that is left and scrolls on its own, the message box
+   stays at the bottom like any messenger. Phone/tablet: the whole Chat tab, flat on the page colour, same reading
+   width as the Tim tab. Desktop: a card in its own column right of the graph (see below). */
+.tm-pane-chat{background:var(--bg);display:flex;flex-direction:column}
+.tm-chat-room{flex:1;min-height:0;width:100%;max-width:760px;margin:0 auto;padding:14px 16px 10px;display:flex;flex-direction:column}
+.tm-chat-float{flex:1;min-height:0;display:flex;flex-direction:column}
+.tm-pane-chat .tm-chat{flex:1;min-height:0;display:flex;flex-direction:column}
+.tm-chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.tm-pane-chat .tm-chat-head h2{margin:0;font-size:15px;color:var(--ink)}
+.tm-pane-chat .tm-chat-card{flex:1;min-height:0;display:flex;flex-direction:column;background:transparent;border:0;box-shadow:none;padding:0}
+.tm-pane-chat .tm-thread{flex:1;min-height:0;max-height:none}
+/* a short thread sits on the message box, like a messenger (auto margin keeps the list scrollable, unlike flex-end) */
+.tm-pane-chat .tm-thread > li:first-child{margin-top:auto}
+.tm-pane-chat .tm-chat-empty{flex:1}
+.tm-pane-chat .tm-chat-off{flex:none}
+.tm-pane-chat .tm-compose textarea{max-height:30dvh}
+.tm-chat-wait h2{margin:0 0 8px;font-size:15px;color:var(--ink)}
+.tm-chat-wait p{margin:0;color:var(--muted);font-size:14px;overflow-wrap:anywhere}
+
+/* Desktop: the chat is a column right of the graph while open (the graph keeps its own area and re-fits once, so the
+   panel never covers its controls or the play bar); closed, the column is gone and the bubble opens it again. The card
+   sits at the bottom of the column; its height is the owner's (drag the top edge or use the arrow keys), remembered. */
+@media (min-width:1024px){
+  .tm-app[data-chat-open="true"] .tm-panes{grid-template-columns:352px minmax(0,1fr) 368px}
+  .tm-app[data-chat-open="true"][data-panel-hidden="true"] .tm-panes{grid-template-columns:minmax(0,1fr) 368px}
+  .tm-app:not([data-chat-open="true"]) .tm-pane-chat{display:none}
+  .tm-pane-chat{border-left:1px solid var(--line)}
+  .tm-chat-room{position:absolute;inset:12px;width:auto;max-width:none;margin:0;padding:0;justify-content:flex-end}
+  .tm-chat-float{flex:1 1 auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:0 12px 12px;overflow:hidden}
+  .tm-chat-float[style]{flex:none}
+  .tm-pane-chat .tm-chat-head{margin:0 0 6px}
+  .tm-pane-chat .tm-chat-head h2{font-size:14px}
+  .tm-pane-chat .tm-msg .tx{font-size:14px}
+  .tm-chat-wait{padding-top:12px}
+}
+.tm-chat-grip{display:grid;place-items:center;height:16px;margin:0 -12px 2px;cursor:ns-resize;touch-action:none}
+.tm-chat-grip span{width:40px;height:4px;border-radius:2px;background:var(--line)}
+.tm-chat-grip:hover span, .tm-chat-grip:focus-visible span{background:var(--accent)}
+.tm-themed .tm-chat-grip:focus-visible{outline-offset:-2px;border-radius:12px 12px 0 0}
+
+/* Desktop bubble, chat closed: bottom right of the graph, stacked above its re-centre button (right 16, bottom 92,
+   44 px), so it covers neither that button nor the play bar. The one filled accent control on the graph: it is how
+   the owner reaches the coordinator. */
+.tm-chat-bubble-wrap{position:absolute;right:16px;bottom:148px;z-index:45;background:transparent}
+.tm-chat-bubble{font:inherit;font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px;min-height:48px;padding:0 16px 0 14px;border-radius:14px;border:1px solid var(--accent);background:var(--accent);color:var(--bg);box-shadow:var(--shadow)}
+.tm-chat-bubble:hover{filter:brightness(1.08)}
+.tm-chat-bubble:active{transform:translateY(1px)}
+.tm-chat-bubble .count{min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--surface);color:var(--accent);font-size:12px;display:inline-grid;place-items:center;font-variant-numeric:tabular-nums}
+@media (max-width:1023.98px){.tm-chat-bubble-wrap{display:none}}
 
 /* "Selesai kontrak": offboarded agents, name and role first like the graph */
 .tm-off-row .nm{font-weight:600}
@@ -380,8 +424,6 @@ a.tm-stat.hot b{color:var(--blocked)}
   .tm-pane-team .tm-dec{padding:12px}
   .tm-pane-team .tm-dec h3{font-size:15px}
   .tm-pane-team .tm-stage{padding:10px 12px;gap:8px}
-  .tm-pane-team .tm-chat-card{padding:10px}
-  .tm-pane-team .tm-msg .tx{font-size:14px}
 }
 
 /* The graph's sound control: bigger targets on touch screens; the range in its popover keeps the native look */

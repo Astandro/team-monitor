@@ -11,7 +11,7 @@ export const SECTION_ORDER = [
   'live', // Lagi dikerjain
   'decisions', // Keputusan, open ones only
   'team', // Tim
-  'chat', // Chat
+  // no chat here any more (spec-chat-layout): its own tab on phones, its own panel on desktop
   'queue', // Antrian dan yang sudah selesai
   'offboarded', // Selesai kontrak
   'answered', // answered decisions, collapsed
