@@ -98,7 +98,9 @@ export function asBoolean(v: unknown, fallback = false): boolean { return typeof
 export const LABEL_LEN_SHORT = 25
 export const LABEL_LEN_PARTICLE = 30
 export const LABEL_LEN_TIMELINE = 40
-export const LABEL_LEN_NAME = 40
+/** Agent names carry task titles, which are shown in full (wrapped, not cut).
+ *  This is only a safety cap against a pasted wall of text. */
+export const LABEL_LEN_NAME = 200
 export const LABEL_LEN_TASK = 120
 export const LABEL_LEN_BUBBLE = 200
 

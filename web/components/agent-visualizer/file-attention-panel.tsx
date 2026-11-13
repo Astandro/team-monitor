@@ -10,9 +10,11 @@ interface FileAttentionPanelProps {
   fileAttention: Map<string, FileAttention>
   onClose: () => void
   onOpenFile?: (filePath: string) => void
+  /** Top offset in px; the top bar can be taller than one row */
+  top?: number
 }
 
-export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile }: FileAttentionPanelProps) {
+export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile, top = 48 }: FileAttentionPanelProps) {
   if (!visible) return null
 
   const files = Array.from(fileAttention.values())
@@ -23,14 +25,14 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
   return (
     <SlidingPanel
       visible={visible}
-      position={{ top: 48, right: 12 }}
+      position={{ top, right: 12 }}
       zIndex={Z.sidePanel}
       width={260}
     >
       <div className="glass-card relative">
         <PanelHeader onClose={onClose}>
           <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
-            FILE ATTENTION
+            FILE YANG DIPAKAI
           </span>
         </PanelHeader>
 
@@ -38,7 +40,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
         <div className="space-y-1 max-h-[300px] overflow-y-auto">
           {files.length === 0 && (
             <div className="text-[9px] font-mono py-2 text-center" style={{ color: COLORS.textMuted }}>
-              No files accessed yet
+              Belum ada file yang dibuka. Daftar muncul saat agent mulai membaca atau mengubah file.
             </div>
           )}
           {files.map((file) => {
@@ -59,7 +61,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
                   cursor: canOpen ? 'pointer' : undefined,
                 }}
                 onClick={canOpen ? () => onOpenFile(file.path) : undefined}
-                title={canOpen ? file.path : undefined}
+                title={file.path}
               >
                 {/* Filename */}
                 <div className="flex items-center justify-between">
@@ -67,7 +69,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
                     {displayPath}
                   </span>
                   <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
-                    {file.totalTokens > 0 ? formatTokens(file.totalTokens) : '—'}
+                    {file.totalTokens > 0 ? formatTokens(file.totalTokens) : '-'}
                   </span>
                 </div>
 
@@ -79,19 +81,19 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
                 <div className="flex items-center gap-2 mt-1">
                   {file.reads > 0 && (
                     <span className="text-[9px] font-mono" style={{ color: COLORS.holoBase + '80' }}>
-                      {file.reads} read{file.reads > 1 ? 's' : ''}
+                      dibaca {file.reads}x
                     </span>
                   )}
                   {file.edits > 0 && (
                     <span className="text-[9px] font-mono" style={{ color: COLORS.tool + '80' }}>
-                      {file.edits} edit{file.edits > 1 ? 's' : ''}
+                      diubah {file.edits}x
                     </span>
                   )}
                   {file.agents.length > 0 && (
                     <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}
                       title={file.agents.join(', ')}
                     >
-                      {file.agents.length} agent{file.agents.length > 1 ? 's' : ''}
+                      {file.agents.length} agent
                     </span>
                   )}
                 </div>
@@ -106,8 +108,8 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
             borderTop: `1px solid ${COLORS.holoBorder08}`,
             color: COLORS.textMuted,
           }}>
-            <span>{files.length} files</span>
-            <span>{formatTokens(files.reduce((s, f) => s + f.totalTokens, 0))} tokens in file reads</span>
+            <span>{files.length} file</span>
+            <span>{formatTokens(files.reduce((s, f) => s + f.totalTokens, 0))} token untuk membaca file</span>
           </div>
         )}
       </div>

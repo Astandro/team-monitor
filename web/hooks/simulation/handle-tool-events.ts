@@ -1,4 +1,5 @@
 import { COLORS } from '@/lib/colors'
+import { toolLabel, toolCallLine } from '@/lib/readable-labels'
 import { TOOL_DEDUP_WINDOW_S } from '@/lib/canvas-constants'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
 import { appendConversation, asString, asBoolean, LABEL_LEN_PARTICLE, LABEL_LEN_TIMELINE } from './types'
@@ -62,13 +63,13 @@ export function handleToolCallStart(
       edgeId: `edge-${toolId}`, progress: 0,
       type: 'tool_call', color: COLORS.tool,
       size: 4, trailLength: 0.15,
-      label: `${toolName} ${args}`.slice(0, LABEL_LEN_PARTICLE),
+      label: `${toolLabel(toolName)} ${args}`.slice(0, LABEL_LEN_PARTICLE),
     })
 
     // Timeline block
     const entry = state.timelineEntries.get(agentName)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: `${toolName}: ${args}`.slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: toolCallLine(toolName, args).slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
     }
 
     // Track file attention
@@ -88,7 +89,7 @@ export function handleToolCallStart(
     }
 
     appendConversation(state.conversations, agentName, {
-      type: 'tool_call', content: `> ${toolName} ${args}`, timestamp: currentTime,
+      type: 'tool_call', content: `> ${toolCallLine(toolName, args)}`, timestamp: currentTime,
       toolName, inputData,
     })
   }
@@ -102,7 +103,7 @@ export function handleToolCallEnd(
 ): void {
   const agentName = asString(payload.agent)
   const toolName = asString(payload.tool)
-  const result = asString(payload.result, 'Done')
+  const result = asString(payload.result, 'Selesai')
   const tokenCost = typeof payload.tokenCost === 'number' ? payload.tokenCost : undefined
   const isError = asBoolean(payload.isError)
   const errorMessage = typeof payload.errorMessage === 'string' ? payload.errorMessage : undefined
@@ -144,10 +145,10 @@ export function handleToolCallEnd(
         const lastBlock = entry.blocks[entry.blocks.length - 1]
         if (lastBlock && !lastBlock.endTime) {
           lastBlock.color = COLORS.error
-          lastBlock.label = `${toolName}: FAILED`
+          lastBlock.label = `${toolLabel(toolName)}: gagal`
         }
       }
-      pushTimelineBlock(entry, currentTime, { type: 'thinking', label: 'Thinking...', color: COLORS.thinking }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'thinking', label: 'Berpikir...', color: COLORS.thinking }, ctx)
     }
 
     // File attention token cost
@@ -164,7 +165,7 @@ export function handleToolCallEnd(
 
     appendConversation(state.conversations, agentName, {
       type: 'tool_result',
-      content: `< ${result}${tokenCost ? ` (${tokenCost} tokens)` : ''}`,
+      content: `< ${result}${tokenCost ? ` (${tokenCost} token)` : ''}`,
       timestamp: currentTime,
       toolName,
     })

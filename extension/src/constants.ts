@@ -100,8 +100,9 @@ export const RESULT_MAX = 200
 /** Message content sent to the webview */
 export const MESSAGE_MAX = 2000
 
-/** Session tab label */
-export const SESSION_LABEL_MAX = 14
+/** Session tab label. Titles are shown in full (the tab wraps), so this is only
+ *  a safety cap against a pasted wall of text, not a display width. */
+export const SESSION_LABEL_MAX = 200
 
 /** Truncated label text (label - ellipsis) */
 export const SESSION_LABEL_TRUNCATED = SESSION_LABEL_MAX - 2
@@ -124,8 +125,8 @@ export const EDIT_CONTENT_MAX = 500
 /** WebFetch prompt preview */
 export const WEB_FETCH_PROMPT_MAX = 200
 
-/** Subagent child name max */
-export const CHILD_NAME_MAX = 30
+/** Subagent child name max: names carry task titles, shown in full; safety cap only */
+export const CHILD_NAME_MAX = 200
 
 /** Skill name max */
 export const SKILL_NAME_MAX = 40

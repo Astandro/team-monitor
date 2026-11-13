@@ -1,0 +1,9 @@
+{
+  "//": "Only used by the root `pnpm test` (tsx) so tests can import web modules that use the '@/' alias. web/ and extension/ keep their own tsconfig.",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["web/*"]
+    }
+  }
+}

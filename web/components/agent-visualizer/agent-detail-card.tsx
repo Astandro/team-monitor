@@ -3,6 +3,7 @@
 import { CARD, Z, type AgentState } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
 import { formatTokens, formatModelName } from '@/lib/utils'
+import { toolLabel, stateLabel, agentDisplayName } from '@/lib/readable-labels'
 import { GlassCard } from './glass-card'
 import { PanelHeader, ProgressBar } from './shared-ui'
 
@@ -50,8 +51,8 @@ export function AgentDetailCard({
           style={{ background: stateColor, boxShadow: `0 0 8px ${stateColor}` }}
         />
         <div className="flex flex-col">
-          <span className="text-xs font-mono" style={{ color: COLORS.textPrimary }}>
-            {agent.name}
+          <span className="text-xs font-mono break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere' }}>
+            {agentDisplayName(agent.name)}
           </span>
           {agent.model && (
             <span className="text-[9px] font-mono" style={{ color: COLORS.textDim }}>
@@ -64,7 +65,7 @@ export function AgentDetailCard({
       {/* Context bar */}
       <div className="mb-3">
         <div className="flex justify-between mb-1">
-          <span className="text-[10px]" style={{ color: COLORS.textMuted }}>Context</span>
+          <span className="text-[10px]" style={{ color: COLORS.textMuted }} title="Berapa banyak ruang ingatan agent yang sudah terpakai">Konteks</span>
           <span className="text-[10px] font-mono" style={{ color: COLORS.textDim }}>
             {formatTokens(agent.tokensUsed)} / {formatTokens(agent.tokensMax)} ({contextPercent}%)
           </span>
@@ -74,9 +75,9 @@ export function AgentDetailCard({
 
       {/* Stats row */}
       <div className="flex gap-3 mb-3 text-[10px] font-mono" style={{ color: COLORS.textDim }}>
-        <span>{agent.toolCalls} tools</span>
-        <span>{agent.timeAlive.toFixed(1)}s alive</span>
-        <span className="capitalize" style={{ color: stateColor }}>{agent.state}</span>
+        <span>{agent.toolCalls} alat dipakai</span>
+        <span>aktif {agent.timeAlive.toFixed(1)} dtk</span>
+        <span style={{ color: stateColor }}>{stateLabel(agent.state)}</span>
       </div>
 
       {/* Current tool */}
@@ -90,7 +91,7 @@ export function AgentDetailCard({
           }}
         >
           <span className="animate-spin inline-block">⚙</span>
-          {agent.currentTool}
+          {toolLabel(agent.currentTool)}
         </div>
       )}
 

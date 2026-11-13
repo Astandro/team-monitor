@@ -3,6 +3,7 @@
 import { useRef, useEffect, useState } from 'react'
 import { Z, CARD } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
+import { toolLabel } from '@/lib/readable-labels'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { CloseButton, SlidingPanel, stopPropagationHandlers } from './shared-ui'
@@ -43,6 +44,7 @@ export function SessionTranscriptPanel({
             const q = searchQuery.toLowerCase()
             return msg.content.toLowerCase().includes(q)
               || (msg.toolName || '').toLowerCase().includes(q)
+              || (msg.toolName ? toolLabel(msg.toolName).toLowerCase().includes(q) : false)
           })
         : conversation)
     : []
@@ -82,15 +84,17 @@ export function SessionTranscriptPanel({
         >
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono tracking-widest font-semibold" style={{ color: COLORS.panelLabel }}>
-              TRANSCRIPT
+              RIWAYAT OBROLAN
             </span>
             <span className="text-[9px] font-mono" style={{ color: COLORS.panelLabelDim }}>
-              {searchQuery ? `${filteredConversation.length}/${conversation.length}` : conversation.length} messages
+              {searchQuery ? `${filteredConversation.length}/${conversation.length}` : conversation.length} pesan
             </span>
           </div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => { setShowSearch(s => !s); if (showSearch) setSearchQuery('') }}
+              title="Cari pesan"
+              aria-label="Cari pesan"
               className="text-[9px] font-mono px-1.5 py-0.5 rounded transition-all"
               style={{
                 background: showSearch ? COLORS.toggleActive : 'transparent',
@@ -115,7 +119,8 @@ export function SessionTranscriptPanel({
                 if (e.key === 'Escape') { setShowSearch(false); setSearchQuery('') }
                 e.stopPropagation()
               }}
-              placeholder="Filter messages..."
+              placeholder="Cari pesan..."
+              aria-label="Cari pesan"
               className="w-full px-2 py-1 rounded text-[10px] font-mono outline-none"
               style={{
                 background: COLORS.holoBg05,
@@ -136,7 +141,7 @@ export function SessionTranscriptPanel({
           {filteredConversation.length === 0 ? (
             <div className="flex items-center justify-center h-32">
               <p className="text-[10px] font-mono" style={{ color: COLORS.textMuted }}>
-                {searchQuery ? 'No matching messages' : 'Waiting for session activity...'}
+                {searchQuery ? 'Tidak ada pesan yang cocok' : 'Menunggu aktivitas sesi...'}
               </p>
             </div>
           ) : (
@@ -168,7 +173,7 @@ export function SessionTranscriptPanel({
                 color: COLORS.scrollBtnText,
               }}
             >
-              ↓ New messages
+              ↓ Pesan terbaru
             </button>
           </div>
         )}

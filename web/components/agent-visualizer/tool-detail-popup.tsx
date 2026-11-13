@@ -2,6 +2,7 @@
 
 import { POPUP } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
+import { toolLabel, toolStateLabel, hasDistinctToolName } from '@/lib/readable-labels'
 import { ToolContentRenderer } from './tool-content-renderer'
 import { PanelHeader, DetailPopup } from './shared-ui'
 
@@ -29,12 +30,19 @@ export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProp
           {tool.state === 'running' ? '⚙' : '✓'}
         </span>
         <span className="text-[11px] font-mono font-semibold" style={{ color: COLORS.tool_calling }}>
-          {tool.toolName}
+          {toolLabel(tool.toolName)}
         </span>
-        <span className="text-[9px] font-mono capitalize" style={{ color: stateColor + '90' }}>
-          {tool.state}
+        <span className="text-[9px] font-mono" style={{ color: stateColor + '90' }}>
+          {toolStateLabel(tool.state)}
         </span>
       </PanelHeader>
+
+      {/* Original tool name, one look away for whoever needs it */}
+      {hasDistinctToolName(tool.toolName) && (
+        <div className="mb-1.5 text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+          Nama alat asli: <span style={{ color: COLORS.textDim }}>{tool.toolName}</span>
+        </div>
+      )}
 
       {/* Rich content */}
       {tool.inputData ? (
@@ -60,7 +68,7 @@ export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProp
             color: COLORS.complete + '90',
           }}
         >
-          <span className="opacity-50 mr-1">Result:</span>
+          <span className="opacity-50 mr-1">Hasil:</span>
           {tool.result}
         </div>
       )}
@@ -68,7 +76,7 @@ export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProp
       {/* Token cost */}
       {tool.tokenCost != null && tool.tokenCost > 0 && (
         <div className="mt-1.5 text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
-          {tool.tokenCost} tokens
+          {tool.tokenCost} token
         </div>
       )}
     </DetailPopup>

@@ -1,6 +1,6 @@
 "use client"
 
-import { memo } from "react"
+import { memo, useEffect, useRef } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
@@ -32,16 +32,19 @@ function UnmutedIcon() {
 
 // ─── Toggle Button ──────────────────────────────────────────────────────────
 
-function ToggleButton({ active, onClick, children, style, activeColor }: {
+function ToggleButton({ active, onClick, children, style, activeColor, title }: {
   active: boolean
   onClick: () => void
   children: React.ReactNode
   style?: React.CSSProperties
   activeColor?: { bg: string; text: string }
+  title?: string
 }) {
   return (
     <button
       onClick={onClick}
+      title={title}
+      aria-pressed={active}
       className="px-1.5 py-0.5 rounded transition-all"
       style={{
         background: active ? (activeColor?.bg ?? COLORS.toggleActive) : COLORS.toggleInactive,
@@ -60,8 +63,8 @@ function ToggleButton({ active, onClick, children, style, activeColor }: {
 function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const color = status === 'watching' ? COLORS.complete
     : status === 'connected' ? COLORS.idle : COLORS.error
-  const label = status === 'watching' ? 'LIVE'
-    : status === 'connected' ? 'CONNECTED' : 'OFFLINE'
+  const label = status === 'watching' ? 'LANGSUNG'
+    : status === 'connected' ? 'TERHUBUNG' : 'PUTUS'
 
   return (
     <span className="flex items-center gap-1.5">
@@ -98,6 +101,18 @@ export interface TopBarProps {
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
   onToggleTimeline: () => void
   onToggleMute: () => void
+  /** Reports where the bars end, so floating canvas panels can sit below them */
+  onLayout?: (layout: TopBarLayout) => void
+  /** Rendered in flow under the bars (the collapsed message card), so it never overlaps them */
+  children?: React.ReactNode
+}
+
+export interface TopBarLayout {
+  width: number
+  /** Bottom edge of the tabs and the stats/toggles rows */
+  barsBottom: number
+  /** Bottom edge of everything, including the children */
+  stackBottom: number
 }
 
 export const TopBar = memo(function TopBar({
@@ -107,12 +122,36 @@ export const TopBar = memo(function TopBar({
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
   onTogglePanel, onToggleTimeline, onToggleMute,
+  onLayout, children,
 }: TopBarProps) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const barsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const root = rootRef.current
+    const bars = barsRef.current
+    if (!root || !bars || !onLayout) return
+    const report = () => {
+      const r = root.getBoundingClientRect()
+      onLayout({ width: r.width, barsBottom: bars.getBoundingClientRect().bottom, stackBottom: r.bottom })
+    }
+    report()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(report)
+    ro.observe(root)
+    ro.observe(bars)
+    return () => ro.disconnect()
+  }, [onLayout])
+
   return (
-    <div className="absolute top-3 left-3 right-3 flex items-center gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
-      {/* Session tabs — scrollable, takes available space */}
+    // The whole top area is one column: tabs on their own full-width row, then the
+    // stats and toggles (wrapping on narrow screens), then the message card.
+    // The column ignores the pointer so the canvas stays draggable between the pieces.
+    <div ref={rootRef} className="absolute top-3 left-3 right-3 flex flex-col gap-2 font-mono text-[10px] pointer-events-none" style={{ zIndex: Z.info }}>
+      <div ref={barsRef} className="flex flex-col gap-2">
+      {/* Session tabs: own row, each tab keeps a readable width and wraps its title */}
       {sessions.length > 1 && (
-        <div className="min-w-0 flex-shrink overflow-x-auto scrollbar-hide">
+        <div className="w-full pointer-events-auto">
           <SessionTabs
             sessions={sessions}
             selectedSessionId={selectedSessionId}
@@ -123,13 +162,10 @@ export const TopBar = memo(function TopBar({
         </div>
       )}
 
-      {/* Spacer pushes info to the right */}
-      <div className="flex-1" />
-
-      {/* Right-side info/controls */}
-      <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+      {/* Stats and toggles: right aligned, wrap onto a second row instead of running off the edge */}
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1.5 self-end max-w-full pointer-events-auto" style={{ color: COLORS.textMuted }}>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
-        <span>{agentCount} agents</span>
+        <span>{agentCount} agent</span>
         <span>
           {formatTokens(totalTokens)} tokens
           <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
@@ -142,24 +178,27 @@ export const TopBar = memo(function TopBar({
           background: COLORS.holoBg03,
           border: `1px solid ${COLORS.holoBorder06}`,
         }}>
-          <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
-          <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
+          <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} title="File yang paling banyak dibaca atau diubah" style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>File</ToggleButton>
+          <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} title="Riwayat obrolan sesi ini" style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Obrolan</ToggleButton>
           <ToggleButton
             active={showCostOverlay}
             onClick={() => onTogglePanel('cost')}
+            title="Perkiraan biaya per agent dan per alat"
             activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
             style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
           >
-            $Cost
+            Biaya
           </ToggleButton>
         </div>
 
         {/* Independent toggles */}
-        <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
-        <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
+        <ToggleButton active={showTimeline} onClick={onToggleTimeline} title="Linimasa kerja tiap agent">Linimasa</ToggleButton>
+        <ToggleButton active={!isMuted} onClick={onToggleMute} title={isMuted ? 'Nyalakan suara' : 'Matikan suara'} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
         </ToggleButton>
       </div>
+      </div>
+      {children && <div className="self-start max-w-full pointer-events-auto">{children}</div>}
     </div>
   )
 })

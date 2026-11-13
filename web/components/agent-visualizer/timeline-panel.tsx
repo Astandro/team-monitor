@@ -1,9 +1,12 @@
 'use client'
 
-import { useRef, useEffect, useMemo, useCallback } from 'react'
+import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { TimelineEntry, Z } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTimelineModels } from '@/lib/timeline-models'
+import { wrapText } from '@/lib/wrap-text'
+import { agentDisplayName } from '@/lib/readable-labels'
+import { pickMarkerInterval, timelineLabelWidth } from '@/lib/timeline-markers'
 import { PanelHeader, SlidingPanel } from './shared-ui'
 
 interface TimelinePanelProps {
@@ -17,44 +20,94 @@ interface TimelinePanelProps {
 
 const ROW_HEIGHT = 22
 const HEADER_HEIGHT = 20
-const LABEL_WIDTH = 90
+const NAME_LINE_HEIGHT = 11
+const MODEL_LINE_HEIGHT = 10
+const ROW_PAD_Y = 5
 const FONT = '9px monospace'
 const MODEL_FONT = '8px monospace'
 
-// ─── Legend (static DOM — no perf cost) ─────────────────────────────────────
+// ─── Legend (static DOM, no perf cost) ──────────────────────────────────────
 
 const LEGEND_ITEMS = [
-  { color: COLORS.idle, label: 'Idle' },
-  { color: COLORS.thinking, label: 'Thinking' },
-  { color: COLORS.tool, label: 'Tool Call' },
-  { color: COLORS.error, label: 'Error' },
-  { color: COLORS.complete, label: 'Complete' },
+  { color: COLORS.idle, label: 'Diam' },
+  { color: COLORS.thinking, label: 'Berpikir' },
+  { color: COLORS.tool, label: 'Pakai alat' },
+  { color: COLORS.error, label: 'Gagal' },
+  { color: COLORS.complete, label: 'Selesai' },
 ]
 
+// ─── Row layout ─────────────────────────────────────────────────────────────
+
+interface RowLayout {
+  top: number
+  height: number
+  nameLines: string[]
+  modelLines: string[]
+}
+
+interface TimelineLayout {
+  rows: RowLayout[]
+  height: number
+}
+
+interface TimeRange {
+  minTime: number
+  timeSpan: number
+  width: number
+}
+
+let scratchCtx: CanvasRenderingContext2D | null = null
+function getScratchCtx(): CanvasRenderingContext2D | null {
+  if (scratchCtx) return scratchCtx
+  if (typeof document === 'undefined') return null
+  scratchCtx = document.createElement('canvas').getContext('2d')
+  return scratchCtx
+}
+
+/**
+ * Agent names carry task titles, so they are wrapped across lines and each row
+ * grows to fit (owner request O3). The title is never cut.
+ */
+function layoutRows(entries: TimelineEntry[], labelWidth: number): TimelineLayout {
+  const ctx = getScratchCtx()
+  const maxW = labelWidth - 12
+  let top = HEADER_HEIGHT
+  const rows: RowLayout[] = entries.map((entry) => {
+    const displayName = agentDisplayName(entry.agentName)
+    let nameLines = [displayName]
+    let modelLines: string[] = []
+    const models = formatTimelineModels(entry.models)
+    if (ctx) {
+      ctx.font = FONT
+      nameLines = wrapText(displayName, maxW, (s) => ctx.measureText(s).width)
+      if (models) {
+        ctx.font = MODEL_FONT
+        modelLines = wrapText(models, maxW, (s) => ctx.measureText(s).width)
+      }
+    } else if (models) {
+      modelLines = [models]
+    }
+    const textH = nameLines.length * NAME_LINE_HEIGHT + modelLines.length * MODEL_LINE_HEIGHT + ROW_PAD_Y * 2
+    const height = Math.max(ROW_HEIGHT, textH)
+    const row = { top, height, nameLines, modelLines }
+    top += height
+    return row
+  })
+  return { rows, height: top }
+}
+
 // ─── Canvas-based timeline rendering ────────────────────────────────────────
-
-/** Truncate text with '..' so it fits in maxWidth at the current font. */
-function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (ctx.measureText(text).width <= maxWidth) return text
-  let end = text.length
-  while (end > 1 && ctx.measureText(text.slice(0, end) + '..').width > maxWidth) end--
-  return text.slice(0, end) + '..'
-}
-
-/** Hover text for a row: the full agent name and every model it used. */
-function rowTooltip(entry: TimelineEntry): string {
-  const models = formatTimelineModels(entry.models)
-  return models ? `${entry.agentName}\n${models}` : entry.agentName
-}
 
 function drawTimeline(
   ctx: CanvasRenderingContext2D,
   entries: TimelineEntry[],
+  layout: TimelineLayout,
   currentTime: number,
   width: number,
   height: number,
   dpr: number,
-) {
+  LABEL_WIDTH: number,
+): TimeRange | null {
   ctx.clearRect(0, 0, width * dpr, height * dpr)
   ctx.save()
   ctx.scale(dpr, dpr)
@@ -63,9 +116,9 @@ function drawTimeline(
     ctx.font = FONT
     ctx.fillStyle = COLORS.textMuted
     ctx.textAlign = 'center'
-    ctx.fillText('No timeline data', width / 2, height / 2)
+    ctx.fillText('Belum ada data linimasa', width / 2, height / 2)
     ctx.restore()
-    return
+    return null
   }
 
   // Compute time range
@@ -80,7 +133,7 @@ function drawTimeline(
   const barWidth = width - LABEL_WIDTH
 
   // Time markers
-  const markerInterval = timeSpan > 60 ? 10 : timeSpan > 20 ? 5 : timeSpan > 10 ? 2 : 1
+  const markerInterval = pickMarkerInterval(timeSpan, barWidth)
   const markers: number[] = []
   for (let t = Math.ceil(minTime / markerInterval) * markerInterval; t <= maxTime; t += markerInterval) {
     markers.push(t)
@@ -99,26 +152,33 @@ function drawTimeline(
   // ── Agent rows ──
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]
-    const y = HEADER_HEIGHT + i * ROW_HEIGHT
+    const row = layout.rows[i]
+    const y = row.top
 
-    // Agent label, with its models underneath when known
+    // Agent label (wrapped, in full), with its models underneath when known
     ctx.textAlign = 'right'
     ctx.fillStyle = COLORS.textDim
-    const name = entry.agentName.length > 12 ? entry.agentName.slice(0, 12) + '..' : entry.agentName
-    const models = formatTimelineModels(entry.models)
-    if (models) {
-      ctx.fillText(name, LABEL_WIDTH - 6, y + ROW_HEIGHT / 2 - 1)
+    ctx.font = FONT
+    const textH = row.nameLines.length * NAME_LINE_HEIGHT + row.modelLines.length * MODEL_LINE_HEIGHT
+    let ty = y + (row.height - textH) / 2 + NAME_LINE_HEIGHT - 2
+    for (const line of row.nameLines) {
+      ctx.fillText(line, LABEL_WIDTH - 6, ty)
+      ty += NAME_LINE_HEIGHT
+    }
+    if (row.modelLines.length > 0) {
       ctx.font = MODEL_FONT
       ctx.fillStyle = COLORS.textMuted
-      ctx.fillText(fitText(ctx, models, LABEL_WIDTH - 8), LABEL_WIDTH - 6, y + ROW_HEIGHT / 2 + 8)
+      ty -= NAME_LINE_HEIGHT - MODEL_LINE_HEIGHT
+      for (const line of row.modelLines) {
+        ctx.fillText(line, LABEL_WIDTH - 6, ty)
+        ty += MODEL_LINE_HEIGHT
+      }
       ctx.font = FONT
-    } else {
-      ctx.fillText(name, LABEL_WIDTH - 6, y + ROW_HEIGHT / 2 + 3)
     }
 
-    // Background track
-    const trackY = y + 4
+    // Background track, centred in the row
     const trackH = ROW_HEIGHT - 8
+    const trackY = y + (row.height - trackH) / 2
     ctx.fillStyle = COLORS.holoBg03
     ctx.fillRect(LABEL_WIDTH, trackY, barWidth, trackH)
 
@@ -150,7 +210,8 @@ function drawTimeline(
 
       ctx.globalAlpha = 1
 
-      // Label inside block if wide enough
+      // Label inside block if wide enough. Clipped to the block on purpose: it
+      // is a tool-call label, and the full text shows on hover.
       if (blockW > 40) {
         ctx.save()
         ctx.beginPath()
@@ -173,27 +234,54 @@ function drawTimeline(
   }
 
   ctx.restore()
+  return { minTime, timeSpan, width }
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }: TimelinePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const rangeRef = useRef<TimeRange | null>(null)
 
   const sortedEntries = useMemo(() => {
     if (!visible) return []
     return Array.from(timelineEntries.values()).sort((a, b) => a.startTime - b.startTime)
   }, [visible, timelineEntries])
 
-  const canvasHeight = HEADER_HEIGHT + sortedEntries.length * ROW_HEIGHT
+  // Panel width drives the name column, so measure it (the panel is up to 700px, less on a phone)
+  const [panelWidth, setPanelWidth] = useState(700)
+  useEffect(() => {
+    if (!visible) return
+    const el = canvasRef.current?.parentElement
+    if (!el) return
+    const update = () => { if (el.clientWidth > 0) setPanelWidth(el.clientWidth) }
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [visible])
+  const LABEL_WIDTH = timelineLabelWidth(panelWidth)
 
-  // Labels are truncated to fit; show the full name and models on hover
+  const layout = useMemo(() => layoutRows(sortedEntries, LABEL_WIDTH), [sortedEntries, LABEL_WIDTH])
+  const canvasHeight = layout.height
+
+  // Block labels are clipped to their block; hovering a block shows its full text
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const row = Math.floor((e.nativeEvent.offsetY - HEADER_HEIGHT) / ROW_HEIGHT)
-    const entry = row >= 0 ? sortedEntries[row] : undefined
-    const title = entry ? rowTooltip(entry) : ''
+    const { offsetX, offsetY } = e.nativeEvent
+    const range = rangeRef.current
+    let title = ''
+    if (range && offsetX >= LABEL_WIDTH) {
+      const idx = layout.rows.findIndex(r => offsetY >= r.top && offsetY < r.top + r.height)
+      const entry = idx >= 0 ? sortedEntries[idx] : undefined
+      if (entry) {
+        const t = range.minTime + ((offsetX - LABEL_WIDTH) / (range.width - LABEL_WIDTH)) * range.timeSpan
+        const block = entry.blocks.find(b => t >= b.startTime && t <= (b.endTime ?? currentTime))
+        if (block) title = block.label
+      }
+    }
     if (e.currentTarget.title !== title) e.currentTarget.title = title
-  }, [sortedEntries])
+  }, [sortedEntries, layout, currentTime, LABEL_WIDTH])
 
   useEffect(() => {
     if (!visible) return
@@ -211,9 +299,9 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
     canvas.style.width = `${width}px`
     canvas.style.height = `${canvasHeight}px`
 
-    drawTimeline(ctx, sortedEntries, currentTime, width, canvasHeight, dpr)
+    rangeRef.current = drawTimeline(ctx, sortedEntries, layout, currentTime, width, canvasHeight, dpr, LABEL_WIDTH)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- redraw on every prop change (component only re-renders on data/time updates)
-  }, [visible, sortedEntries, currentTime, canvasHeight])
+  }, [visible, sortedEntries, layout, currentTime, canvasHeight, LABEL_WIDTH, panelWidth])
 
   if (!visible) return null
 
@@ -229,7 +317,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
       <div className="glass-card relative">
         <PanelHeader onClose={onClose}>
           <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
-            EXECUTION TIMELINE
+            LINIMASA EKSEKUSI
           </span>
         </PanelHeader>
 
@@ -239,8 +327,8 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
 
         {/* Legend (static DOM) */}
         <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-          <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
-          <div className="flex items-center gap-3">
+          {panelWidth >= 480 && <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />

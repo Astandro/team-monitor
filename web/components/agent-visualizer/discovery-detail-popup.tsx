@@ -2,6 +2,7 @@
 
 import { POPUP } from '@/lib/agent-types'
 import { COLORS, getDiscoveryTypeColor } from '@/lib/colors'
+import { agentDisplayName } from '@/lib/readable-labels'
 import { PanelHeader, DetailPopup } from './shared-ui'
 
 interface DiscoveryDetailPopupProps {
@@ -21,8 +22,8 @@ export function DiscoveryDetailPopup({ discovery, position, onClose }: Discovery
 
   const typeLabel =
     discovery.type === 'file' ? 'FILE' :
-    discovery.type === 'pattern' ? 'PATTERN' :
-    discovery.type === 'finding' ? 'FINDING' : 'CODE'
+    discovery.type === 'pattern' ? 'POLA' :
+    discovery.type === 'finding' ? 'TEMUAN' : 'KODE'
 
   return (
     <DetailPopup position={position} width={POPUP.discovery.width} estimatedHeight={POPUP.discovery.estimatedHeight} onClose={onClose}>
@@ -61,7 +62,7 @@ export function DiscoveryDetailPopup({ discovery, position, onClose }: Discovery
 
       {/* Agent attribution */}
       <div className="mt-1.5 text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
-        agent: {discovery.agentId}
+        Agent: {agentDisplayName(discovery.agentId)}
       </div>
     </DetailPopup>
   )

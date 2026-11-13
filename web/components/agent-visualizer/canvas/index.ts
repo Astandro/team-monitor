@@ -1,4 +1,4 @@
-export { truncateText, drawTetherLine } from './draw-misc'
+export { truncateText, wrapTextCanvas, drawTetherLine } from './draw-misc'
 export { drawEffects } from './draw-effects'
 export type { VisualEffect } from './draw-effects'
 export { drawAgents } from './draw-agents'

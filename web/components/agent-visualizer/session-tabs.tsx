@@ -34,7 +34,8 @@ export function SessionTabs({
   }, [selectedSessionId])
 
   return (
-    <div className="flex gap-1">
+    // Session titles are shown in full: tabs wrap onto more lines instead of cutting the title.
+    <div className="flex flex-wrap gap-1">
       {sessions.map(session => {
         const isSelected = session.id === selectedSessionId
         const isActive = session.status === 'active'
@@ -48,8 +49,13 @@ export function SessionTabs({
             onClick={() => onSelectSession(session.id)}
             className="group px-1.5 py-0.5 rounded transition-all flex items-center gap-1"
             style={{
-              flexShrink: 0,
-              whiteSpace: 'nowrap',
+              flexShrink: 1,
+              // Never narrower than a readable column, never wider than a comfortable one
+              minWidth: 'min(140px, 100%)',
+              maxWidth: 'min(280px, 100%)',
+              whiteSpace: 'normal',
+              overflowWrap: 'anywhere',
+              textAlign: 'left',
               background: isSelected ? COLORS.tabSelectedBg : COLORS.tabInactiveBg,
               border: `1px solid ${isSelected ? COLORS.tabSelectedBorder : COLORS.tabInactiveBorder}`,
               color: isSelected ? COLORS.holoBright : COLORS.textMuted,
@@ -67,6 +73,9 @@ export function SessionTabs({
             <span
               className="ml-0.5 opacity-0 group-hover:opacity-60 transition-opacity cursor-pointer"
               style={{ color: COLORS.tabClose, fontSize: 8, lineHeight: '10px' }}
+              title="Tutup sesi ini"
+              role="button"
+              aria-label="Tutup sesi ini"
               onClick={(e) => {
                 e.stopPropagation()
                 onCloseSession(session.id)
