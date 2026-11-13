@@ -41,6 +41,8 @@ export async function startServer(options: ServerOptions) {
     autoOffboardMinutes: teamSetup.team.autoOffboardMinutes,
   })
   teamSetup.team.graph = relay.graph
+  // Hub intake (--ingest): cloud sessions go into the same relay.
+  teamSetup.ingest?.attachRelay(relay.cloud)
 
   // Finished sub-agents leave the graph by themselves after autoOffboardMinutes (spec ui-cleanup item 6). The
   // first sweep runs now, before anyone connects: agents whose deadline passed while the server was down go first.

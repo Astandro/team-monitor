@@ -42,6 +42,19 @@ export interface SessionInfo {
   prompt?: string
   /** The coordinator instance of the session's project (`meta.coordinator` in its state.json), when set. */
   coordinator?: CoordinatorInfo
+  /** Hub intake: "cloud" for a session received from a cloud container. Local sessions omit it. */
+  origin?: 'cloud'
+  /** Hub intake: the container (source) the session came from. Only with `origin: "cloud"`. */
+  sourceId?: string
+  /** Hub intake: true while the source has sent nothing for 60 s ("disconnected"). Only with `origin: "cloud"`. */
+  stale?: boolean
+}
+
+/** Hub intake fields carried by cloud sessions and cloud projects (absent on local ones). */
+export interface CloudOriginFields {
+  origin?: 'cloud'
+  sourceId?: string
+  stale?: boolean
 }
 
 /** Name and role of the coordinator instance (spec offboard-names item 2); role defaults to "Orchestrator". */
@@ -61,7 +74,10 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-list'; sessions: SessionInfo[] }
   | { type: 'session-started'; session: SessionInfo }
   | { type: 'session-ended'; sessionId: string }
-  | { type: 'session-updated'; sessionId: string; label: string; projectId?: string; prompt?: string; coordinator?: CoordinatorInfo }
+  | ({ type: 'session-updated'; sessionId: string; label: string; projectId?: string; prompt?: string; coordinator?: CoordinatorInfo } & CloudOriginFields)
+  /** Standalone app with --ingest: the project list changed (a cloud project appeared, or turned stale or live
+   *  again); refetch GET /api/team/projects. */
+  | { type: 'projects-changed' }
   /** Standalone app only: these finished subagents were offboarded; drop their nodes (spec offboard-names item 1). */
   | { type: 'agents-offboarded'; sessionId: string; agents: string[] }
 

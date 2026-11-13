@@ -27,6 +27,19 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void
 
 // ─── Projects and watchers ──────────────────────────────────────────────────
 
+/**
+ * One entry of `GET /api/team/projects`. Cloud projects (hub intake, `--ingest`) also carry `origin: "cloud"`,
+ * their `sourceId` and `stale` (true while the source has sent nothing for 60 s); local projects omit all three.
+ */
+export interface TeamProjectInfo {
+  id: string
+  name: string
+  hasState: boolean
+  origin?: 'cloud'
+  sourceId?: string
+  stale?: boolean
+}
+
 export class TeamService {
   private watchers = new Map<string, TeamStateWatcher>()
   private sseClients = new Set<http.ServerResponse>()
@@ -40,13 +53,17 @@ export class TeamService {
   autoOffboardMinutes: number = AUTO_OFFBOARD_DEFAULT_MINUTES
   /** Chat messages accepted per minute, across all projects (spec-chat: 429 above 20). */
   messageLimiter = new MessageLimiter()
+  /** Hub intake: source of each cloud project (project id -> sourceId). */
+  private cloud = new Map<string, string>()
+  /** Hub intake: is a source stale (set by the IngestService). */
+  cloudStale: (sourceId: string) => boolean = () => false
 
   constructor(
     readonly projects: ProjectEntry[],
-    opts: { debounceMs?: number; pollMs?: number; log?: (msg: string) => void; heartbeat?: StatusOptions } = {},
+    private readonly watcherOpts: { debounceMs?: number; pollMs?: number; log?: (msg: string) => void; heartbeat?: StatusOptions } = {},
   ) {
     for (const p of projects) {
-      const w = new TeamStateWatcher({ projectId: p.id, projectPath: p.path, ...opts })
+      const w = new TeamStateWatcher({ projectId: p.id, projectPath: p.path, ...watcherOpts })
       w.start()
       this.watchers.set(p.id, w)
     }
@@ -56,13 +73,48 @@ export class TeamService {
     return this.watchers.get(id)
   }
 
-  list() {
-    return this.projects.map((p) => ({ id: p.id, name: p.name, hasState: hasState(p.path) }))
+  /**
+   * Register a cloud project at runtime (hub intake): its mirror folder is watched like any project, but it is
+   * never written to config.json and the graph does not look for its sessions on disk. The `.watcher` heartbeat
+   * comes from another machine, so its pid is not checked here (its age still is).
+   */
+  addCloudProject(entry: ProjectEntry, sourceId: string): TeamStateWatcher {
+    const existing = this.watchers.get(entry.id)
+    if (existing) return existing
+    const w = new TeamStateWatcher({
+      projectId: entry.id, projectPath: entry.path, ...this.watcherOpts,
+      heartbeat: { ...this.watcherOpts.heartbeat, pidAlive: () => true },
+    })
+    w.start()
+    this.watchers.set(entry.id, w)
+    this.projects.push({ ...entry })
+    this.cloud.set(entry.id, sourceId)
+    return w
   }
 
-  /** The projects the graph follows, with each one's current `meta.title` (spec graph-theme items 3-4). */
+  /** Rename a cloud project (the source reported another name). */
+  renameCloudProject(id: string, name: string): void {
+    if (!this.cloud.has(id)) return
+    const i = this.projects.findIndex((p) => p.id === id)
+    if (i >= 0) this.projects[i] = { ...this.projects[i], name }
+  }
+
+  isCloudProject(id: string): boolean {
+    return this.cloud.has(id)
+  }
+
+  list(): TeamProjectInfo[] {
+    return this.projects.map((p) => {
+      const base = { id: p.id, name: p.name, hasState: hasState(p.path) }
+      const sourceId = this.cloud.get(p.id)
+      return sourceId === undefined ? base : { ...base, origin: 'cloud' as const, sourceId, stale: this.cloudStale(sourceId) }
+    })
+  }
+
+  /** The projects the graph follows, with each one's current `meta.title` (spec graph-theme items 3-4). Cloud
+   *  projects are left out: their sessions come through the intake, not from ~/.claude/projects. */
   graphProjects(): WatchedProject[] {
-    return this.projects.map((p) => ({
+    return this.projects.filter((p) => !this.cloud.has(p.id)).map((p) => ({
       id: p.id, name: p.name, path: p.path,
       title: titleFromState(this.watchers.get(p.id)?.rawState()),
       coordinator: coordinatorFromState(this.watchers.get(p.id)?.rawState()),
@@ -104,6 +156,13 @@ export interface HandlerOptions {
   sessionSweepMs?: number
   /** Server-side log for error details (default console.error). */
   log?: (msg: string) => void
+  /** Hub intake (`--ingest`); null or absent = every /api/ingest/* route answers 404. */
+  ingest?: IngestHandler | null
+}
+
+/** What the request handler needs from the hub intake (implemented by IngestService in ingest.ts). */
+export interface IngestHandler {
+  handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, query: URLSearchParams): Promise<void>
 }
 
 /**
@@ -191,18 +250,19 @@ const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
 }
 
-function sendJSON(res: http.ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
+export function sendJSON(res: http.ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...SECURITY_HEADERS, ...extra })
   res.end(JSON.stringify(body))
 }
 
-function sendError(res: http.ServerResponse, status: number, error: string, extra: Record<string, string> = {}): void {
+export function sendError(res: http.ServerResponse, status: number, error: string, extra: Record<string, string> = {}): void {
   sendJSON(res, status, { ok: false, error }, extra)
 }
 
-class BodyError extends Error {}
+/** The body is larger than the limit (counted while reading, also without a Content-Length). */
+export class BodyError extends Error {}
 
-function readBody(req: http.IncomingMessage, limit: number): Promise<string> {
+export function readBody(req: http.IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length'])
     if (Number.isFinite(declared) && declared > limit) { reject(new BodyError('body too large')); return }
@@ -221,15 +281,23 @@ function readBody(req: http.IncomingMessage, limit: number): Promise<string> {
 }
 
 /** After an early reply, drop the rest of the upload without keeping the socket. */
-function closeAfter(res: http.ServerResponse): void {
+export function closeAfter(res: http.ServerResponse): void {
   res.setHeader('Connection', 'close')
 }
 
-function mediaType(req: http.IncomingMessage): string {
+export function mediaType(req: http.IncomingMessage): string {
   return String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
 }
 
 // ─── Handler ────────────────────────────────────────────────────────────────
+
+/** Normalized path and query when the request is for `/api/ingest` or below, else null. */
+function ingestPathname(url: string | undefined): { pathname: string; query: URLSearchParams } | null {
+  let u: URL
+  try { u = new URL(url || '/', 'http://localhost') } catch { return null }
+  if (u.pathname !== '/api/ingest' && !u.pathname.startsWith('/api/ingest/')) return null
+  return { pathname: u.pathname, query: u.searchParams }
+}
 
 export function createRequestHandler(opts: HandlerOptions): Handler {
   const { team, remote, fallback } = opts
@@ -242,6 +310,14 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
   }
 
   return (req, res) => {
+    // Hub intake (`--ingest`): answered before the Host check and the login, because Funnel traffic carries the
+    // public host name. Every ingest request needs the ingest token instead (ingest.ts); without --ingest: 404.
+    const ingestPath = ingestPathname(req.url)
+    if (ingestPath !== null) {
+      if (!opts.ingest) return sendError(res, 404, 'not found')
+      return void opts.ingest.handle(req, res, ingestPath.pathname, ingestPath.query)
+    }
+
     const hostOk = remote ? isAllowedRemoteHost(req.headers.host, remote.config) : isLoopbackHost(req.headers.host)
     if (!hostOk) {
       res.writeHead(403, { 'Content-Type': 'text/plain' })
