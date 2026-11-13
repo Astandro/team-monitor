@@ -30,17 +30,6 @@ export function projectStatusLabel(raw: unknown): string {
   return typeof raw === 'string' && PROJECT_STATUS_LABEL[raw] ? PROJECT_STATUS_LABEL[raw] : ''
 }
 
-const DESK_LABEL: Record<string, string> = {
-  coordinator: 'Koordinator',
-  builder: 'Pembuat',
-  reviewer: 'Reviewer',
-  grader: 'Penilai',
-}
-
-export function deskLabel(desk: unknown): string {
-  return typeof desk === 'string' && DESK_LABEL[desk] ? DESK_LABEL[desk] : ''
-}
-
 export type AvatarTone = 'opus' | 'sonnet' | 'lead'
 
 export function avatarTone(desk: unknown, model: unknown): AvatarTone {

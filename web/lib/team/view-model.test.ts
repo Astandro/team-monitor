@@ -84,12 +84,17 @@ test('idle members show no task; working members show theirs', () => {
   assert.equal(vm.members.find((m) => m.nick === 'Mei')?.task, 'Review filter kategori')
 })
 
-test('member roles are plain Indonesian', () => {
+test('member role is the standard role name and the model its own field; no desk label (V-01, V-02)', () => {
   const vm = buildTeamVM(fixture(), { now: NOW })
-  assert.equal(vm.lead?.role, 'Koordinator')
-  assert.equal(vm.members.find((m) => m.nick === 'Mei')?.role, 'Reviewer')
-  assert.equal(vm.members.find((m) => m.nick === 'Rin')?.role, 'Penilai')
-  assert.equal(vm.members.find((m) => m.nick === 'Yuki')?.role, 'Pembuat')
+  assert.equal(vm.lead?.role, 'Software Architect')
+  assert.equal(vm.members.find((m) => m.nick === 'Mei')?.role, 'Code Reviewer')
+  const yuki = vm.members.find((m) => m.nick === 'Yuki')
+  assert.equal(yuki?.role, 'Software Engineer')
+  assert.equal(yuki?.model, 'Sonnet 5.5')
+  const shown = JSON.stringify([vm.lead, ...vm.members])
+  for (const w of ['Pembuat', 'Koordinator', 'Penilai', 'builder', 'coordinator', 'grader']) {
+    assert.ok(!shown.includes(w), `${w} leaked`)
+  }
 })
 
 test('a task shows who works on it as "nick · model", or nothing when unassigned', () => {

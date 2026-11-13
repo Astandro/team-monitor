@@ -2,7 +2,6 @@
 // Rule O2/O3: ids (task keys, agent ids, decision keys) never become display text, and no title is ever cut.
 import {
   avatarTone,
-  deskLabel,
   normalizeTaskStatus,
   projectStatusLabel,
   relativeTime,
@@ -24,7 +23,6 @@ export interface MemberVM {
   nick: string
   model: string
   role: string
-  detail: string
   initial: string
   tone: AvatarTone
   working: boolean
@@ -113,7 +111,6 @@ function initialOf(nick: string): string {
 
 function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: string }>): MemberVM {
   const nick = str(a.nick) || str(a.name) || 'Anggota tim'
-  const desk = deskLabel(a.desk)
   const name = str(a.name)
   const model = str(a.model)
   const working = a.status === 'working'
@@ -124,8 +121,7 @@ function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: s
     id,
     nick,
     model,
-    role: desk || name,
-    detail: [desk ? name : '', model].filter(Boolean).join(' · '),
+    role: name,
     initial: initialOf(nick),
     tone: avatarTone(a.desk, a.model),
     working,

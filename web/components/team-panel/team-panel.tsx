@@ -30,7 +30,7 @@ function Member({ m, lead }: { m: MemberVM; lead?: boolean }) {
       <Avatar tone={m.tone} initial={m.initial} working={m.working} size={lead ? 'lead' : undefined} />
       <div className="nm">{m.nick}</div>
       {m.role && <div className="rl">{m.role}</div>}
-      {m.detail && <div className="rl">{m.detail}</div>}
+      {m.model && <div className="rl mdl">{m.model}</div>}
       <div className={`tk${m.working && m.task ? '' : ' idle'}`}>
         <span className="sr-only">{m.working ? 'Lagi ngerjain: ' : 'Status: '}</span>
         {m.working && m.task ? m.task : 'Siaga'}
