@@ -34,7 +34,8 @@ export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse)
   const url = req.url || '/'
 
   if (url === '/' || url === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html' })
+    // no-cache: the bundle has a fixed name, so browsers must revalidate after every rebuild (phones kept old code).
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' })
     res.end(HTML_SHELL)
     return
   }
@@ -61,7 +62,7 @@ export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse)
 
   try {
     const content = fs.readFileSync(filePath)
-    res.writeHead(200, { 'Content-Type': mime })
+    res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-cache' })
     res.end(content)
   } catch {
     res.writeHead(404)
