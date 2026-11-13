@@ -2,6 +2,7 @@ import type { ContextBreakdown } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
 import { appendConversation, asString, asNumber, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
+import { plainText } from '@/lib/plain-text'
 
 export function handleMessage(
   payload: Record<string, unknown>,
@@ -36,7 +37,9 @@ export function handleMessage(
 
     {
       // Truncate thinking for graph bubbles (full text in message feed panel)
-      const bubbleText = bubbleRole === 'thinking' ? content.slice(0, LABEL_LEN_BUBBLE) + (content.length > LABEL_LEN_BUBBLE ? '...' : '') : content
+      // Markdown marks never show raw on the canvas either (owner feedback 13 Nov)
+      const plain = plainText(content)
+      const bubbleText = bubbleRole === 'thinking' ? plain.slice(0, LABEL_LEN_BUBBLE) + (plain.length > LABEL_LEN_BUBBLE ? '...' : '') : plain
       // Dedup: skip if last bubble has the same text (dual event source race)
       const lastBubble = msgAgent.messageBubbles[msgAgent.messageBubbles.length - 1]
       if (!lastBubble || lastBubble.text !== bubbleText) {

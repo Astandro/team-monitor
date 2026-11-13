@@ -8,6 +8,7 @@ import { useClickOutside } from '@/hooks/use-click-outside'
 import { agentDisplayName } from '@/lib/readable-labels'
 import { identityLine } from '@/lib/agent-identity'
 import { useVirtualList } from '@/hooks/use-virtual-list'
+import { plainText, previewLine } from '@/lib/plain-text'
 import { canvasIdentity } from './canvas/identity'
 
 /** "Hiro · Frontend Engineer" when the node is known, else the old label */
@@ -20,6 +21,8 @@ interface MessageFeedPanelProps {
   agents: Map<string, Agent>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
+  /** Phone-sized graph: the collapsed card is one short line (name · role), no message preview */
+  compact?: boolean
 }
 
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
@@ -39,6 +42,7 @@ export function MessageFeedPanel({
   agents,
   onAgentClick,
   selectedAgentId,
+  compact = false,
 }: MessageFeedPanelProps) {
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<string>('all')
@@ -194,25 +198,36 @@ export function MessageFeedPanel({
     const agent = agents.get(latestMessage.agentId)
     const agentName = feedName(agent, latestMessage.agentId)
     const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
-    const preview = latestMessage.content.replace(/\n/g, ' ').slice(0, PREVIEW_MAX)
+    // Markdown marks never show raw (owner feedback 13 Nov); a message preview may be cut, names never are (O3)
+    const plain = previewLine(latestMessage.content)
+    const preview = plain.slice(0, PREVIEW_MAX)
 
     return (
-      <div
-        className="cursor-pointer transition-all hover:scale-[1.02]"
-        style={{ pointerEvents: 'auto', maxWidth: '100%' }}
+      <button
+        type="button"
+        className="tm-feed-chip block text-left transition-all hover:scale-[1.02] active:scale-100"
+        style={{ pointerEvents: 'auto', maxWidth: '100%', background: 'none', border: 0, padding: 0 }}
         onClick={() => setExpanded(true)}
+        aria-expanded={false}
+        title="Buka daftar pesan"
       >
-        <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 'min(320px, 100%)' }} title="Buka daftar pesan">
-          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
-          <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: 190, flexShrink: 0 }}>
+        <span
+          className="glass-card px-3 flex items-center gap-2"
+          style={{ maxWidth: compact ? '100%' : 'min(320px, 100%)', minHeight: compact ? 44 : undefined, paddingTop: compact ? 0 : 8, paddingBottom: compact ? 0 : 8 }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} aria-hidden="true" />
+          <span className="text-[9px] font-mono font-semibold break-words" style={{ color: COLORS.textPrimary, overflowWrap: 'anywhere', maxWidth: compact ? undefined : 190, flexShrink: compact ? 1 : 0, minWidth: 0 }}>
             {agentName}
           </span>
-          <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
-            {preview}{latestMessage.content.length > PREVIEW_MAX ? '...' : ''}
-          </span>
-          <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
-        </div>
-      </div>
+          {!compact && (
+            <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
+              {preview}{plain.length > PREVIEW_MAX ? '...' : ''}
+            </span>
+          )}
+          {compact && <span className="sr-only">, buka pesan terbaru</span>}
+          <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }} aria-hidden="true">▾</span>
+        </span>
+      </button>
     )
   }
 
@@ -220,10 +235,11 @@ export function MessageFeedPanel({
   return (
     <div
       ref={panelRef}
-      style={{ pointerEvents: 'auto', maxWidth: '100%' }}
+      style={{ pointerEvents: 'auto', maxWidth: compact ? 'none' : '100%' }}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="glass-card flex flex-col" style={{ width: 'min(320px, 100%)', maxHeight: 420 }}>
+      {/* On a phone the card opens from a narrow slot in the control row: give it the screen width instead */}
+      <div className="glass-card flex flex-col" style={{ width: compact ? 'min(360px, calc(100vw - 24px))' : 'min(320px, 100%)', maxHeight: compact ? 'min(420px, 60dvh)' : 420 }}>
         {/* Header */}
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
           <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
@@ -355,8 +371,9 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
   const [expanded, setExpanded] = useState(false)
   const role = ROLE_COLORS[message.type] ?? ROLE_COLORS.assistant
   const roleLabel = message.type === 'assistant' && runtime === 'codex' ? 'CODEX' : role.label
-  const isLong = message.content.length > MESSAGE_TRUNCATE_MAX
-  const displayText = expanded || !isLong ? message.content : message.content.slice(0, MESSAGE_TRUNCATE_MAX) + '...'
+  const text = plainText(message.content)
+  const isLong = text.length > MESSAGE_TRUNCATE_MAX
+  const displayText = expanded || !isLong ? text : text.slice(0, MESSAGE_TRUNCATE_MAX) + '...'
 
   return (
     <div

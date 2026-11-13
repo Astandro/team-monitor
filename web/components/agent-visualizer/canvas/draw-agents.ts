@@ -7,7 +7,7 @@ import { alphaHex, formatTokens } from '@/lib/utils'
 import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
-import { disintegrationLook, disintegrationProgress, fragments, type Fragment } from '@/lib/disintegration'
+import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, nameFlicker, type Burst, type Fragment } from '@/lib/disintegration'
 import { reducedMotion } from '@/lib/motion'
 
 let _claudeSparkPath: Path2D | null = null
@@ -309,6 +309,32 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
   }
 }
 
+/** A quiet light burst: one faint ring growing off the node edge and fading (item 7). Cheap: one arc stroke. */
+function drawBurst(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, b: Burst) {
+  ctx.beginPath()
+  ctx.strokeStyle = color + alphaHex(Math.min(1, b.alpha))
+  ctx.lineWidth = 2 * (1 - b.phase) + 0.5
+  ctx.arc(agent.x, agent.y, r + b.spread, 0, Math.PI * 2)
+  ctx.stroke()
+}
+
+/** Small "disintegrating" tag under a leaving node's name and role, in the muted colour. */
+function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
+  const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
+  const hasBar = agent.tokensUsed > 0
+  const top = hasBar
+    ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
+    : r + AGENT_DRAW.labelYOffset
+  ctx.font = '10px monospace'
+  const id = canvasIdentity(agent)
+  const lines = wrapTextCanvas(ctx, id.name, maxLabelW).length + (id.role ? wrapTextCanvas(ctx, id.role, maxLabelW).length : 0)
+  ctx.font = 'italic 9px monospace'
+  ctx.fillStyle = COLORS.textMuted
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillText(DISINTEGRATING_TAG, agent.x, agent.y + top + lines * AGENT_DRAW.labelLineHeight + 1)
+}
+
 function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {
   ctx.fillStyle = isHovered ? COLORS.textPrimary : COLORS.textDim
   ctx.font = '10px monospace'
@@ -429,6 +455,8 @@ export function drawAgents(
       ctx.globalAlpha = agent.opacity
       drawBrokenOutline(ctx, agent, r, color, look.pieces)
       drawFragments(ctx, agent, r, color, fragments(id, progress, time, still))
+      const burst = burstAt(id, progress, time, still)
+      if (burst) drawBurst(ctx, agent, r, color, burst)
       ctx.globalAlpha = bodyAlpha
     } else {
       drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
@@ -445,8 +473,15 @@ export function drawAgents(
 
     // A finished sub-agent's node is dimmed, but its name stays readable (muted text at full strength): the owner
     // wants to see who was on the team, and a dimmed label failed contrast on the light canvas.
-    if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) ctx.globalAlpha = look ? look.label : 1
+    // While it disintegrates the name blinks slowly and carries a small tag (item 7); reduced motion: steady name.
+    if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) {
+      ctx.globalAlpha = look ? look.label * nameFlicker(id, progress, time, still) : 1
+    }
     drawAgentLabel(ctx, agent, r, isHovered)
+    if (look && progress < 1) {
+      ctx.globalAlpha = look.label
+      drawDisintegratingTag(ctx, agent, r)
+    }
     ctx.globalAlpha = bodyAlpha
 
     // Context composition — ring for main agent, bar for sub-agents

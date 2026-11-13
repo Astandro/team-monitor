@@ -44,6 +44,8 @@ export interface TeamAgent {
   task?: string
   reportsTo?: string
   order?: number
+  /** Set with status "offboarding": when the instance retired; it leaves the tree 60 minutes later. */
+  finishedAt?: string
 }
 
 export interface TeamApproval {

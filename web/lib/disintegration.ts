@@ -115,6 +115,61 @@ export function disintegrationLook(id: string, progress: number, reducedMotion: 
   return { body: p >= 1 ? 0 : 1 - 0.7 * p, label, pieces: outlinePieces(id, p) }
 }
 
+/*
+ * Owner request 13 Nov (item 7): while a node or member card disintegrates, small quiet light bursts flash from it,
+ * more often as the deadline nears, and the name flickers slowly with a small "disintegrating" tag. Subtle: a burst
+ * is a faint ring for a fraction of a second; the name never drops below 55%. Reduced motion: none of it (plain fade).
+ */
+
+/** Small tag next to a disintegrating name (graph label and panel card). */
+export const DISINTEGRATING_TAG = 'disintegrating'
+
+/** Seconds between bursts: one every 12 s at the start of the hour, one every 2.5 s near the end. */
+export function burstPeriod(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress))
+  return 12 - 9.5 * p
+}
+
+/** Seconds one burst lasts (a flash that expands and fades). */
+export const BURST_LIFE = 0.7
+
+export interface Burst {
+  /** 0..1 through the flash */
+  phase: number
+  /** Ring alpha; peaks at 0.35 */
+  alpha: number
+  /** Extra radius beyond the node edge, px at scale 1 */
+  spread: number
+}
+
+/**
+ * The burst showing at `time` seconds, or null between bursts. Each node has its own offset so a group of leaving
+ * nodes does not flash in step. None under reduced motion, before the clock starts or once the node is gone.
+ */
+export function burstAt(id: string, progress: number, time: number, reducedMotion: boolean): Burst | null {
+  if (reducedMotion || progress <= 0 || progress >= 1) return null
+  const period = burstPeriod(progress)
+  const t = time + unitHash(id, 7) * period
+  const into = t - Math.floor(t / period) * period
+  if (into >= BURST_LIFE) return null
+  const phase = into / BURST_LIFE
+  return { phase, alpha: 0.35 * (1 - phase), spread: 4 + 14 * phase }
+}
+
+/** Seconds per slow blink of the name: 4 s at the start, 1.6 s near the end. */
+export function flickerPeriod(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress))
+  return 4 - 2.4 * p
+}
+
+/** Multiplier for the name's alpha: a slow blink between 55% and 100%; always 1 under reduced motion. */
+export function nameFlicker(id: string, progress: number, time: number, reducedMotion: boolean): number {
+  if (reducedMotion || progress <= 0 || progress >= 1) return 1
+  const period = flickerPeriod(progress)
+  const wave = 0.5 + 0.5 * Math.cos(((time / period) + unitHash(id, 11)) * Math.PI * 2)
+  return 0.55 + 0.45 * wave
+}
+
 /** "Keluar otomatis 15.05 (23 menit lagi)" for the detail card; times in the viewer's local clock. */
 export function autoOffboardText(clock: FinishedClock, now: number): string {
   const d = new Date(clock.offboardAt)
