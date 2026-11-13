@@ -6,8 +6,8 @@ import {
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
-import { getAgentGlowSprite } from './render-cache'
-import { burstAt, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, fragments, NEBULA_COLORS, NEBULA_CORE, tagPulse, type Burst, type Fragment } from '@/lib/disintegration'
+import { getAgentGlowSprite, getEmberGlowSprite, getGlowSprite } from './render-cache'
+import { debris, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, EMBER, emberGlow, sparks, tagPulse, type EmberGlow, type Mote } from '@/lib/disintegration'
 import { ALERT_TOKENS, alertBlinkAlpha, mixHex, WARNING_ICON } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
 import { drawNodeAvatar } from './avatar-sprites'
@@ -336,31 +336,44 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
 }
 
 /**
- * A slow nebula explosion behind a leaving node (item 4b): a few soft clouds of coloured gas and a warm core, each one
- * radial gradient fill. Additive on the dark sky, plain blending on the light canvas (additive would wash out).
+ * The ember glow behind a leaving node: the same symmetric shape as the active glow (drawAgentGlow), in ember orange,
+ * one cached sprite drawn at the wanted strength. Additive on the dark sky, plain blending on the light canvas.
  */
-function drawNebula(ctx: CanvasRenderingContext2D, agent: Agent, b: Burst) {
-  const dark = getGraphTheme() === 'dark'
+function drawEmberGlow(ctx: CanvasRenderingContext2D, agent: Agent, r: number, g: EmberGlow, dark: boolean, base: number) {
+  const outer = Math.ceil(r + g.pad)
+  const sprite = getEmberGlowSprite(dark ? EMBER.dark.glow : EMBER.light.glow, r * 0.85, outer)
   const prevOp = ctx.globalCompositeOperation
-  const prevAlpha = ctx.globalAlpha
   ctx.globalCompositeOperation = dark ? 'lighter' : 'source-over'
-  const k = dark ? 1 : 0.75
-  const cloud = (x: number, y: number, radius: number, color: string, alpha: number) => {
-    if (alpha <= 0.005 || radius <= 0) return
-    const g = ctx.createRadialGradient(x, y, 0, x, y, radius)
-    g.addColorStop(0, color + alphaHex(Math.min(1, alpha * k)))
-    g.addColorStop(0.45, color + alphaHex(Math.min(1, alpha * k * 0.45)))
-    g.addColorStop(1, color + '00')
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.arc(x, y, radius, 0, Math.PI * 2)
-    ctx.fill()
-  }
-  ctx.globalAlpha = 1
-  for (const c of b.clouds) cloud(agent.x + c.dx, agent.y + c.dy, c.radius, c.color, c.alpha)
-  cloud(agent.x, agent.y, b.core.radius, dark ? NEBULA_CORE : NEBULA_COLORS[3], b.core.alpha)
+  ctx.globalAlpha = base * g.alpha
+  ctx.drawImage(sprite, agent.x - outer, agent.y - outer)
   ctx.globalCompositeOperation = prevOp
-  ctx.globalAlpha = prevAlpha
+}
+
+/**
+ * Debris breaking off a leaving node (small squares, one fillRect each) and the sparks among it (a small cached light
+ * sprite with a bright point in the middle). Sparks add light on the dark sky; on the light canvas they are hot orange
+ * points with a soft halo.
+ */
+function drawDebrisAndSparks(ctx: CanvasRenderingContext2D, agent: Agent, bits: Mote[], lights: Mote[], dark: boolean, base: number) {
+  const ember = dark ? EMBER.dark : EMBER.light
+  ctx.fillStyle = ember.debris
+  for (const m of bits) {
+    if (m.alpha <= 0.01) continue
+    ctx.globalAlpha = base * m.alpha
+    ctx.fillRect(agent.x + m.x - m.size / 2, agent.y + m.y - m.size / 2, m.size, m.size)
+  }
+  if (!lights.length) return
+  const prevOp = ctx.globalCompositeOperation
+  if (dark) ctx.globalCompositeOperation = 'lighter'
+  for (const s of lights) {
+    if (s.alpha <= 0.01) continue
+    const halo = getGlowSprite(ember.spark, Math.ceil(s.size), 'cc', '00')
+    ctx.globalAlpha = base * s.alpha
+    ctx.drawImage(halo, agent.x + s.x - halo.width / 2, agent.y + s.y - halo.height / 2)
+    ctx.fillStyle = dark ? '#FFFFFF' : ember.debris
+    ctx.fillRect(agent.x + s.x - 0.75, agent.y + s.y - 0.75, 1.5, 1.5)
+  }
+  ctx.globalCompositeOperation = prevOp
 }
 
 /**
@@ -494,17 +507,6 @@ function drawBrokenOutline(ctx: CanvasRenderingContext2D, agent: Agent, r: numbe
   ctx.stroke()
 }
 
-/** Fragments drifting off a disintegrating node (none under reduced motion). */
-function drawFragments(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, list: Fragment[]) {
-  for (const f of list) {
-    const d = r + 2 + f.drift
-    ctx.beginPath()
-    ctx.fillStyle = color + alphaHex(Math.min(1, f.alpha))
-    ctx.arc(agent.x + Math.cos(f.angle) * d, agent.y + Math.sin(f.angle) * d, f.size, 0, Math.PI * 2)
-    ctx.fill()
-  }
-}
-
 export function drawAgents(
   ctx: CanvasRenderingContext2D,
   agents: Map<string, Agent>,
@@ -541,13 +543,11 @@ export function drawAgents(
     const bodyAlpha = agent.opacity * (look ? look.body : 1)
 
     ctx.save()
-    // The nebula sits behind the node (item 4b)
+    // The ember glow sits behind the node, symmetric like the active glow (owner, 13 Nov)
+    const dark = theme === 'dark'
     if (look) {
-      const nebula = burstAt(id, progress, time, still, r)
-      if (nebula) {
-        ctx.globalAlpha = agent.opacity
-        drawNebula(ctx, agent, nebula)
-      }
+      const glow = emberGlow(id, progress, time, still)
+      if (glow) drawEmberGlow(ctx, agent, r, glow, dark, agent.opacity)
     }
     ctx.globalAlpha = bodyAlpha
 
@@ -560,7 +560,8 @@ export function drawAgents(
     if (look?.pieces) {
       ctx.globalAlpha = agent.opacity
       drawBrokenOutline(ctx, agent, r, color, look.pieces)
-      drawFragments(ctx, agent, r, color, fragments(id, progress, time, still))
+      // debris and sparks in front of the node, so they read over its body
+      drawDebrisAndSparks(ctx, agent, debris(id, progress, time, still, r), sparks(id, progress, time, still, r), dark, agent.opacity)
       ctx.globalAlpha = bodyAlpha
     } else {
       drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)

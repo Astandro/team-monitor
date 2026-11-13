@@ -3,7 +3,7 @@
  * Cause: the bloom pass was laid over the canvas dpr times too large (BloomRenderer drew `canvas.width` device pixels
  * into a context already scaled by the device pixel ratio). These tests pin the fix and the rules around it: the
  * bloom covers the canvas pixel for pixel at any dpr, the background draws no soft glow, the stars move only slightly
- * with the camera, and the nebula of a leaving node stays small and on its node.
+ * with the camera, and the ember effect of a leaving node stays small and on its node.
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import { compositeBloom, type BloomTarget } from '@/components/agent-visualizer/
 import { drawBackground } from '@/components/agent-visualizer/background-layer'
 import { createSkyParticles } from './sky'
 import { applyGraphTheme as setGraphTheme } from './colors'
-import { burstAt } from './disintegration'
+import { debris, emberGlow, sparks } from './disintegration'
 
 type M = [number, number, number, number, number, number]
 
@@ -99,21 +99,21 @@ describe('background: stars or dust only, no soft glow', () => {
   })
 })
 
-describe('nebula of a leaving node stays small and on its node', () => {
-  it('every cloud ends within about 4 node radii of the node centre', () => {
+describe('the ember effect of a leaving node stays on its node', () => {
+  it('glow, debris and sparks end within about 3 node radii of the node centre', () => {
     const r = 24
     let worst = 0
     for (const id of ['a', 'mei-review', 'kaito-x', 'sota']) {
       for (let p = 0.05; p < 1; p += 0.15) {
-        for (let t = 0; t < 60; t += 0.25) {
-          const b = burstAt(id, p, t, false, r)
-          if (!b) continue
-          assert.ok(b.core.radius <= 1.2 * r)
-          for (const c of b.clouds) worst = Math.max(worst, Math.hypot(c.dx, c.dy) + c.radius)
+        for (let t = 0; t < 30; t += 0.25) {
+          const g = emberGlow(id, p, t, false)
+          if (g) worst = Math.max(worst, r + g.pad)
+          for (const m of debris(id, p, t, false, r)) worst = Math.max(worst, Math.hypot(m.x, m.y) + m.size)
+          for (const s of sparks(id, p, t, false, r)) worst = Math.max(worst, Math.hypot(s.x, s.y) + s.size)
         }
       }
     }
-    assert.ok(worst > 0 && worst <= 4.2 * r, `worst extent ${(worst / r).toFixed(2)} r`)
+    assert.ok(worst > 2 * r && worst <= 3.2 * r, `worst extent ${(worst / r).toFixed(2)} r`)
   })
 })
 

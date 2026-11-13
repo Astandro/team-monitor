@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
-import { burstPeriod, DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES } from '@/lib/disintegration'
+import { DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES, panelEmberVars } from '@/lib/disintegration'
 import { WARNING_ICON } from '@/lib/alert-tag'
 import { OWNER_LABEL } from '@/lib/team/labels'
 import { groupMembers } from '@/lib/team/groups'
@@ -56,10 +56,10 @@ function usePrefersReducedMotion(): boolean {
 function LeavingAvatar({ m, reduce }: { m: MemberVM; reduce: boolean }) {
   const look = disintegrationLook(m.id, m.progress, reduce)
   const dash = look.pieces ? dashArrayFromPieces(look.pieces) : 'none'
-  // Quiet light bursts, more often as the hour runs out (item 7); the CSS drops them under reduced motion
-  const motion = reduce ? undefined : ({ '--tm-burst': `${burstPeriod(m.progress).toFixed(2)}s` } as React.CSSProperties)
+  // Ember glow and sparks, stronger and more often as the hour runs out (owner, 13 Nov); none under reduced motion
+  const ember = panelEmberVars(m.progress, reduce)
   return (
-    <div className={`tm-av leaving${reduce ? '' : ' bursting'}`} style={motion} aria-hidden="true">
+    <div className={`tm-av leaving${ember ? ' burning' : ''}`} style={(ember ?? undefined) as React.CSSProperties | undefined} aria-hidden="true">
       <span className={`body ${m.tone}`} style={{ opacity: look.body }}>
         <BotAvatar name={m.nick} coordinator={m.isLead} />
       </span>

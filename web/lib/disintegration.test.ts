@@ -5,7 +5,6 @@ import {
   disintegrationLook,
   disintegrationProgress,
   finishedClock,
-  fragments,
   OUTLINE_PIECES,
   outlinePieces,
 } from './disintegration'
@@ -52,23 +51,6 @@ test('the outline breaks up in step with the clock: share left = 1 - progress, p
   // stable per node, different between nodes
   assert.deepEqual(outlinePieces('Hiro', 0.4), outlinePieces('Hiro', 0.4))
   assert.notDeepEqual(outlinePieces('Hiro', 0.4), outlinePieces('Ren', 0.4))
-})
-
-test('fragments drift off and fade, more of them later; none under reduced motion or outside the hour', () => {
-  const early = fragments('Hiro', 0.05, 10, false)
-  const late = fragments('Hiro', 0.9, 10, false)
-  assert.ok(early.length >= 2 && late.length > early.length, `${early.length} then ${late.length}`)
-  for (const f of late) {
-    assert.ok(f.alpha >= 0 && f.alpha <= 0.85)
-    assert.ok(f.drift >= 0)
-  }
-  // a fragment moves outward and fades as time passes within its life
-  const a = fragments('Hiro', 0.5, 0, false)[0]
-  const b = fragments('Hiro', 0.5, 1, false)[0]
-  if (b.drift > a.drift) assert.ok(b.alpha < a.alpha)
-  assert.deepEqual(fragments('Hiro', 0.5, 10, true), [], 'reduced motion')
-  assert.deepEqual(fragments('Hiro', 0, 10, false), [], 'not started')
-  assert.deepEqual(fragments('Hiro', 1, 10, false), [], 'gone')
 })
 
 test('look: whole at the start, gone at the deadline; reduced motion is a plain fade', () => {

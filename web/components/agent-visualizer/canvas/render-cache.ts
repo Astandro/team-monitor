@@ -53,6 +53,34 @@ export function getAgentGlowSprite(
   return sprite
 }
 
+/**
+ * Ember glow round a leaving node: full colour from `innerRadius` (inside the hexagon edge) fading to nothing at
+ * `outerRadius`, and only a faint tint at the very centre, so the fading node does not turn into an orange disc.
+ * Drawn at the wanted strength with globalAlpha, so one sprite per colour and size serves every frame.
+ */
+export function getEmberGlowSprite(color: string, innerRadius: number, outerRadius: number): HTMLCanvasElement {
+  const iR = Math.round(innerRadius)
+  const oR = Math.ceil(outerRadius)
+  const key = `ember|${color}|${iR}|${oR}`
+  let sprite = glowSpriteCache.get(key)
+  if (sprite) return sprite
+
+  const size = oR * 2
+  sprite = document.createElement('canvas')
+  sprite.width = size
+  sprite.height = size
+  const ctx = sprite.getContext('2d')!
+  const glow = ctx.createRadialGradient(oR, oR, 0, oR, oR, oR)
+  glow.addColorStop(0, color + '30')
+  glow.addColorStop(Math.min(0.95, iR / oR), color + 'ff')
+  glow.addColorStop(1, color + '00')
+  ctx.fillStyle = glow
+  ctx.fillRect(0, 0, size, size)
+
+  glowSpriteCache.set(key, sprite)
+  return sprite
+}
+
 // ─── Text measurement cache ────────────────────────────────────────────────
 // Caches ctx.measureText().width to avoid redundant browser layout per frame.
 
