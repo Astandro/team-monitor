@@ -1,0 +1,20 @@
+[Unit]
+Description=Team Monitor (agent graph and team panel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart="/home/u/.nvm/node 24/bin/node" /home/u/team-monitor/app/dist/app.js --port 3002 --no-open --remote --bind loopback --host-allow box.tail1234.ts.net
+WorkingDirectory=/home/u/projects/100%%web
+Environment="PATH=/home/u/.nvm/node 24/bin:/usr/local/bin:/usr/bin:/bin"
+Environment=HOME=/home/u
+Environment=TEAM_MONITOR_HOME=/home/u/.team-monitor
+UMask=0077
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/u/.team-monitor/team-monitor.log
+StandardError=append:/home/u/.team-monitor/team-monitor.log
+
+[Install]
+WantedBy=default.target
