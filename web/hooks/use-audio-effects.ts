@@ -1,39 +1,50 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
-import { SOUND_PREF_KEY } from '@/lib/canvas-constants'
-import { AudioEngine } from '@/lib/audio-engine'
-import type { Agent, ToolCallNode } from '@/lib/agent-types'
+import { useRef, useEffect } from 'react'
+import type { Agent, Particle, ToolCallNode } from '@/lib/agent-types'
+import type { SessionInfo } from '@/lib/bridge-types'
 import { detectStateChanges } from '@/components/agent-visualizer/canvas/detect-state-changes'
+import { cueForGraphTransition, isHandoffParticle, type SoundCue } from '@/lib/sound/cues'
+import { SoundGate, startedSessions } from '@/lib/sound/gate'
+import { playCues } from '@/lib/sound/sound-client'
+import { useSoundSettings } from './use-sound-settings'
 
-export function useAudioEffects(
-  agents: Map<string, Agent>,
-  toolCalls: Map<string, ToolCallNode>,
-  isReviewing: boolean,
-) {
-  const audioRef = useRef<AudioEngine | null>(null)
-  const [isMuted, setIsMuted] = useState(true)
+interface AudioEffectsInput {
+  agents: Map<string, Agent>
+  toolCalls: Map<string, ToolCallNode>
+  particles: Particle[]
+  isReviewing: boolean
+  /** selected session: a switch replays that session's history, which stays quiet */
+  sessionKey: string | null
+  sessions: SessionInfo[]
+}
+
+/** Graph events to sounds. Mute and volume are the page-wide settings (useSoundSettings). */
+export function useAudioEffects({ agents, toolCalls, particles, isReviewing, sessionKey, sessions }: AudioEffectsInput) {
+  const sound = useSoundSettings()
   const seekingRef = useRef(false)
+  const gateRef = useRef<SoundGate | null>(null)
+  if (gateRef.current === null) gateRef.current = new SoundGate()
+  const mountedAtRef = useRef(Date.now())
+  const seenSessionsRef = useRef<Set<string>>(new Set())
   const prevToolStatesRef = useRef<Map<string, string>>(new Map())
   const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
+  const prevParticleIdsRef = useRef<Set<string>>(new Set())
 
-  // Audio engine lifecycle + restore persisted mute preference
+  // Quiet window on mount, on a session switch and when leaving review: the graph replays history then.
+  // Declared before the detection effect so it applies to the same commit.
   useEffect(() => {
-    const engine = new AudioEngine()
-    try {
-      const savedOn = localStorage.getItem(SOUND_PREF_KEY) === 'on'
-      if (savedOn) {
-        engine.setMuted(false)
-        setIsMuted(false)
-      }
-    } catch { /* localStorage unavailable (private browsing, etc.) */ }
-    audioRef.current = engine
-    return () => { audioRef.current?.dispose(); audioRef.current = null }
-  }, [])
+    gateRef.current!.reset(performance.now())
+  }, [sessionKey, isReviewing])
 
-  // Detect tool/agent state transitions and play sounds (live mode only)
+  // Power-up when a session starts while the page is open (not for sessions listed on load)
   useEffect(() => {
-    if (seekingRef.current || !audioRef.current || isReviewing) return
-    const audio = audioRef.current
+    const started = startedSessions(seenSessionsRef.current, sessions, mountedAtRef.current)
+    for (const s of sessions) seenSessionsRef.current.add(s.id)
+    if (started.length > 0) playCues(gateRef.current!.admit(['session_start'], performance.now()))
+  }, [sessions])
 
+  // Detect tool/agent state transitions and handoffs, play sounds (live mode only).
+  // The baselines follow every frame, also while seeking or reviewing, so going back to live is not a burst.
+  useEffect(() => {
     const { transitions, newAgentStates, newToolStates } = detectStateChanges(
       agents, toolCalls,
       prevAgentStatesRef.current, prevToolStatesRef.current,
@@ -41,24 +52,19 @@ export function useAudioEffects(
     prevAgentStatesRef.current = newAgentStates
     prevToolStatesRef.current = newToolStates
 
-    for (const t of transitions) {
-      switch (t.kind) {
-        case 'agent_spawn':   audio.playAgentSpawn(); break
-        case 'agent_complete': audio.playAgentComplete(); break
-        case 'tool_start':    audio.playToolStart(); break
-        case 'tool_complete': audio.playToolEnd(); break
-        case 'tool_error':    audio.playError(); break
-      }
-    }
-  }, [agents, toolCalls, isReviewing])
+    const cues: SoundCue[] = transitions.map((t) => cueForGraphTransition(t.kind))
 
-  const handleToggleMute = useCallback(() => {
-    if (audioRef.current) {
-      const nowMuted = audioRef.current.toggleMute()
-      setIsMuted(nowMuted)
-      try { localStorage.setItem(SOUND_PREF_KEY, nowMuted ? 'off' : 'on') } catch { /* ignore */ }
+    const prevParticles = prevParticleIdsRef.current
+    const particleIds = new Set<string>()
+    for (const p of particles) {
+      particleIds.add(p.id)
+      if (!prevParticles.has(p.id) && isHandoffParticle(p.type)) cues.push('handoff')
     }
-  }, [])
+    prevParticleIdsRef.current = particleIds
 
-  return { isMuted, seekingRef, handleToggleMute }
+    if (seekingRef.current || isReviewing) return
+    if (cues.length > 0) playCues(gateRef.current!.admit(cues, performance.now()))
+  }, [agents, toolCalls, particles, isReviewing])
+
+  return { isMuted: sound.muted, seekingRef, handleToggleMute: sound.toggle }
 }

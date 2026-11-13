@@ -6,6 +6,7 @@ import { OWNER_LABEL } from '@/lib/team/labels'
 import { newBubbleKeys, themeLabel, type ThemePref } from '@/lib/team/session'
 import type { DecisionVM, MemberVM, TaskVM } from '@/lib/team/view-model'
 import type { TeamModel } from './use-team-model'
+import { useSoundSettings } from '@/hooks/use-sound-settings'
 
 interface PanelProps {
   model: TeamModel
@@ -137,6 +138,39 @@ function Decision({
   )
 }
 
+/** Same mute and volume as the graph's top bar; on a phone the panel is the main view, so it lives here too. */
+function SoundControls() {
+  const sound = useSoundSettings()
+  const volumeId = useId()
+  return (
+    <>
+      <button
+        type="button"
+        className="tm-btn"
+        aria-pressed={!sound.muted}
+        title={sound.muted ? 'Nyalakan suara' : 'Matikan suara'}
+        onClick={sound.toggle}
+      >
+        {sound.muted ? 'Suara: mati' : 'Suara: nyala'}
+      </button>
+      {!sound.muted && (
+        <div className="tm-volume">
+          <label htmlFor={volumeId}>Volume</label>
+          <input
+            id={volumeId}
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(sound.volume * 100)}
+            onChange={(e) => sound.setVolume(Number(e.target.value) / 100)}
+          />
+        </div>
+      )}
+    </>
+  )
+}
+
 function Empty({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="tm-empty-state">
@@ -164,6 +198,7 @@ export function TeamPanel({ model, theme, onCycleTheme, calm, onToggleCalm }: Pa
           {ready && vm.statusText && <p className="sub">{vm.statusText}</p>}
         </div>
         <div className="tm-tools">
+          <SoundControls />
           <button type="button" className="tm-btn" aria-pressed={calm} onClick={onToggleCalm}>
             {calm ? 'Putar animasi' : 'Jeda animasi'}
           </button>

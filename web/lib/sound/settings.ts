@@ -1,0 +1,109 @@
+// One mute and one volume for the whole monitor (graph and team panel), remembered in localStorage.
+// Pure apart from the injected storage and engine, so it is unit tested (settings.test.ts).
+
+import { SOUND_PREF_KEY } from '../canvas-constants'
+
+/** Kept from upstream so a choice made before this change survives: 'on' means sound on. */
+export const SOUND_MUTE_KEY = SOUND_PREF_KEY
+export const SOUND_VOLUME_KEY = `${SOUND_PREF_KEY}-volume`
+export const DEFAULT_VOLUME = 0.5
+
+export interface SoundSettings {
+  muted: boolean
+  /** 0..1 */
+  volume: number
+}
+
+/** Anything but an explicit 'on' is muted: muted is the default. */
+export function parseMuted(raw: string | null): boolean {
+  return raw !== 'on'
+}
+
+export function clampVolume(v: number): number {
+  if (!Number.isFinite(v)) return DEFAULT_VOLUME
+  return Math.min(1, Math.max(0, v))
+}
+
+export function parseVolume(raw: string | null): number {
+  if (raw === null || raw.trim() === '') return DEFAULT_VOLUME
+  return clampVolume(Number(raw))
+}
+
+/** What the store needs from localStorage; every call may throw (private windows, blocked site data). */
+export interface StorageLike {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+/** What the store needs from the audio engine. */
+export interface SoundOutput {
+  setMuted(muted: boolean): void
+  setVolume(volume: number): void
+}
+
+function safeGet(storage: (() => StorageLike | null) | undefined, key: string): string | null {
+  try {
+    return storage?.()?.getItem(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+function safeSet(storage: (() => StorageLike | null) | undefined, key: string, value: string): void {
+  try {
+    storage?.()?.setItem(key, value)
+  } catch {
+    /* the setting is simply not remembered */
+  }
+}
+
+/** Shared settings with change listeners (useSyncExternalStore-compatible). */
+export class SoundSettingsStore {
+  private state: SoundSettings
+  private listeners = new Set<() => void>()
+
+  constructor(
+    private readonly storage?: () => StorageLike | null,
+    private readonly output?: SoundOutput,
+  ) {
+    this.state = {
+      muted: parseMuted(safeGet(storage, SOUND_MUTE_KEY)),
+      volume: parseVolume(safeGet(storage, SOUND_VOLUME_KEY)),
+    }
+    output?.setVolume(this.state.volume)
+    output?.setMuted(this.state.muted)
+  }
+
+  get = (): SoundSettings => this.state
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  setMuted(muted: boolean): void {
+    if (muted === this.state.muted) return
+    this.state = { ...this.state, muted }
+    this.output?.setMuted(muted)
+    safeSet(this.storage, SOUND_MUTE_KEY, muted ? 'off' : 'on')
+    this.emit()
+  }
+
+  toggleMuted(): boolean {
+    this.setMuted(!this.state.muted)
+    return this.state.muted
+  }
+
+  setVolume(volume: number): void {
+    const v = clampVolume(volume)
+    if (v === this.state.volume) return
+    this.state = { ...this.state, volume: v }
+    this.output?.setVolume(v)
+    safeSet(this.storage, SOUND_VOLUME_KEY, String(v))
+    this.emit()
+  }
+
+  private emit(): void {
+    for (const l of this.listeners) l()
+  }
+}

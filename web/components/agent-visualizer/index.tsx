@@ -80,7 +80,11 @@ export function AgentVisualizer() {
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
   const [isReviewing, setIsReviewing] = useState(false)
-  const { isMuted, seekingRef, handleToggleMute } = useAudioEffects(agents, toolCalls, isReviewing)
+  const { isMuted, seekingRef, handleToggleMute } = useAudioEffects({
+    agents, toolCalls, particles, isReviewing,
+    sessionKey: bridge.selectedSessionId,
+    sessions: bridge.sessions,
+  })
 
   // Auto-play on mount
   useEffect(() => {

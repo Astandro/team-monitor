@@ -1,144 +1,126 @@
 'use client'
 
 /**
- * Procedural audio engine using Web Audio API.
- * All sounds are synthesized — no audio files needed.
+ * Procedural audio engine using the Web Audio API. Every sound is synthesised from the recipes in
+ * lib/sound/recipes.ts (oscillators, filters, envelopes); no audio files, no network.
+ *
+ * Muted by default. The AudioContext is only created after a user gesture (unlock) and only while sound is on,
+ * so a muted page never touches audio and the browser never warns about autoplay.
  */
+
+import type { SoundCue } from '@/lib/sound/cues'
+import { RECIPES, type Voice } from '@/lib/sound/recipes'
+import { DEFAULT_VOLUME } from '@/lib/sound/settings'
+
+const SILENT = 0.0001
 
 export class AudioEngine {
   private ctx: AudioContext | null = null
   private masterGain: GainNode | null = null
-  private _muted = true  // default muted
-  private _volume = 0.5
-
-  private ensureContext() {
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume()
-      return
-    }
-    this.ctx = new AudioContext()
-    this.masterGain = this.ctx.createGain()
-    this.masterGain.gain.value = this._muted ? 0 : this._volume
-    this.masterGain.connect(this.ctx.destination)
-  }
+  private _muted = true
+  private _volume = DEFAULT_VOLUME
+  private unlocked = false
 
   get muted() { return this._muted }
 
+  /** Call from a user gesture (tap, key). Creates or resumes the context when sound is on. */
+  unlock() {
+    this.unlocked = true
+    if (!this._muted) this.ensureContext()
+  }
+
   setMuted(muted: boolean) {
     this._muted = muted
-    if (this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(muted ? 0 : this._volume, this.ctx!.currentTime, 0.05)
+    if (!muted && this.unlocked) this.ensureContext()
+    this.applyGain()
+  }
+
+  setVolume(volume: number) {
+    this._volume = volume
+    this.applyGain()
+  }
+
+  /** Play one cue now, plus an optional delay in seconds. Silent while muted or before the first gesture. */
+  play(cue: SoundCue, delay = 0) {
+    if (this._muted || !this.unlocked) return
+    this.ensureContext()
+    const ctx = this.ctx
+    const bus = this.masterGain
+    if (!ctx || !bus) return
+    const t0 = ctx.currentTime + 0.01 + delay
+    for (const v of RECIPES[cue]) this.voice(ctx, bus, v, t0)
+  }
+
+  private applyGain() {
+    if (!this.ctx || !this.masterGain) return
+    this.masterGain.gain.setTargetAtTime(this._muted ? 0 : this._volume, this.ctx.currentTime, 0.03)
+  }
+
+  private ensureContext() {
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => {})
+      return
+    }
+    try {
+      const ctx = new AudioContext()
+      const master = ctx.createGain()
+      master.gain.value = this._muted ? 0 : this._volume
+      // gentle limiter so overlapping cues never clip
+      const limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -12
+      limiter.knee.value = 6
+      limiter.ratio.value = 8
+      limiter.attack.value = 0.003
+      limiter.release.value = 0.15
+      master.connect(limiter)
+      limiter.connect(ctx.destination)
+      this.ctx = ctx
+      this.masterGain = master
+    } catch {
+      /* no Web Audio: stay silent */
     }
   }
 
-  toggleMute() {
-    this.setMuted(!this._muted)
-    return this._muted
-  }
+  private voice(ctx: AudioContext, bus: AudioNode, v: Voice, t0: number) {
+    const start = t0 + v.start
+    const end = start + v.dur
+    const osc = ctx.createOscillator()
+    osc.type = v.type
+    osc.frequency.setValueAtTime(v.freq, start)
+    if (v.to) osc.frequency.exponentialRampToValueAtTime(v.to, end)
+    if (v.detune) osc.detune.value = v.detune
 
-  /** Soft click — tool starts executing */
-  private playClick(freq: number, vol: number) {
-    this.ensureContext()
-    if (!this.ctx || !this.masterGain) return
+    const gain = ctx.createGain()
+    const attack = Math.min(v.attack ?? 0.005, v.dur / 2)
+    gain.gain.setValueAtTime(SILENT, start)
+    gain.gain.linearRampToValueAtTime(v.peak, start + attack)
+    gain.gain.exponentialRampToValueAtTime(SILENT, end)
 
-    const now = this.ctx.currentTime
-    // Use a short noise-like burst via high-freq oscillator that decays instantly
-    const osc = this.ctx.createOscillator()
-    const gain = this.ctx.createGain()
-    const filter = this.ctx.createBiquadFilter()
-    osc.type = 'sine'
-    osc.frequency.setValueAtTime(freq, now)
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.5, now + 0.025)
-    filter.type = 'lowpass'
-    filter.frequency.value = 800
-    filter.Q.value = 0.5
-    gain.gain.setValueAtTime(vol, now)
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.025)
-    osc.connect(filter)
-    filter.connect(gain)
-    gain.connect(this.masterGain)
-    osc.start(now)
-    osc.stop(now + 0.025)
-  }
-
-  playToolStart() { this.playClick(480, 0.06) }
-  playToolEnd() { this.playClick(600, 0.08) }
-
-  /** Soft rising shimmer — new agent spawned */
-  playAgentSpawn() {
-    this.ensureContext()
-    if (!this.ctx || !this.masterGain) return
-
-    const now = this.ctx.currentTime
-    // Two-note rising fifth (G5 → D6), very soft and brief
-    const notes = [784, 1175]
-    for (let i = 0; i < notes.length; i++) {
-      const osc = this.ctx.createOscillator()
-      const gain = this.ctx.createGain()
-      const start = now + i * 0.06
-      osc.type = 'sine'
-      osc.frequency.value = notes[i]
-      gain.gain.setValueAtTime(0.001, start)
-      gain.gain.linearRampToValueAtTime(0.03, start + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.2)
-      osc.connect(gain)
-      gain.connect(this.masterGain!)
-      osc.start(start)
-      osc.stop(start + 0.2)
+    let head: AudioNode = osc
+    let filter: BiquadFilterNode | null = null
+    if (v.filter) {
+      filter = ctx.createBiquadFilter()
+      filter.type = v.filter.type
+      filter.frequency.setValueAtTime(v.filter.freq, start)
+      if (v.filter.to) filter.frequency.exponentialRampToValueAtTime(v.filter.to, end)
+      if (v.filter.q !== undefined) filter.Q.value = v.filter.q
+      osc.connect(filter)
+      head = filter
     }
-  }
-
-  /** Gentle arpeggiated chord — agent completes its task */
-  playAgentComplete() {
-    this.ensureContext()
-    if (!this.ctx || !this.masterGain) return
-
-    const notes = [261.63, 329.63, 392.00, 493.88] // Cmaj7: C4, E4, G4, B4
-    const now = this.ctx.currentTime
-    const stagger = 0.07 // arpeggiate notes slightly
-
-    for (let i = 0; i < notes.length; i++) {
-      const osc = this.ctx.createOscillator()
-      const gain = this.ctx.createGain()
-      const start = now + i * stagger
-      osc.type = 'sine'
-      osc.frequency.value = notes[i]
-      // Soft attack per note, gentle sustain, smooth fade
-      gain.gain.setValueAtTime(0.001, start)
-      gain.gain.linearRampToValueAtTime(0.022, start + 0.03)
-      gain.gain.setValueAtTime(0.022, start + 0.25)
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5)
-      osc.connect(gain)
-      gain.connect(this.masterGain!)
-      osc.start(start)
-      osc.stop(start + 0.5)
+    head.connect(gain)
+    gain.connect(bus)
+    osc.onended = () => {
+      osc.disconnect()
+      filter?.disconnect()
+      gain.disconnect()
     }
-  }
-
-  /** Soft low tone — error occurred */
-  playError() {
-    this.ensureContext()
-    if (!this.ctx || !this.masterGain) return
-
-    const now = this.ctx.currentTime
-    const osc = this.ctx.createOscillator()
-    const gain = this.ctx.createGain()
-    osc.type = 'triangle' // much softer than sawtooth
-    osc.frequency.setValueAtTime(220, now)
-    osc.frequency.exponentialRampToValueAtTime(165, now + 0.25)
-    // Soft attack, gentle decay
-    gain.gain.setValueAtTime(0.001, now)
-    gain.gain.linearRampToValueAtTime(0.08, now + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25)
-    osc.connect(gain)
-    gain.connect(this.masterGain)
-    osc.start(now)
-    osc.stop(now + 0.25)
+    osc.start(start)
+    osc.stop(end + 0.02)
   }
 
   dispose() {
     if (this.ctx) {
-      this.ctx.close()
+      void this.ctx.close().catch(() => {})
       this.ctx = null
       this.masterGain = null
     }
