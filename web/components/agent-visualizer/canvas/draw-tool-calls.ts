@@ -1,7 +1,8 @@
 import { ToolCallNode } from '@/lib/agent-types'
 import { COLORS, withAlpha } from '@/lib/colors'
 import { TOOL_MAX_CARD_W, TOOL_DRAW } from '@/lib/canvas-constants'
-import { toolCallLine, toolLabel } from '@/lib/readable-labels'
+import { toolLabel } from '@/lib/readable-labels'
+import { toolCardHeight, toolCardText } from '@/lib/tool-card-text'
 import { truncateText } from './draw-misc'
 import { measureTextCached } from './render-cache'
 
@@ -19,14 +20,16 @@ export function drawToolCalls(
     ctx.save()
     ctx.globalAlpha = tool.opacity
 
-    ctx.font = `${TOOL_DRAW.fontSize}px monospace`
-    // Compact card by design (owner request O3): readable label, args may be cut.
-    // The full text is one tap away in the tool detail popup.
-    const fullLabel = toolCallLine(tool.toolName, tool.args)
-    const label = truncateText(ctx, fullLabel, TOOL_MAX_CARD_W - 12)
-    const textWidth = Math.min(measureTextCached(ctx, label) + 12, TOOL_MAX_CARD_W)
-    const cardW = Math.max(60, textWidth)
-    const cardH = (!isRunning && (tool.tokenCost || isError)) ? TOOL_DRAW.expandedHeight : TOOL_DRAW.collapsedHeight
+    // Compact card by design (owner request O3): readable label; shell commands show their action (setup such as
+    // `cd <dir> &&` dropped) and long text is shortened in the middle (lib/tool-card-text.ts). The full text is one
+    // tap away in the tool detail popup.
+    const mainFont = `${TOOL_DRAW.fontSize}px monospace`
+    const topFont = `${TOOL_DRAW.tokenFontSize}px monospace`
+    const measureIn = (font: string) => (s: string) => { ctx.font = font; return measureTextCached(ctx, s) }
+    const card = toolCardText(tool, TOOL_MAX_CARD_W, measureIn(mainFont), measureIn(topFont))
+    ctx.font = mainFont
+    const cardW = card.width
+    const cardH = toolCardHeight(tool, card, TOOL_DRAW.collapsedHeight, TOOL_DRAW.expandedHeight)
     const cardX = tool.x - cardW / 2
     const cardY = tool.y - cardH / 2
 
@@ -76,13 +79,38 @@ export function drawToolCalls(
       ctx.restore()
     }
 
-    const truncatedLabel = truncateText(ctx, fullLabel, cardW - 8)
+    const truncatedLabel = card.main
 
-    ctx.font = `${TOOL_DRAW.fontSize}px monospace`
+    ctx.font = mainFont
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
 
-    if (isRunning) {
+    if (card.top) {
+      // Shell command: small label line (folder in a softer tone, tokens once done), the action below it
+      ctx.font = topFont
+      const topY = tool.y - TOOL_DRAW.twoLineOffset
+      if (card.topDir) {
+        const [head, tail] = [card.top.slice(0, card.top.indexOf(card.topDir)), card.top.slice(card.top.indexOf(card.topDir) + card.topDir.length)]
+        const wHead = measureTextCached(ctx, head)
+        const wDir = measureTextCached(ctx, card.topDir)
+        const wTail = measureTextCached(ctx, tail)
+        let x = tool.x - (wHead + wDir + wTail) / 2
+        ctx.textAlign = 'left'
+        ctx.fillStyle = COLORS.tool + 'cc'
+        ctx.fillText(head, x, topY); x += wHead
+        ctx.fillStyle = COLORS.tool + '90'
+        ctx.fillText(card.topDir, x, topY); x += wDir
+        ctx.fillStyle = COLORS.tool + 'cc'
+        ctx.fillText(tail, x, topY)
+        ctx.textAlign = 'center'
+      } else {
+        ctx.fillStyle = COLORS.tool + 'cc'
+        ctx.fillText(card.top, tool.x, topY)
+      }
+      ctx.font = mainFont
+      ctx.fillStyle = isRunning ? COLORS.tool : COLORS.return
+      ctx.fillText(card.main, tool.x, tool.y + TOOL_DRAW.twoLineOffset)
+    } else if (isRunning) {
       ctx.fillStyle = COLORS.tool
       ctx.fillText(truncatedLabel, tool.x, tool.y)
     } else if (isError) {
