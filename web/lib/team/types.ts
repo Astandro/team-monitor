@@ -2,6 +2,7 @@
 // Everything is optional on purpose: the coordinator writes the file by hand and the panel must never crash on it.
 
 import type { ChatEntry, WatcherInfo } from './chat'
+import type { CloudFields } from '../cloud-origin'
 
 export type TaskStatus = 'todo' | 'running' | 'review' | 'done' | 'blocked'
 
@@ -78,7 +79,7 @@ export interface TeamState {
   log?: Record<string, TeamLogRow>
 }
 
-export interface TeamProject {
+export interface TeamProject extends CloudFields {
   id: string
   name: string
   hasState: boolean

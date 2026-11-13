@@ -5,6 +5,15 @@ import { MAX_ANSWER_LENGTH, type AnswerResult } from '@/lib/team/answer'
 import { DISINTEGRATING_TAG, disintegrationLook, flickerPeriod, OUTLINE_PIECES, panelEmberVars } from '@/lib/disintegration'
 import { WARNING_ICON } from '@/lib/alert-tag'
 import { OWNER_LABEL } from '@/lib/team/labels'
+import {
+  CLOUD_LABEL,
+  originHint,
+  originMarks,
+  originSuffix,
+  STALE_LABEL,
+  STALE_NOTICE,
+  type OriginMarks,
+} from '@/lib/cloud-origin'
 import { groupMembers } from '@/lib/team/groups'
 import { BotAvatar } from '../bot-avatar'
 import { dashArrayFromPieces } from '@/lib/team/members'
@@ -276,6 +285,17 @@ function ThemeButton({ theme, onCycle }: { theme: ThemePref; onCycle: () => void
   )
 }
 
+/** "Cloud" and "Terputus" under the project title; nothing for a local project. */
+function OriginChips({ marks }: { marks: OriginMarks }) {
+  if (!marks.cloud && !marks.stale) return null
+  return (
+    <p className="tm-origin" title={originHint(marks)}>
+      {marks.cloud && <span className="tm-chip cloud">{CLOUD_LABEL}</span>}
+      {marks.stale && <span className="tm-chip stale">{STALE_LABEL}</span>}
+    </p>
+  )
+}
+
 function Empty({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="tm-empty-state">
@@ -468,6 +488,7 @@ export function TeamPanel({ model, theme, onCycleTheme, onHide }: PanelProps) {
                 <option key={p.id} value={p.id}>
                   {p.name}
                   {p.hasState ? '' : ' (belum ada data)'}
+                  {originSuffix(originMarks(p))}
                 </option>
               ))}
             </select>
@@ -479,6 +500,7 @@ export function TeamPanel({ model, theme, onCycleTheme, onHide }: PanelProps) {
       <header className="tm-top">
         <div className="tm-heading">
           <h1>{ready ? vm.title : model.projectName || 'Monitor tim'}</h1>
+          <OriginChips marks={model.projectMarks} />
           {ready && vm.statusText && <p className="sub">{vm.statusText}</p>}
         </div>
         <div className="tm-top-actions">
@@ -506,6 +528,8 @@ export function TeamPanel({ model, theme, onCycleTheme, onHide }: PanelProps) {
           <div className="tm-banner err">Terputus, menyambung ulang…</div>
         )}
         {model.connection === 'connecting' && view === 'loading' && <div className="tm-banner">Menyambung…</div>}
+        {/* not an error: the cloud container is just not reporting now, the last data stays on screen */}
+        {model.projectMarks.stale && <div className="tm-banner">{STALE_NOTICE}</div>}
         {model.stateError && <div className="tm-banner err">{model.stateError}</div>}
         {process.env.TEAM_MONITOR_FIXTURE === '1' && (
           <div className="tm-banner">Data contoh untuk lihat tampilan, bukan data asli.</div>

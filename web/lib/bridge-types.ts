@@ -13,7 +13,13 @@ export interface AgentEvent {
   sessionId?: string
 }
 
-export interface SessionInfo {
+/**
+ * Optional fields the standalone app's server adds for a session forwarded from a cloud container (origin, sourceId,
+ * stale). Web-side only: the extension never sends them.
+ */
+import type { CloudFields } from './cloud-origin'
+
+export interface SessionInfo extends CloudFields {
   id: string
   label: string
   status: 'active' | 'completed'
@@ -28,7 +34,7 @@ export interface SessionInfo {
 }
 
 /** `session-updated` message fields the UI keeps. */
-export interface SessionUpdate {
+export interface SessionUpdate extends CloudFields {
   sessionId: string
   label: string
   projectId?: string

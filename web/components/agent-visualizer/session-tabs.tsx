@@ -3,6 +3,26 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { COLORS } from '@/lib/colors'
 import type { SessionInfo } from '@/lib/vscode-bridge'
+import { CLOUD_LABEL, originHint, originMarks, STALE_LABEL } from '@/lib/cloud-origin'
+
+/** Small text tag after a tab's title: "Cloud", or "Terputus" (dashed: not live right now, not an error). */
+function OriginTag({ dashed, children }: { dashed?: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className="flex-shrink-0"
+      style={{
+        padding: '0 4px',
+        borderRadius: 4,
+        border: `1px ${dashed ? 'dashed' : 'solid'} ${dashed ? COLORS.textMuted : COLORS.tabInactiveBorder}`,
+        color: COLORS.textMuted,
+        lineHeight: 1.35,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </span>
+  )
+}
 
 interface SessionTabsProps {
   sessions: SessionInfo[]
@@ -40,14 +60,18 @@ export function SessionTabs({
         const isSelected = session.id === selectedSessionId
         const isActive = session.status === 'active'
         const hasActivity = sessionsWithActivity.has(session.id)
-        // Green dot: session is active, OR has unseen background activity
-        const showGreen = isActive || hasActivity
+        const marks = originMarks(session)
+        // Green dot: session is active, OR has unseen background activity. A disconnected cloud session is not
+        // live right now: its dot goes hollow instead (no green, no pulse) until the container reports again.
+        const showGreen = (isActive || hasActivity) && !marks.stale
+        const hint = originHint(marks)
+        const title = [session.prompt ? `Prompt pertama: ${session.prompt}` : '', hint].filter(Boolean).join('\n')
         return (
           <button
             key={session.id}
             ref={(el) => setButtonRef(session.id, el)}
             onClick={() => onSelectSession(session.id)}
-            title={session.prompt ? `Prompt pertama: ${session.prompt}` : undefined}
+            title={title || undefined}
             className="group px-1.5 py-0.5 rounded transition-all flex items-center gap-1"
             style={{
               flexShrink: 1,
@@ -64,13 +88,18 @@ export function SessionTabs({
           >
             <span
               className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{
+              style={marks.stale ? {
+                background: 'transparent',
+                border: `1px solid ${COLORS.textMuted}`,
+              } : {
                 background: showGreen ? COLORS.complete : COLORS.idle + '40',
                 boxShadow: showGreen ? `0 0 4px ${COLORS.complete}` : 'none',
                 animation: hasActivity && !isSelected ? 'pulse 1.5s infinite' : 'none',
               }}
             />
             {session.label}
+            {marks.cloud && <OriginTag>{CLOUD_LABEL}</OriginTag>}
+            {marks.stale && <OriginTag dashed>{STALE_LABEL}</OriginTag>}
             <span
               className="ml-0.5 opacity-0 group-hover:opacity-60 transition-opacity cursor-pointer"
               style={{ color: COLORS.tabClose, fontSize: 8, lineHeight: '10px' }}
