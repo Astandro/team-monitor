@@ -33,7 +33,13 @@ export interface WatcherOptions {
   projectPath: string
   debounceMs?: number
   pollMs?: number
+  /** Server-side log for error details (default console.warn). */
+  log?: (msg: string) => void
 }
+
+const TOO_LARGE = `state.json is larger than ${MAX_STATE_BYTES} bytes`
+
+class TooLargeError extends Error {}
 
 type Listener = (snap: TeamSnapshot) => void
 
@@ -57,8 +63,11 @@ export class TeamStateWatcher {
   private pollTimer: NodeJS.Timeout | null = null
   private debounceTimer: NodeJS.Timeout | null = null
   private disposed = false
+  private lastLogged = ''
+  private readonly log: (msg: string) => void
 
   constructor(opts: WatcherOptions) {
+    this.log = opts.log ?? console.warn
     this.projectId = opts.projectId
     this.dir = agentTeamDir(opts.projectPath)
     this.answersDir = path.join(this.dir, 'answers')
@@ -177,29 +186,44 @@ export class TeamStateWatcher {
         this.raw = null
         this.error = null
       } else {
-        this.error = `state.json cannot be read: ${(e as Error).message}`
+        this.fail('state.json cannot be read', `${file}: ${(e as Error).message}`)
       }
       return
     }
-    if (!st.isFile()) { this.error = 'state.json is not a file'; return }
-    if (st.size > MAX_STATE_BYTES) { this.error = `state.json is larger than ${MAX_STATE_BYTES} bytes`; return }
+    if (!st.isFile()) { this.fail('state.json is not a file', file); return }
+    if (st.size > MAX_STATE_BYTES) { this.fail(TOO_LARGE, `${file}: ${st.size} bytes`); return }
     let text: string
     try {
       text = readCapped(file, MAX_STATE_BYTES)
     } catch (e) {
-      this.error = `state.json cannot be read: ${(e as Error).message}`
+      const tooLarge = e instanceof TooLargeError
+      this.fail(tooLarge ? TOO_LARGE : 'state.json cannot be read', `${file}: ${(e as Error).message}`)
       return
     }
     try {
       const parsed: unknown = JSON.parse(text)
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        this.error = 'state.json must contain a JSON object'
+        this.fail('state.json must contain a JSON object', file)
         return
       }
       this.raw = parsed as TeamState
       this.error = null
     } catch (e) {
-      this.error = `state.json is not valid JSON: ${(e as Error).message}`
+      this.fail('state.json is not valid JSON', `${file}: ${(e as Error).message}`)
+    }
+  }
+
+  /**
+   * Record an error. `clientText` is served to browsers (and phones), so it is
+   * fixed text without paths or file content; `detail` goes to the server log,
+   * once per distinct problem.
+   */
+  private fail(clientText: string, detail: string): void {
+    this.error = clientText
+    const line = `[team] ${this.projectId}: ${clientText} (${detail})`
+    if (line !== this.lastLogged) {
+      this.lastLogged = line
+      this.log(line)
     }
   }
 
@@ -218,7 +242,7 @@ function readCapped(file: string, cap: number): string {
       const n = fs.readSync(fd, buf, total, buf.length - total, null)
       if (n === 0) break
       total += n
-      if (total > cap) throw new Error(`larger than ${cap} bytes`)
+      if (total > cap) throw new TooLargeError(`larger than ${cap} bytes`)
     }
     return buf.subarray(0, total).toString('utf-8')
   } finally {

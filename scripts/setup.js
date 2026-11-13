@@ -255,12 +255,12 @@ if (require.main === module) {
   const force = process.argv.includes('--force')
 
   if (!force && isAlreadySetup()) {
-    console.log('Agent Flow is already set up. Run with --force to reconfigure.')
+    console.log('Team Monitor is already set up. Run with --force to reconfigure.')
     process.exit(0)
   }
 
-  console.log('Setting up Agent Flow...\n')
+  console.log('Setting up Team Monitor...\n')
   ensureHookScript()
   if (!configureHooks()) process.exit(1)
-  console.log('\nDone! New sessions will stream events to Agent Flow.')
+  console.log('\nDone! New sessions will stream events to Team Monitor.')
 }

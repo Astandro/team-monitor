@@ -74,7 +74,7 @@ export async function configureClaudeHooks(): Promise<void> {
     // permissions, env and other tools' hooks.
     log.error(`Not configuring hooks, could not parse ${GLOBAL_SETTINGS_PATH}:`, result.error)
     vscode.window.showErrorMessage(
-      `Agent Flow could not read ${GLOBAL_SETTINGS_PATH} (${result.error}). Fix the file and run "Agent Flow: Configure Claude Code Hooks" again.`,
+      `Team Monitor could not read ${GLOBAL_SETTINGS_PATH} (${result.error}). Fix the file and run "Team Monitor: Configure Claude Code Hooks" again.`,
     )
     return
   }
@@ -82,7 +82,7 @@ export async function configureClaudeHooks(): Promise<void> {
   writeJsonAtomic(GLOBAL_SETTINGS_PATH, mergeAgentFlowHooks(result.settings, hookEntry, HOOK_EVENTS))
 
   vscode.window.showInformationMessage(
-    'Claude Code hooks configured. New sessions will stream events to Agent Flow.',
+    'Claude Code hooks configured. New sessions will stream events to Team Monitor.',
   )
 }
 

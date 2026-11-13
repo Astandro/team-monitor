@@ -1,5 +1,5 @@
 /**
- * Agent Flow — standalone web app for visualizing AI agent orchestration.
+ * Team Monitor — standalone web app for visualizing AI agent orchestration.
  *
  * Starts a local server that:
  *   1. Receives events from agent hooks
@@ -7,11 +7,12 @@
  *   3. Serves the visualizer UI and streams events via SSE
  *   4. Opens the browser automatically
  *
- * Usage: npx @agent-flow/app [--port <number>] [--no-open]
+ * Usage: team-monitor [--port <number>] [--no-open]
  */
 import { parseArgs } from './args'
 import { ensureSetup } from '../../scripts/setup'
 import { startServer } from './server'
+import { setupTeam, TeamSetup } from './team'
 import { runWaitAnswerCli } from './team/wait-answer'
 
 if (process.argv[2] === 'wait-answer') {
@@ -23,7 +24,17 @@ if (process.argv[2] === 'wait-answer') {
 } else {
   const args = parseArgs(process.argv.slice(2))
 
-  console.log('Agent Flow\n')
+  console.log('Team Monitor\n')
+
+  // Team monitor first: a refused remote setup (unsafe --bind, bad token file)
+  // must stop before ensureSetup() writes hooks or anything listens.
+  let teamSetup: TeamSetup
+  try {
+    teamSetup = setupTeam(args.team)
+  } catch (e) {
+    console.error(`Cannot start: ${(e as Error).message}`)
+    process.exit(1)
+  }
 
   // Ensure hooks are configured
   ensureSetup()
@@ -34,6 +45,6 @@ if (process.argv[2] === 'wait-answer') {
     openBrowser: args.open,
     workspace: process.cwd(),
     verbose: args.verbose,
-    team: args.team,
+    teamSetup,
   })
 }

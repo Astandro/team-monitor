@@ -125,7 +125,12 @@ export function resolveRemoteConfig(opts: ResolveRemoteOptions): RemoteConfig {
   const dnsName = getTailscaleDNSName(opts.run)
   const allowedHosts = new Set<string>()
   if (tailscaleIp) allowedHosts.add(tailscaleIp)
-  if (dnsName) allowedHosts.add(dnsName)
+  if (dnsName) {
+    allowedHosts.add(dnsName)
+    // MagicDNS also resolves the bare machine name (http://my-machine:3002).
+    const short = dnsName.split('.')[0]
+    if (short && short !== dnsName) allowedHosts.add(short)
+  }
   for (const h of opts.hostAllow) {
     const clean = h.trim().toLowerCase().replace(/\.$/, '')
     if (!/^[a-z0-9.-]+$/.test(clean)) throw new RemoteConfigError(`--host-allow "${h}" is not a host name.`)

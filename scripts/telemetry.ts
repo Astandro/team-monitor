@@ -5,19 +5,13 @@ import { sanitizeString } from './telemetry/sanitize'
 import { syncOnce } from './telemetry/sync'
 
 /**
- * Hardcoded telemetry endpoint + publishable key.
- *
- * These ship inside every published binary. No env var override, no runtime
- * fallback. All enabled installs send events to Agent Flow's Supabase project.
- * Forks that republish under a different name must edit these constants and
- * rebuild.
- *
- * Safe to commit: publishable keys are designed to be public. Postgres RLS
- * denies the anon role everything; the only write path is the telemetry-ingest
- * edge function, which runs under the secret key and validates every event.
+ * Telemetry endpoint and key are blank on purpose: Team Monitor does not
+ * report anywhere. The upstream project's endpoint and key were removed.
+ * Combined with `isTelemetryEnabled` always returning false, nothing is
+ * written to disk and no network call is made.
  */
-export const TELEMETRY_ENDPOINT = 'https://dxwtgqdkyunfhbywqmrz.supabase.co'
-export const TELEMETRY_PUBLISHABLE_KEY = 'sb_publishable_AgJ_DIUH9zm8E0yHC9KsRw_WsIv4qc8'
+export const TELEMETRY_ENDPOINT = ''
+export const TELEMETRY_PUBLISHABLE_KEY = ''
 
 /**
  * Progressive sync schedule. After init(), fire syncs at these offsets:
@@ -31,8 +25,6 @@ export const TELEMETRY_PUBLISHABLE_KEY = 'sb_publishable_AgJ_DIUH9zm8E0yHC9KsRw_
 const FIRST_SYNC_DELAY_MS = 2 * 1000
 const SYNC_SCHEDULE_MS = [2 * 60 * 1000, 3 * 60 * 1000]
 const SYNC_REPEAT_MS = 5 * 60 * 1000
-
-const FALSY_VALUES = new Set(['false', '0', 'disabled', ''])
 
 export interface TelemetryEvent {
   event_type: 'session_start' | 'session_end' | 'error'
@@ -77,23 +69,13 @@ export interface TelemetryClient {
 }
 
 /**
- * Pure function: given an env record, return true if telemetry should emit.
- *
- * Rules:
- * - `DO_NOT_TRACK` truthy → disabled (wins over everything)
- * - `AGENT_FLOW_TELEMETRY` falsy (`false`, `0`, `disabled`, ``) → disabled
- * - Otherwise enabled (including when AGENT_FLOW_TELEMETRY is unset)
+ * Team Monitor has no telemetry. This always returns false whatever the env
+ * says (`TEAM_MONITOR_TELEMETRY`, `AGENT_FLOW_TELEMETRY` and `DO_NOT_TRACK`
+ * are all ignored), so the client never writes to disk and never calls the
+ * network. The disabled code path is kept so callers stay unchanged.
  */
-export function isTelemetryEnabled(env: NodeJS.ProcessEnv): boolean {
-  const dnt = env.DO_NOT_TRACK
-  if (dnt !== undefined && dnt !== '' && dnt !== '0' && dnt.toLowerCase() !== 'false') {
-    return false
-  }
-  const flag = env.AGENT_FLOW_TELEMETRY
-  if (flag !== undefined && FALSY_VALUES.has(flag.toLowerCase())) {
-    return false
-  }
-  return true
+export function isTelemetryEnabled(_env: NodeJS.ProcessEnv): boolean {
+  return false
 }
 
 export function createTelemetryClient(opts: TelemetryClientOptions): TelemetryClient {

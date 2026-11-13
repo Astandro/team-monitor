@@ -14,7 +14,11 @@ export const DECISION_ID_RE = /^D[0-9]{1,4}$/
 export const MAX_ANSWER_CHARS = 2000
 
 export class AnswerError extends Error {
-  constructor(readonly status: 400 | 404 | 409 | 500, message: string) {
+  /**
+   * `message` goes to the client and never holds a filesystem path; `detail`
+   * (paths, errno text) is for the server log only.
+   */
+  constructor(readonly status: 400 | 404 | 409 | 500, message: string, readonly detail?: string) {
     super(message)
   }
 }
@@ -37,10 +41,19 @@ export function parseAnswerBody(body: unknown): AnswerInput {
 /** Target file for a validated id, confirmed to stay inside `answersDir`. */
 export function answerPath(answersDir: string, id: string): string {
   if (!DECISION_ID_RE.test(id)) throw new AnswerError(400, 'bad decision id')
-  const base = path.resolve(answersDir)
-  const target = path.resolve(base, `${id}.json`)
-  if (path.dirname(target) !== base || !target.startsWith(base + path.sep)) throw new AnswerError(400, 'bad decision id')
+  return containedPath(answersDir, `${id}.json`)
+}
+
+/** `base/name`, refused unless it resolves to a direct child of `base` (defence in depth behind the id regex). */
+export function containedPath(base: string, name: string): string {
+  const dir = path.resolve(base)
+  const target = path.resolve(dir, name)
+  if (path.dirname(target) !== dir || !target.startsWith(dir + path.sep)) throw new AnswerError(400, 'bad decision id')
   return target
+}
+
+function exists(p: string): boolean {
+  try { fs.lstatSync(p); return true } catch { return false }
 }
 
 /**
@@ -67,7 +80,8 @@ export function writeAnswer(
 
   const target = answerPath(answersDir, id)
   ensureAnswersDir(answersDir)
-  if (fs.existsSync(target)) throw new AnswerError(409, `decision ${id} is already answered`)
+  // lstat, not existsSync: a dangling symlink also counts as "already answered".
+  if (exists(target)) throw new AnswerError(409, `decision ${id} is already answered`)
 
   const answeredAt = now().toISOString()
   const data = JSON.stringify({ answer, answeredAt }, null, 2) + '\n'
@@ -83,7 +97,7 @@ export function writeAnswer(
   } catch (e) {
     if (fd !== null) { try { fs.closeSync(fd) } catch { /* ignore */ } }
     try { fs.unlinkSync(tmp) } catch { /* already gone */ }
-    throw new AnswerError(500, `could not write answer: ${(e as Error).message}`)
+    throw new AnswerError(500, 'cannot write answer', `could not write ${target}: ${(e as Error).message}`)
   }
   fsyncDir(path.dirname(target))
   return { answeredAt, file: target }
@@ -93,11 +107,13 @@ function ensureAnswersDir(answersDir: string): void {
   try {
     fs.mkdirSync(answersDir, { recursive: true, mode: 0o700 })
   } catch (e) {
-    throw new AnswerError(500, `cannot create answers folder: ${(e as Error).message}`)
+    throw new AnswerError(500, 'cannot write answer', `cannot create answers folder: ${(e as Error).message}`)
   }
   const st = fs.lstatSync(answersDir)
   // A symlinked answers folder could point the write anywhere.
-  if (!st.isDirectory() || st.isSymbolicLink()) throw new AnswerError(500, 'answers folder is not a plain directory')
+  if (!st.isDirectory() || st.isSymbolicLink()) {
+    throw new AnswerError(500, 'cannot write answer', `${answersDir} is not a plain directory (symlink or file)`)
+  }
 }
 
 function fsyncDir(dir: string): void {

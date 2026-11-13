@@ -10,27 +10,19 @@ import { exec, execFile } from 'child_process'
 import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
 import { serveStatic } from './static'
-import { setupTeam, TeamCliOptions, TeamSetup } from './team'
+import { listenErrorMessage, TeamSetup } from './team'
 
 interface ServerOptions {
   port: number
   openBrowser: boolean
   workspace: string
   verbose?: boolean
-  team?: TeamCliOptions
+  /** Built by app.ts before ensureSetup(), so a refused remote setup writes nothing. */
+  teamSetup: TeamSetup
 }
 
 export async function startServer(options: ServerOptions) {
-  const { port, openBrowser, workspace } = options
-
-  // Team monitor first: a refused remote setup must stop before anything starts.
-  let teamSetup: TeamSetup
-  try {
-    teamSetup = setupTeam(options.team ?? { projects: [], remote: false, hostAllow: [] })
-  } catch (e) {
-    console.error(`Cannot start: ${(e as Error).message}`)
-    process.exit(1)
-  }
+  const { port, openBrowser, workspace, teamSetup } = options
 
   const configDir = path.join(os.homedir(), '.agent-flow')
   const telemetry = createTelemetryClient({
@@ -57,6 +49,14 @@ export async function startServer(options: ServerOptions) {
     res.writeHead(404)
     res.end('Not found')
   }))
+
+  // Port taken or address not on this machine: one plain line, no stack.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    console.error(listenErrorMessage(err, teamSetup.listenHost, port, teamSetup.tokenFile))
+    teamSetup.dispose()
+    relay.dispose()
+    process.exit(1)
+  })
 
   server.listen(port, teamSetup.listenHost, () => {
     const url = `http://${teamSetup.listenHost}:${port}`

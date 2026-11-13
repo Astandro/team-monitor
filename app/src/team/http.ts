@@ -6,7 +6,7 @@
 import type * as http from 'http'
 import { isLoopbackHost } from '../../../extension/src/request-guard'
 import { AnswerError, parseAnswerBody, writeAnswer } from './answers'
-import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookies, tokenMatches } from './auth'
+import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookies, sessionKey, tokenMatches } from './auth'
 import { hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
@@ -22,8 +22,12 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void
 export class TeamService {
   private watchers = new Map<string, TeamStateWatcher>()
   private sseClients = new Set<http.ServerResponse>()
+  private disposers: Array<() => void> = []
 
-  constructor(readonly projects: ProjectEntry[], opts: { debounceMs?: number; pollMs?: number } = {}) {
+  constructor(
+    readonly projects: ProjectEntry[],
+    opts: { debounceMs?: number; pollMs?: number; log?: (msg: string) => void } = {},
+  ) {
     for (const p of projects) {
       const w = new TeamStateWatcher({ projectId: p.id, projectPath: p.path, ...opts })
       w.start()
@@ -44,7 +48,12 @@ export class TeamService {
     return () => { this.sseClients.delete(res) }
   }
 
+  onDispose(fn: () => void): void {
+    this.disposers.push(fn)
+  }
+
   dispose(): void {
+    for (const fn of this.disposers.splice(0)) { try { fn() } catch { /* keep going */ } }
     for (const w of this.watchers.values()) w.dispose()
     for (const res of this.sseClients) { try { res.end() } catch { /* closed */ } }
     this.sseClients.clear()
@@ -65,6 +74,46 @@ export interface HandlerOptions {
   /** null = default mode: loopback Host only, no login (upstream behaviour). */
   remote: RemoteAccess | null
   fallback: Handler
+  /** How often open responses of expired sessions are closed (default 60 s). */
+  sessionSweepMs?: number
+  /** Server-side log for error details (default console.error). */
+  log?: (msg: string) => void
+}
+
+/**
+ * Open responses per session (keyed by the session's hash), so logout and
+ * expiry can close that session's SSE streams (`/events`, `/api/team/events`).
+ */
+export class SessionStreams {
+  private byKey = new Map<string, Set<http.ServerResponse>>()
+
+  add(key: string, res: http.ServerResponse): void {
+    let set = this.byKey.get(key)
+    if (!set) { set = new Set(); this.byKey.set(key, set) }
+    set.add(res)
+    res.on('close', () => {
+      set!.delete(res)
+      if (set!.size === 0 && this.byKey.get(key) === set) this.byKey.delete(key)
+    })
+  }
+
+  closeKey(key: string): void {
+    const set = this.byKey.get(key)
+    if (!set) return
+    this.byKey.delete(key)
+    for (const res of set) { try { res.end() } catch { /* closed */ } ; res.socket?.destroy() }
+  }
+
+  /** Close the streams of every session that is no longer valid. */
+  sweep(isValidKey: (key: string) => boolean): void {
+    for (const key of [...this.byKey.keys()]) if (!isValidKey(key)) this.closeKey(key)
+  }
+
+  count(): number {
+    let n = 0
+    for (const s of this.byKey.values()) n += s.size
+    return n
+  }
 }
 
 const FORWARD_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'tailscale-user-login']
@@ -158,6 +207,13 @@ function mediaType(req: http.IncomingMessage): string {
 
 export function createRequestHandler(opts: HandlerOptions): Handler {
   const { team, remote, fallback } = opts
+  const log = opts.log ?? console.error
+  const streams = new SessionStreams()
+  if (remote) {
+    const sweep = setInterval(() => streams.sweep((k) => remote.sessions.isValidKey(k)), opts.sessionSweepMs ?? 60_000)
+    sweep.unref?.()
+    team.onDispose(() => clearInterval(sweep))
+  }
 
   return (req, res) => {
     const hostOk = remote ? isAllowedRemoteHost(req.headers.host, remote.config) : isLoopbackHost(req.headers.host)
@@ -181,20 +237,25 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
 
     if (remote) {
       if (pathname === '/login') return void handleLogin(req, res, remote)
-      if (pathname === '/logout') return void handleLogout(req, res, remote)
-      if (!isLocalRequest(req) && !remote.sessions.isValid(sessionId(req))) {
-        const wantsHtml = (req.method === 'GET' || req.method === 'HEAD') && String(req.headers.accept ?? '').includes('text/html')
-        if (wantsHtml) {
-          res.writeHead(302, { Location: '/login', ...SECURITY_HEADERS })
-          res.end()
-        } else {
-          sendError(res, 401, 'login required')
+      if (pathname === '/logout') return void handleLogout(req, res, remote, streams)
+      if (!isLocalRequest(req)) {
+        const sid = sessionId(req)
+        if (!remote.sessions.isValid(sid)) {
+          const wantsHtml = (req.method === 'GET' || req.method === 'HEAD') && String(req.headers.accept ?? '').includes('text/html')
+          if (wantsHtml) {
+            res.writeHead(302, { Location: '/login', ...SECURITY_HEADERS })
+            res.end()
+          } else {
+            sendError(res, 401, 'login required')
+          }
+          return
         }
-        return
+        // Tracked until the response closes, so logout/expiry can end open streams.
+        streams.add(sessionKey(sid!), res)
       }
     }
 
-    if (pathname.startsWith('/api/team/')) return void handleTeamApi(req, res, pathname, query, team)
+    if (pathname.startsWith('/api/team/')) return void handleTeamApi(req, res, pathname, query, team, log)
     fallback(req, res)
   }
 }
@@ -205,12 +266,13 @@ async function handleTeamApi(
   pathname: string,
   query: URLSearchParams,
   team: TeamService,
+  log: (msg: string) => void,
 ): Promise<void> {
   const route = pathname.slice('/api/team/'.length)
 
   if (route === 'answer') {
     if (req.method !== 'POST') return sendError(res, 405, 'method not allowed', { Allow: 'POST' })
-    return handleAnswer(req, res, team)
+    return handleAnswer(req, res, team, log)
   }
 
   if (req.method !== 'GET') return sendError(res, 405, 'method not allowed', { Allow: 'GET' })
@@ -248,7 +310,7 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
   res.on('close', close)
 }
 
-async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse, team: TeamService): Promise<void> {
+async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse, team: TeamService, log: (msg: string) => void): Promise<void> {
   if (req.headers['x-team-monitor'] !== '1') { closeAfter(res); return sendError(res, 403, 'missing X-Team-Monitor header') }
   if (!isSameOriginRequest(req)) { closeAfter(res); return sendError(res, 403, 'cross-origin request refused') }
   if (mediaType(req) !== 'application/json') { closeAfter(res); return sendError(res, 400, 'Content-Type must be application/json') }
@@ -273,7 +335,11 @@ async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse,
     w.refresh()
     sendJSON(res, 200, { ok: true, answeredAt })
   } catch (e) {
-    if (e instanceof AnswerError) return sendError(res, e.status, e.message)
+    if (e instanceof AnswerError) {
+      if (e.detail) log(`[team] answer refused (${e.status}): ${e.detail}`)
+      return sendError(res, e.status, e.message)
+    }
+    log(`[team] answer failed: ${(e as Error)?.stack ?? String(e)}`)
     sendError(res, 500, 'internal error')
   }
 }
@@ -322,10 +388,26 @@ const PAGE_HEADERS = {
   ...SECURITY_HEADERS,
 }
 
-function clientKey(req: http.IncomingMessage): string {
+/**
+ * Key for the failed-login limit (review TM-S-06).
+ *
+ * - Direct connection (`--bind tailscale`): the socket address. The client
+ *   cannot choose it.
+ * - Through `tailscale serve` (loopback socket): the LAST X-Forwarded-For
+ *   entry. A proxy adds the peer it saw at the end, so whether serve appends
+ *   or overwrites, the last entry is the value serve set (the phone's tailnet
+ *   IP); entries a client sends itself come before it. Only a process on this
+ *   Mac can forge the last entry, and it can already reach the server without
+ *   logging in.
+ * - Loopback without the header: the socket address.
+ */
+export function clientKey(req: http.IncomingMessage): string {
   const addr = req.socket.remoteAddress ?? 'unknown'
   const fwd = req.headers['x-forwarded-for']
-  if (isLoopbackAddress(addr) && typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim()
+  if (isLoopbackAddress(addr) && typeof fwd === 'string') {
+    const last = fwd.split(',').map((s) => s.trim()).filter(Boolean).pop()
+    if (last) return `fwd:${last}`
+  }
   return addr
 }
 
@@ -386,10 +468,12 @@ async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, 
   res.end()
 }
 
-function handleLogout(req: http.IncomingMessage, res: http.ServerResponse, remote: RemoteAccess): void {
+function handleLogout(req: http.IncomingMessage, res: http.ServerResponse, remote: RemoteAccess, streams: SessionStreams): void {
   if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); res.end(); return }
   if (!isSameOriginRequest(req)) return sendError(res, 403, 'cross-origin request refused')
-  remote.sessions.destroy(sessionId(req))
+  const sid = sessionId(req)
+  remote.sessions.destroy(sid)
+  if (sid) streams.closeKey(sessionKey(sid))
   res.writeHead(303, { Location: '/login', 'Set-Cookie': cookie('', 0, isHttpsRequest(req)), ...SECURITY_HEADERS })
   res.end()
 }

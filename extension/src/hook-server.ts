@@ -108,7 +108,7 @@ export class HookServer implements vscode.Disposable {
           })
         } else {
           res.writeHead(200, { 'Content-Type': 'text/plain' })
-          res.end('Agent Visualizer Hook Server')
+          res.end('Team Monitor Hook Server')
         }
       })
 

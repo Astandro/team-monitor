@@ -78,8 +78,22 @@ the next wait if other decisions are still open.
   Plain http; the cookie then has no `Secure` flag.
 
 On the first remote start the token is created in `~/.team-monitor/token` (0600) and printed once. Read it again
-on the Mac with `cat ~/.team-monitor/token`. To revoke all phone sessions, delete `~/.team-monitor/sessions.json`
-and restart; to rotate the token, delete `~/.team-monitor/token` and restart.
+on the Mac with `cat ~/.team-monitor/token`. If the server then fails to listen (port taken, address not on this
+machine), the token file is kept and the error message says where it is.
+
+Lost phone, or the token leaked: rotate it. Stop the monitor, delete `~/.team-monitor/token`, start it again. A new
+token is created and printed, and every login session issued under the old token ends at that start (sessions are
+bound to the token; the start-up log says how many were ended). Log in again on each device with the new token.
+To end all sessions but keep the token, stop the monitor, delete `~/.team-monitor/sessions.json`, and start it.
+Logging out (`POST /logout`) ends that session at once, including its open live streams; an expired session's
+streams are closed within a minute.
+
+Accepted Host names in remote mode: loopback names, the Tailscale IP, the MagicDNS name and its short form
+(`http://my-machine:3002` works when MagicDNS is on), plus `--host-allow <name>` extras.
+
+Failed logins: 5 per client per 15 minutes, then 429 with `Retry-After`. There is no global cap, so other devices
+cannot lock the owner out. The client is the socket address for direct connections, and the last
+`X-Forwarded-For` entry (the one `tailscale serve` sets) behind `tailscale serve`.
 
 On macOS the CLI is found at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; override with
-`--tailscale-bin <path>` or `TEAM_MONITOR_TAILSCALE_BIN`. Extra Host names: `--host-allow <name>`.
+`--tailscale-bin <path>` or `TEAM_MONITOR_TAILSCALE_BIN`.

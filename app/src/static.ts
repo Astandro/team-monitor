@@ -13,7 +13,8 @@ const HTML_SHELL = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agent Flow</title>
+  <title>Team Monitor</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111827'/%3E%3Cpath d='M32 17L17 44M32 17L47 44M17 44L47 44' stroke='%239ca3af' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='17' r='7' fill='%2360a5fa'/%3E%3Ccircle cx='17' cy='44' r='7' fill='%23e5e7eb'/%3E%3Ccircle cx='47' cy='44' r='7' fill='%23e5e7eb'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/index.css">
   <style>html, body { height: 100%; margin: 0; padding: 0; }</style>
 </head>

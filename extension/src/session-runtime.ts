@@ -86,7 +86,7 @@ export function wireWatcherToPanel(
         : `${options.sessionLabelPrefix} ${sessionId.slice(0, SESSION_ID_DISPLAY)}`)
     }
     vscode.window.setStatusBarMessage(
-      `Agent Visualizer: watching ${options.sessionLabelPrefix} session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`,
+      `Team Monitor: watching ${options.sessionLabelPrefix} session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`,
       STATUS_MESSAGE_DURATION_MS,
     )
   }))
