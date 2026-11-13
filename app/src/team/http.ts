@@ -6,11 +6,16 @@
 import type * as http from 'http'
 import { isLoopbackHost } from '../../../extension/src/request-guard'
 import { AnswerError, parseAnswerBody, writeAnswer } from './answers'
+import {
+  MAX_OFFBOARD_BODY_BYTES, OffboardError, OffboardStore, SESSION_ID_RE,
+  offboardAgent, offboardFinished, parseOffboardAllBody, parseOffboardBody,
+} from './offboard'
+import type { GraphView } from '../../../scripts/graph-agents'
 import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookies, sessionKey, tokenMatches } from './auth'
 import { hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
-import { titleFromState, type WatchedProject } from '../../../scripts/session-projects'
+import { coordinatorFromState, titleFromState, type WatchedProject } from '../../../scripts/session-projects'
 
 export const MAX_ANSWER_BODY_BYTES = 16 * 1024
 const MAX_LOGIN_BODY_BYTES = 4 * 1024
@@ -24,6 +29,10 @@ export class TeamService {
   private watchers = new Map<string, TeamStateWatcher>()
   private sseClients = new Set<http.ServerResponse>()
   private disposers: Array<() => void> = []
+  /** Offboarded agents (set by setupTeam); null = offboarding endpoints answer 503. */
+  offboard: OffboardStore | null = null
+  /** The relay's view of the graph, attached once the relay runs (server.ts); null = offboarding answers 503. */
+  graph: GraphView | null = null
 
   constructor(
     readonly projects: ProjectEntry[],
@@ -49,6 +58,7 @@ export class TeamService {
     return this.projects.map((p) => ({
       id: p.id, name: p.name, path: p.path,
       title: titleFromState(this.watchers.get(p.id)?.rawState()),
+      coordinator: coordinatorFromState(this.watchers.get(p.id)?.rawState()),
     }))
   }
 
@@ -284,9 +294,15 @@ async function handleTeamApi(
     return handleAnswer(req, res, team, log)
   }
 
+  if (route === 'offboard' || route === 'offboard-all') {
+    if (req.method !== 'POST') return sendError(res, 405, 'method not allowed', { Allow: 'POST' })
+    return handleOffboard(req, res, team, route === 'offboard-all', log)
+  }
+
   if (req.method !== 'GET') return sendError(res, 405, 'method not allowed', { Allow: 'GET' })
 
   if (route === 'projects') return sendJSON(res, 200, { projects: team.list() })
+  if (route === 'offboarded') return handleOffboardedList(res, query, team)
 
   if (route === 'state' || route === 'events') {
     const id = query.get('project') ?? ''
@@ -319,21 +335,31 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
   res.on('close', close)
 }
 
-async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse, team: TeamService, log: (msg: string) => void): Promise<void> {
-  if (req.headers['x-team-monitor'] !== '1') { closeAfter(res); return sendError(res, 403, 'missing X-Team-Monitor header') }
-  if (!isSameOriginRequest(req)) { closeAfter(res); return sendError(res, 403, 'cross-origin request refused') }
-  if (mediaType(req) !== 'application/json') { closeAfter(res); return sendError(res, 400, 'Content-Type must be application/json') }
+/**
+ * Checks shared by every state-changing team request (answers, offboarding): `X-Team-Monitor: 1`, same origin,
+ * JSON media type, size limit, valid JSON. Replies and returns null on failure.
+ */
+async function readWriteRequest(req: http.IncomingMessage, res: http.ServerResponse, limit: number): Promise<{ body: unknown } | null> {
+  if (req.headers['x-team-monitor'] !== '1') { closeAfter(res); sendError(res, 403, 'missing X-Team-Monitor header'); return null }
+  if (!isSameOriginRequest(req)) { closeAfter(res); sendError(res, 403, 'cross-origin request refused'); return null }
+  if (mediaType(req) !== 'application/json') { closeAfter(res); sendError(res, 400, 'Content-Type must be application/json'); return null }
 
   let text: string
   try {
-    text = await readBody(req, MAX_ANSWER_BODY_BYTES)
+    text = await readBody(req, limit)
   } catch {
     closeAfter(res)
-    return sendError(res, 400, `body larger than ${MAX_ANSWER_BODY_BYTES} bytes`)
+    sendError(res, 400, `body larger than ${limit} bytes`)
+    return null
   }
 
-  let body: unknown
-  try { body = JSON.parse(text) } catch { return sendError(res, 400, 'body is not valid JSON') }
+  try { return { body: JSON.parse(text) } } catch { sendError(res, 400, 'body is not valid JSON'); return null }
+}
+
+async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse, team: TeamService, log: (msg: string) => void): Promise<void> {
+  const read = await readWriteRequest(req, res, MAX_ANSWER_BODY_BYTES)
+  if (!read) return
+  const body = read.body
 
   try {
     const input = parseAnswerBody(body)
@@ -351,6 +377,46 @@ async function handleAnswer(req: http.IncomingMessage, res: http.ServerResponse,
     log(`[team] answer failed: ${(e as Error)?.stack ?? String(e)}`)
     sendError(res, 500, 'internal error')
   }
+}
+
+// ─── Offboarding (spec offboard-names item 1) ───────────────────────────────
+
+async function handleOffboard(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  team: TeamService,
+  all: boolean,
+  log: (msg: string) => void,
+): Promise<void> {
+  const read = await readWriteRequest(req, res, MAX_OFFBOARD_BODY_BYTES)
+  if (!read) return
+  try {
+    if (!team.offboard) throw new OffboardError(503, 'offboarding is not available')
+    if (all) {
+      const { session } = parseOffboardAllBody(read.body)
+      const records = offboardFinished(team.offboard, team.graph, session)
+      return sendJSON(res, 200, { ok: true, offboarded: records })
+    }
+    const input = parseOffboardBody(read.body)
+    const { record, created } = offboardAgent(team.offboard, team.graph, input)
+    sendJSON(res, 200, { ok: true, offboarded: [record], alreadyOffboarded: !created })
+  } catch (e) {
+    if (e instanceof OffboardError) {
+      if (e.detail) log(`[team] offboard refused (${e.status}): ${e.detail}`)
+      return sendError(res, e.status, e.message)
+    }
+    log(`[team] offboard failed: ${(e as Error)?.stack ?? String(e)}`)
+    sendError(res, 500, 'internal error')
+  }
+}
+
+function handleOffboardedList(res: http.ServerResponse, query: URLSearchParams, team: TeamService): void {
+  const project = query.get('project')
+  const session = query.get('session')
+  if (project !== null && !team.watcher(project)) return sendError(res, 404, 'unknown project')
+  if (session !== null && !SESSION_ID_RE.test(session)) return sendError(res, 400, 'session must be a session id')
+  const filter = { ...(project !== null ? { project } : {}), ...(session !== null ? { session } : {}) }
+  sendJSON(res, 200, { offboarded: team.offboard ? team.offboard.list(filter) : [] })
 }
 
 // ─── Login ──────────────────────────────────────────────────────────────────
