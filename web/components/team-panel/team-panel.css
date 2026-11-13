@@ -257,6 +257,7 @@ a.tm-stat.hot b{color:var(--blocked)}
 
 /* "Selesai kontrak": offboarded agents, name and role first like the graph */
 .tm-off-row .nm{font-weight:600}
+.tm-off-row .tm-chip.auto{margin-left:8px;font-size:11px;padding:1px 7px;vertical-align:1px}
 .tm-off-row .rl{font-weight:400;color:var(--muted)}
 .tm-off-row .tk{font-size:13px;color:var(--ink);margin-top:2px}
 .tm-off-row .wh{font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}

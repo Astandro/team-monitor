@@ -7,6 +7,8 @@ import { alphaHex, formatTokens } from '@/lib/utils'
 import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
+import { disintegrationLook, disintegrationProgress, fragments, type Fragment } from '@/lib/disintegration'
+import { reducedMotion } from '@/lib/motion'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -350,6 +352,39 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   ctx.fillText(`${agent.toolCalls} alat \u00B7 ${agent.timeAlive.toFixed(1)} dtk`, agent.x, sy + STATS_OVERLAY.textPaddingY)
 }
 
+/** The outline of a disintegrating node: the hexagon in OUTLINE_PIECES pieces, only the ones still there. */
+function drawBrokenOutline(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, pieces: boolean[]) {
+  const perEdge = pieces.length / 6
+  ctx.strokeStyle = color + '70'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  for (let e = 0; e < 6; e++) {
+    const a0 = (Math.PI / 3) * e - Math.PI / 2
+    const a1 = a0 + Math.PI / 3
+    const x0 = agent.x + r * Math.cos(a0), y0 = agent.y + r * Math.sin(a0)
+    const x1 = agent.x + r * Math.cos(a1), y1 = agent.y + r * Math.sin(a1)
+    for (let k = 0; k < perEdge; k++) {
+      if (!pieces[e * perEdge + k]) continue
+      // a hairline gap between pieces so the break-up reads even early on
+      const t0 = (k + 0.08) / perEdge, t1 = (k + 0.92) / perEdge
+      ctx.moveTo(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0)
+      ctx.lineTo(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
+    }
+  }
+  ctx.stroke()
+}
+
+/** Fragments drifting off a disintegrating node (none under reduced motion). */
+function drawFragments(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, list: Fragment[]) {
+  for (const f of list) {
+    const d = r + 2 + f.drift
+    ctx.beginPath()
+    ctx.fillStyle = color + alphaHex(Math.min(1, f.alpha))
+    ctx.arc(agent.x + Math.cos(f.angle) * d, agent.y + Math.sin(f.angle) * d, f.size, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
 export function drawAgents(
   ctx: CanvasRenderingContext2D,
   agents: Map<string, Agent>,
@@ -358,6 +393,9 @@ export function drawAgents(
   showStats: boolean,
   time: number,
 ) {
+  // Wall clock for the auto-offboard countdown (the server's finishedAt / autoOffboardAt are real times)
+  const now = Date.now()
+  const still = reducedMotion()
   for (const [id, agent] of agents) {
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const color = getStateColor(agent.state)
@@ -374,13 +412,27 @@ export function drawAgents(
 
     const r = radius * breathe * agent.scale
 
+    // Finished sub-agent counting down to its automatic offboard (spec item 6): wears away over the hour
+    const clock = !agent.isMain && agent.state === 'complete' ? agent.finished : undefined
+    const progress = clock ? disintegrationProgress(clock, now) : 0
+    const look = clock ? disintegrationLook(id, progress, still) : null
+    if (look && look.body <= 0 && look.label <= 0) continue
+    const bodyAlpha = agent.opacity * (look ? look.body : 1)
+
     ctx.save()
-    ctx.globalAlpha = agent.opacity
+    ctx.globalAlpha = bodyAlpha
 
     drawDepthShadow(ctx, agent, r)
     drawAgentGlow(ctx, agent, r, color, isHovered, isSelected, isWaiting)
     drawScanline(ctx, agent, r, color, isHovered, isWaiting, time)
-    drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
+    if (look?.pieces) {
+      ctx.globalAlpha = agent.opacity
+      drawBrokenOutline(ctx, agent, r, color, look.pieces)
+      drawFragments(ctx, agent, r, color, fragments(id, progress, time, still))
+      ctx.globalAlpha = bodyAlpha
+    } else {
+      drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
+    }
     drawCenterIcon(ctx, agent, r, color, isWaiting)
 
     if (agent.state === 'thinking') {
@@ -393,9 +445,9 @@ export function drawAgents(
 
     // A finished sub-agent's node is dimmed, but its name stays readable (muted text at full strength): the owner
     // wants to see who was on the team, and a dimmed label failed contrast on the light canvas.
-    if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) ctx.globalAlpha = 1
+    if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) ctx.globalAlpha = look ? look.label : 1
     drawAgentLabel(ctx, agent, r, isHovered)
-    ctx.globalAlpha = agent.opacity
+    ctx.globalAlpha = bodyAlpha
 
     // Context composition — ring for main agent, bar for sub-agents
     if (agent.state !== 'complete' || agent.opacity > 0.5) {

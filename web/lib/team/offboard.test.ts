@@ -13,20 +13,25 @@ import {
 } from './offboard'
 import type { PostFetch } from './post'
 
-test('only a finished sub-agent can be offboarded', () => {
-  assert.equal(canOffboard({ isMain: false, state: 'complete' }), true)
-  assert.equal(canOffboard({ isMain: true, state: 'complete' }), false)
+const F = { at: 1, offboardAt: 2 }
+
+test('only a sub-agent the server marked finished can be offboarded', () => {
+  assert.equal(canOffboard({ isMain: false, state: 'complete', finished: F }), true)
+  assert.equal(canOffboard({ isMain: true, state: 'complete', finished: F }), false)
   assert.equal(canOffboard({ isMain: false, state: 'thinking' }), false)
   assert.equal(canOffboard({ isMain: false, state: 'tool_calling' }), false)
   assert.equal(canOffboard(null), false)
+  // dimmed only because its parent completed: may still run on the server, so no Offboard (Riku's note)
+  assert.equal(canOffboard({ isMain: false, state: 'complete' }), false)
 })
 
-test('finishedSubAgents lists finished sub-agents only', () => {
-  const agents = new Map([
+test('finishedSubAgents lists server-finished sub-agents only', () => {
+  const agents = new Map<string, { isMain: boolean; state: string; finished?: typeof F }>([
     ['orchestrator', { isMain: true, state: 'complete' }],
-    ['Hiro (Frontend Engineer): a', { isMain: false, state: 'complete' }],
+    ['Hiro (Frontend Engineer): a', { isMain: false, state: 'complete', finished: F }],
     ['Ren: b', { isMain: false, state: 'thinking' }],
-    ['Aoi: c', { isMain: false, state: 'complete' }],
+    ['Aoi: c', { isMain: false, state: 'complete', finished: F }],
+    ['Daichi: d', { isMain: false, state: 'complete' }],
   ])
   assert.deepEqual(finishedSubAgents(agents), ['Hiro (Frontend Engineer): a', 'Aoi: c'])
 })
@@ -106,6 +111,8 @@ test('offboardRows: name, role, task and when; falls back to the node name', () 
         offboardedAt: new Date(2026, 10, 13, 14, 20).toISOString(),
       },
       { session: 's', agent: 'Kaito: server', role: null, task: null, finishedAt: null, offboardedAt: 'bad' },
+      { session: 's', agent: 'Ren: data', name: 'Ren', reason: 'auto' },
+      { session: 's', agent: 'Aoi: docs', name: 'Aoi', reason: 'manual' },
     ],
     now,
   )
@@ -115,8 +122,11 @@ test('offboardRows: name, role, task and when; falls back to the node name', () 
     role: 'Frontend Engineer',
     task: 'tombol',
     when: 'Selesai 14.05 · Offboard 14.20',
+    auto: false,
   })
   assert.equal(rows[1].name, 'Kaito: server')
   assert.equal(rows[1].role, '')
   assert.equal(rows[1].when, '')
+  // "otomatis" only for the server's one-hour rule; old records without a reason are manual
+  assert.deepEqual(rows.map((r) => r.auto), [false, false, true, false])
 })

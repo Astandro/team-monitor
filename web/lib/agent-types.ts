@@ -42,6 +42,9 @@ export interface Agent {
   role?: string
   spawnTime: number
   completeTime?: number
+  /** Set only while the server's last word on this sub-agent is a finished `agent_complete` (finishedAt and
+   *  autoOffboardAt as epoch ms). Drives Offboard and the disintegration; a new spawn clears it. */
+  finished?: { at: number; offboardAt: number }
   opacity: number
   scale: number
   /** Queued text bubbles shown on canvas — newest pushed to end */

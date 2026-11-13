@@ -2,6 +2,8 @@ import { Agent, ToolCallNode, Particle, Edge, BEAM, ANIM } from '@/lib/agent-typ
 import { COLORS } from '@/lib/colors'
 import { alphaHex } from '@/lib/utils'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
+import { disintegrationLook, disintegrationProgress } from '@/lib/disintegration'
+import { reducedMotion } from '@/lib/motion'
 
 export function bezierPoint(t: number, p0: number, p1: number, p2: number, p3: number) {
   const mt = 1 - t
@@ -106,6 +108,8 @@ export function drawEdges(
   activeEdgeIds: Set<string>,
   time: number,
 ) {
+  const now = Date.now()
+  const still = reducedMotion()
   for (const edge of edges) {
     const fromAgent = agents.get(edge.from)
     if (!fromAgent || fromAgent.opacity < MIN_VISIBLE_OPACITY) continue
@@ -116,7 +120,12 @@ export function drawEdges(
 
     const fromX = fromAgent.x, fromY = fromAgent.y
     const hasActiveParticles = activeEdgeIds.has(edge.id)
-    const baseAlpha = hasActiveParticles ? BEAM.activeAlpha : BEAM.idleAlpha
+    // The beam to a disintegrating sub-agent wears away with it (spec item 6)
+    const toAgent = edge.type === 'tool' ? undefined : agents.get(edge.to)
+    const toFinished = toAgent && toAgent.state === 'complete' ? toAgent.finished : undefined
+    const fade = toFinished ? disintegrationLook(edge.to, disintegrationProgress(toFinished, now), still).body : 1
+    if (fade <= 0) continue
+    const baseAlpha = (hasActiveParticles ? BEAM.activeAlpha : BEAM.idleAlpha) * fade
     const pulsing = hasActiveParticles ? Math.sin(time * ANIM.pulseSpeed) * 0.1 + 0.9 : 1
 
     const cp = computeControlPoints(fromX, fromY, toX, toY)

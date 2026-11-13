@@ -203,6 +203,11 @@ function OffboardedList({ model }: { model: TeamModel }) {
               <div className="nm">
                 {r.name}
                 {r.role && <span className="rl"> · {r.role}</span>}
+                {r.auto && (
+                  <span className="tm-chip auto" title="Di-offboard otomatis satu jam setelah selesai">
+                    otomatis
+                  </span>
+                )}
               </div>
               {r.task && <div className="tk">{r.task}</div>}
               {r.when && <div className="wh">{r.when}</div>}
