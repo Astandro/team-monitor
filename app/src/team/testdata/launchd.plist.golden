@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.team-monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/node/bin/node</string>
+    <string>/srv/team-monitor/app/dist/app.js</string>
+    <string>--port</string>
+    <string>3002</string>
+    <string>--no-open</string>
+    <string>--remote</string>
+    <string>--bind</string>
+    <string>loopback</string>
+    <string>--host-allow</string>
+    <string>mini.tail1234.ts.net</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/u/projects/web &amp; co</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/u</string>
+    <key>TEAM_MONITOR_HOME</key>
+    <string>/Users/u/.team-monitor</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/u/.team-monitor/team-monitor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/u/.team-monitor/team-monitor.log</string>
+</dict>
+</plist>

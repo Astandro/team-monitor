@@ -15,10 +15,16 @@ import { startServer } from './server'
 import { setupTeam, TeamSetup } from './team'
 import { runWaitAnswerCli } from './team/wait-answer'
 import { runAskCli } from './team/ask'
+import { runProjectCli } from './team/projects'
+import { restartIfInstalled, runServiceCli } from './team/service'
+import { runDoctorCli } from './team/doctor'
 
 const subcommands: Record<string, (argv: string[]) => Promise<number>> = {
   'wait-answer': runWaitAnswerCli,
   'ask': runAskCli,
+  'project': (argv) => runProjectCli(argv, { restartService: () => restartIfInstalled() }),
+  'service': (argv) => runServiceCli(argv),
+  'doctor': (argv) => runDoctorCli(argv),
 }
 const sub = subcommands[process.argv[2]]
 

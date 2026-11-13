@@ -4,22 +4,35 @@ The monitor reads `<project>/.agent-team/` and never writes `state.json`. The co
 monitor only writes answers to `<project>/.agent-team/answers/<Dn>.json` and the owner's chat messages to
 `<project>/.agent-team/inbox/<sentAt ms>-<id>.json`.
 
+## 0. After a reboot or a power cut
+
+The monitor runs as a service (`docs/setup.md`) and comes back by itself. In the new Claude Code session:
+
+1. Run `node ~/projects/team-monitor/app/dist/app.js doctor`. Exit 0 means build, service, projects, `tailscale serve`
+   mapping, token and hooks are fine; otherwise each `FAIL` line has a `fix:` line under it.
+2. Start the chat/answer watcher again (section 3, `run_in_background: true`): the old `wait-answer` died with the
+   old session, and the phone shows "Sora lagi nggak aktif" until it runs.
+3. Answers and chat messages sent while the watcher was down are on disk; the first `wait-answer` reports them at
+   once.
+
 ## 1. Register the project
 
-Either pass it on the command line (repeatable):
-
 ```sh
-node ~/projects/team-monitor/app/dist/app.js --project ~/projects/my-app
+node ~/projects/team-monitor/app/dist/app.js project add ~/projects/my-app --name "My App web"
 ```
 
-or list it in `~/.team-monitor/config.json` (override the folder with `TEAM_MONITOR_HOME`):
+This writes `~/.team-monitor/config.json` (atomically, 0600; override the folder with `TEAM_MONITOR_HOME`), creates
+`<project>/.agent-team/` and adds `.agent-team/` to the repo's `.git/info/exclude` (the tracked `.gitignore` is never
+changed). The running monitor reads `config.json` only at start, so `project add` and `project remove <id>` restart
+the installed service right away (`--no-restart` to skip; without a service, restart the monitor yourself).
+`project list` shows what is registered. The config file format, if you edit it by hand:
 
 ```json
-{"projects": [{"id": "my-app", "name": "My App web", "path": "~/projects/my-app"}]}
+{"projects": [{"id": "my-app", "name": "My App web", "path": "/Users/me/projects/my-app"}]}
 ```
 
-`id` is optional (default: slug of the folder name, made unique). Folders that do not exist are skipped. Restart the
-monitor after editing the config. Add `.agent-team/` to the project's `.gitignore`.
+`id` is optional (default: slug of the folder name, made unique). Folders that do not exist are skipped. A one-off
+run can also take `--project <path>` (repeatable) instead.
 
 ## 2. Write state.json atomically
 

@@ -41,6 +41,11 @@ Team monitor:
   --tailscale-bin <p>  Path to the tailscale CLI
   wait-answer ...      Wait for a decision answer or a chat message (see docs/coordinator.md)
   ask ...              Add an open decision D<n> to state.json, optionally --wait for it
+
+Setup (see docs/setup.md):
+  project add <path> [--name <n>] | project remove <id> | project list
+  service install [--port <n>] [--remote --bind loopback] [--host-allow <name>] | service status|restart|uninstall
+  doctor               Check build, service, projects, tailscale serve, token, hooks (exit 0 = all good)
 `)
       process.exit(0)
     }
