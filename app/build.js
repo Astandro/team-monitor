@@ -59,4 +59,19 @@ esbuild.buildSync({
   logLevel: 'warning',
 })
 
+// 4. Copy the sound files (web/public/sounds/*.ogg|*.mp3) flat into the webview folder; the static server serves
+//    files by basename from there. Nothing else from web/public is copied.
+const fs = require('fs')
+const SOUNDS_DIR = path.join(ROOT, 'web', 'public', 'sounds')
+const WEBVIEW_OUT = path.join(APP_DIR, 'dist', 'webview')
+if (fs.existsSync(SOUNDS_DIR)) {
+  let copied = 0
+  for (const name of fs.readdirSync(SOUNDS_DIR)) {
+    if (!/^[a-z0-9][a-z0-9._-]*\.(ogg|mp3)$/i.test(name)) continue
+    fs.copyFileSync(path.join(SOUNDS_DIR, name), path.join(WEBVIEW_OUT, name))
+    copied++
+  }
+  if (copied) console.log(`Copied ${copied} sound file(s) into app/dist/webview/`)
+}
+
 console.log('\nDone! Package ready in app/dist/')
