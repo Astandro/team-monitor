@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import type { SessionUpdate } from '@/lib/bridge-types'
+import { withCloudUpdate } from '@/lib/cloud-origin'
 import { dropOffboardedEvents, OFFBOARDED_EVENT } from '@/lib/team/offboard'
 
 /** Bumped when agents of a session were offboarded; the visualizer rebuilds that session from its buffer. */
@@ -245,9 +246,10 @@ export function useVSCodeBridge(): BridgeHookResult {
         setSessions(prev => {
           const existing = prev.find(s => s.id === session.id)
           if (existing) {
-            // Session resumed after inactivity — mark active again
+            // Session resumed after inactivity — mark active again (a cloud session also takes the message's
+            // stale flag: a resumed source is live again)
             return prev.map(s => s.id === session.id
-              ? { ...s, status: 'active' as const, lastActivityTime: Date.now() }
+              ? withCloudUpdate({ ...s, status: 'active' as const, lastActivityTime: Date.now() }, session)
               : s)
           }
           return [...prev, session]
@@ -261,15 +263,16 @@ export function useVSCodeBridge(): BridgeHookResult {
         selectedSessionIdRef.current = session.id
         setSelectedSessionId(session.id)
       } else if (type === 'updated') {
-        const { sessionId, label, projectId, prompt, coordinator } = data as SessionUpdate
+        const update = data as SessionUpdate
+        const { sessionId, label, projectId, prompt, coordinator } = update
         setSessions(prev => prev.map(s =>
           s.id === sessionId
-            ? {
+            ? withCloudUpdate({
                 ...s, label,
                 ...(projectId !== undefined ? { projectId } : {}),
                 ...(prompt !== undefined ? { prompt } : {}),
                 ...(coordinator !== undefined ? { coordinator } : {}),
-              }
+              }, update)
             : s
         ))
       } else if (type === 'ended') {

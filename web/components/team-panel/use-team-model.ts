@@ -29,6 +29,7 @@ import {
 } from '@/lib/team/chat'
 import { OFFBOARDED_EVENT, offboardRows, type OffboardRecord, type OffboardRow } from '@/lib/team/offboard'
 import type { PostFetch } from '@/lib/team/post'
+import { originMarks, sameProjects, type OriginMarks } from '@/lib/cloud-origin'
 import { readStored, writeStored } from './storage'
 
 export type OffboardedList =
@@ -50,6 +51,8 @@ const fixturePost: PostFetch = async (_url, init) => {
 // branches below are removed, and the sample data does not end up in the page.
 const FIXTURE = process.env.TEAM_MONITOR_FIXTURE === '1'
 const PROJECT_KEY = 'tm-project'
+/** How often a loaded project list is re-read (the hub marks a cloud source stale after 60 s without news). */
+const PROJECTS_REFRESH_MS = 15_000
 
 export type Connection = 'connecting' | 'live' | 'reconnecting'
 
@@ -62,6 +65,8 @@ export interface TeamModel {
   selectedId: string | null
   selectProject: (id: string) => void
   projectName: string
+  /** Cloud / Terputus marks of the selected project (both false for a local one) */
+  projectMarks: OriginMarks
   vm: TeamVM
   /** raw state of the selected project (null until its first payload); the sound tracker diffs it */
   state: TeamState | null
@@ -109,7 +114,9 @@ export function useTeamModel(): TeamModel {
       if (res.status === 401) return goToLogin()
       if (!res.ok) throw new Error(String(res.status))
       const body = (await res.json()) as { projects?: TeamProject[] }
-      setProjects(Array.isArray(body.projects) ? body.projects : [])
+      const list = Array.isArray(body.projects) ? body.projects : []
+      // the list is re-read every few seconds: keep the same array while nothing changed, so nothing re-renders
+      setProjects((prev) => (sameProjects(prev, list) ? prev : list))
       setListError('')
     } catch {
       setListError('Daftar proyek belum bisa dimuat. Dicoba lagi otomatis.')
@@ -125,6 +132,16 @@ export function useTeamModel(): TeamModel {
   useEffect(() => {
     if (FIXTURE || (!listError && projects.length > 0)) return
     const t = setInterval(() => void loadProjects(), 5000)
+    return () => clearInterval(t)
+  }, [listError, projects.length, loadProjects])
+
+  // A cloud project appears at runtime and turns "Terputus" when its container stops reporting (stale), so a loaded
+  // list is re-read too, while the page is visible. For local projects nothing on screen changes.
+  useEffect(() => {
+    if (FIXTURE || listError || projects.length === 0) return
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadProjects()
+    }, PROJECTS_REFRESH_MS)
     return () => clearInterval(t)
   }, [listError, projects.length, loadProjects])
 
@@ -312,6 +329,7 @@ export function useTeamModel(): TeamModel {
     selectedId,
     selectProject,
     projectName,
+    projectMarks: originMarks(selected),
     vm,
     state,
     sendAnswer,

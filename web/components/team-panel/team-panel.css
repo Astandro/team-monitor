@@ -262,6 +262,11 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-chip.review{color:var(--review)}
 .tm-chip.blocked{color:var(--blocked)}
 .tm-chip.done{color:var(--done)}
+/* Cloud project (spec team-monitor-cloud D): the plain chip under the title. "Terputus" = the container is not
+   reporting right now, not an error: muted, dashed outline and a hollow dot (the session tab uses the same look). */
+.tm-origin{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0}
+.tm-chip.stale{background:transparent;border:1px dashed var(--muted);padding:1px 7px;gap:5px}
+.tm-chip.stale::before{content:"";width:6px;height:6px;border-radius:50%;border:1px solid currentColor;box-sizing:border-box}
 /* Running task: the same opacity-only ring as a working avatar (no box-shadow animation, see .tm-av.working) */
 .tm-bubble.running{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .tm-bubble.running::after{content:"";position:absolute;inset:-1px;border-radius:inherit;box-shadow:0 0 0 7px var(--accent-soft);opacity:0;pointer-events:none;animation:tm-ring 2.6s ease-in-out infinite}

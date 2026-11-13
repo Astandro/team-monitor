@@ -9,6 +9,7 @@
 export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
 import type { AgentEvent, SessionInfo, SessionUpdate, ConnectionStatus } from './bridge-types'
 import { parseOffboardedMessage } from './team/offboard'
+import { cloudFields } from './cloud-origin'
 
 type InitCallback = () => void
 type OffboardedCallback = (sessionId: string, agents: string[]) => void
@@ -101,7 +102,7 @@ class VSCodeBridge {
 
       case 'session-updated':
         for (const cb of this.sessionListeners) {
-          cb('updated', { sessionId: data.sessionId, label: data.label, projectId: data.projectId, prompt: data.prompt, coordinator: data.coordinator })
+          cb('updated', { sessionId: data.sessionId, label: data.label, projectId: data.projectId, prompt: data.prompt, coordinator: data.coordinator, ...cloudFields(data) })
         }
         break
 
