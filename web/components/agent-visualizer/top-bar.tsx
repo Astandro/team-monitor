@@ -194,7 +194,10 @@ export const TopBar = memo(function TopBar({
         {/* Independent toggles */}
         <ToggleButton active={showTimeline} onClick={onToggleTimeline} title="Linimasa kerja tiap agent">Linimasa</ToggleButton>
         <ToggleButton active={!isMuted} onClick={onToggleMute} title={isMuted ? 'Nyalakan suara' : 'Matikan suara'} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
-          {isMuted ? <MutedIcon /> : <UnmutedIcon />}
+          <span className="inline-flex items-center gap-1">
+            {isMuted ? <MutedIcon /> : <UnmutedIcon />}
+            {isMuted ? 'Suara: mati' : 'Suara: nyala'}
+          </span>
         </ToggleButton>
       </div>
       </div>

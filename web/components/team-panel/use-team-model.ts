@@ -35,6 +35,8 @@ export interface TeamModel {
   selectProject: (id: string) => void
   projectName: string
   vm: TeamVM
+  /** raw state of the selected project (null until its first payload); the sound tracker diffs it */
+  state: TeamState | null
   sendAnswer: (decisionId: string, answer: string) => Promise<AnswerResult>
   retryProjects: () => void
   fixture: boolean
@@ -199,6 +201,7 @@ export function useTeamModel(): TeamModel {
     selectProject,
     projectName,
     vm,
+    state,
     sendAnswer,
     retryProjects: () => void loadProjects(),
     fixture: FIXTURE,

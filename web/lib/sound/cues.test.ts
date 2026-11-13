@@ -1,0 +1,59 @@
+import { test } from 'node:test'
+import { strict as assert } from 'node:assert'
+import { CUE_PRIORITY, cueForGraphTransition, isHandoffParticle, orderCues, type SoundCue } from './cues'
+import { RECIPES, recipeDuration, recipePeak } from './recipes'
+
+test('each graph transition plays its own cue', () => {
+  assert.equal(cueForGraphTransition('agent_spawn'), 'agent_spawn')
+  assert.equal(cueForGraphTransition('agent_complete'), 'agent_complete')
+  assert.equal(cueForGraphTransition('tool_start'), 'tool_start')
+  assert.equal(cueForGraphTransition('tool_complete'), 'tool_complete')
+  assert.equal(cueForGraphTransition('tool_error'), 'tool_error')
+})
+
+test('subagent dispatch and return are handoffs, other particles are not', () => {
+  assert.equal(isHandoffParticle('dispatch'), true)
+  assert.equal(isHandoffParticle('return'), true)
+  assert.equal(isHandoffParticle('tool_call'), false)
+  assert.equal(isHandoffParticle('tool_return'), false)
+})
+
+test('orderCues dedupes and puts the owner decision first', () => {
+  assert.deepEqual(orderCues(['tool_start', 'decision_open', 'tool_start', 'task_done']), [
+    'decision_open',
+    'task_done',
+    'tool_start',
+  ])
+})
+
+test('every cue has a priority and a recipe of its own', () => {
+  const all = Object.keys(RECIPES) as SoundCue[]
+  assert.equal(all.length, 14)
+  assert.equal(new Set(CUE_PRIORITY).size, 14)
+  for (const cue of all) {
+    assert.ok(CUE_PRIORITY.includes(cue), cue)
+    assert.ok(RECIPES[cue].length > 0, cue)
+  }
+  // no two cues share the exact same recipe
+  const shapes = new Set(all.map((c) => JSON.stringify(RECIPES[c])))
+  assert.equal(shapes.size, all.length)
+})
+
+test('sounds are short and quiet: most under 400 ms, tool blips the shortest', () => {
+  const all = Object.keys(RECIPES) as SoundCue[]
+  const short = all.filter((c) => recipeDuration(RECIPES[c]) < 0.4)
+  assert.ok(short.length >= 10, `only ${short.length} cues under 400 ms`)
+  for (const c of all) assert.ok(recipeDuration(RECIPES[c]) <= 1.5, c)
+  const toolStart = recipeDuration(RECIPES.tool_start)
+  for (const c of all) if (c !== 'tool_complete') assert.ok(recipeDuration(RECIPES[c]) >= toolStart, c)
+  // the stage pad is the longer one
+  assert.ok(recipeDuration(RECIPES.stage_done) > 1)
+})
+
+test('a waiting decision is the most noticeable sound, tool blips the softest', () => {
+  const all = Object.keys(RECIPES) as SoundCue[]
+  const open = recipePeak(RECIPES.decision_open)
+  for (const c of all) if (c !== 'decision_open') assert.ok(recipePeak(RECIPES[c]) < open, c)
+  assert.ok(recipePeak(RECIPES.tool_start) <= 0.02)
+  for (const c of all) for (const v of RECIPES[c]) assert.ok(v.peak <= 0.06, c)
+})

@@ -6,6 +6,7 @@ import { nextThemePref, parseThemePref, resolveTheme, type ThemePref } from '@/l
 import { readStored, writeStored } from './storage'
 import { TeamPanel } from './team-panel'
 import { useTeamModel } from './use-team-model'
+import { useTeamSounds } from './use-team-sounds'
 import './team-panel.css'
 
 type Pane = 'tim' | 'grafik'
@@ -28,6 +29,7 @@ function useSystemDark(): boolean {
  */
 export function TeamApp() {
   const model = useTeamModel()
+  useTeamSounds(model.selectedId, model.state)
   const systemDark = useSystemDark()
   const [theme, setTheme] = useState<ThemePref>(() => parseThemePref(readStored('tm-theme')))
   const [calm, setCalm] = useState(() => readStored('tm-calm') === '1')
