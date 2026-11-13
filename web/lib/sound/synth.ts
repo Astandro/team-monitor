@@ -238,6 +238,18 @@ function scheduleVoice(bus: MasterBus, v: Voice, t0: number, index: number): voi
   for (const s of sources) s.stop(end + 0.02)
 }
 
+/**
+ * Play a decoded sample (sound set v3) at time t0 into the master gain, so volume, mute and the limiter apply to it
+ * like to the synthesised sounds. Its reverb is baked into the file, so it does not use the space send.
+ */
+export function scheduleSample(bus: MasterBus, buffer: AudioBuffer, t0: number): void {
+  const src = bus.ctx.createBufferSource()
+  src.buffer = buffer
+  src.connect(bus.input)
+  src.onended = () => src.disconnect()
+  src.start(t0)
+}
+
 /** Seconds of reverb and margin rendered after a cue's last voice. */
 export const RENDER_TAIL = SPACE.seconds + 0.4
 

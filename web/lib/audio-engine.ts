@@ -1,18 +1,27 @@
 'use client'
 
 /**
- * Procedural audio engine using the Web Audio API. Every sound is synthesised from the recipes in
- * lib/sound/recipes.ts by lib/sound/synth.ts (oscillators, noise, FM, ring modulation, filters, distortion,
- * a generated reverb, a limiter on the master bus); no audio files, no network.
+ * Audio engine using the Web Audio API. Sound set v3 plays sample files (built from CC0 packs, see
+ * lib/sound/samples.ts) through a SampleBank; any cue whose file is missing, still loading or failed plays the
+ * synthesised v2 sound from lib/sound/recipes.ts (lib/sound/synth.ts) instead. Both go through the same master bus
+ * (volume, limiter).
  *
  * Muted by default. The AudioContext is only created after a user gesture (unlock) and only while sound is on,
- * so a muted page never touches audio and the browser never warns about autoplay.
+ * so a muted page never touches audio, never downloads the files, and the browser never warns about autoplay.
  */
 
 import type { SoundCue } from '@/lib/sound/cues'
 import { RECIPES } from '@/lib/sound/recipes'
+import type { SampleBank } from '@/lib/sound/sample-bank'
 import { DEFAULT_VOLUME } from '@/lib/sound/settings'
-import { createMasterBus, scheduleCue, type MasterBus } from '@/lib/sound/synth'
+import { createMasterBus, scheduleCue, scheduleSample, type MasterBus } from '@/lib/sound/synth'
+
+export interface AudioEngineOptions {
+  /** Sample files to play (sound set v3); without it every cue is synthesised (v2), e.g. in the VS Code webview. */
+  samples?: SampleBank
+  /** For tests: makes the context. */
+  createContext?: () => AudioContext
+}
 
 export class AudioEngine {
   private ctx: AudioContext | null = null
@@ -20,6 +29,13 @@ export class AudioEngine {
   private _muted = true
   private _volume = DEFAULT_VOLUME
   private unlocked = false
+  private readonly samples: SampleBank | null
+  private readonly createContext: () => AudioContext
+
+  constructor(options: AudioEngineOptions = {}) {
+    this.samples = options.samples ?? null
+    this.createContext = options.createContext ?? (() => new AudioContext())
+  }
 
   get muted() { return this._muted }
 
@@ -47,7 +63,15 @@ export class AudioEngine {
     const ctx = this.ctx
     const bus = this.bus
     if (!ctx || !bus) return
-    scheduleCue(bus, RECIPES[cue], ctx.currentTime + 0.01 + delay)
+    const t = ctx.currentTime + 0.01 + delay
+    const sample = this.samples?.get(cue)
+    if (sample) scheduleSample(bus, sample, t)
+    else scheduleCue(bus, RECIPES[cue], t)
+  }
+
+  /** Resolves when the sample files have loaded (or failed), at most after `timeoutMs`; at once without samples. */
+  samplesSettled(timeoutMs: number): Promise<void> {
+    return this.samples ? this.samples.settled(timeoutMs) : Promise.resolve()
   }
 
   private applyGain() {
@@ -60,13 +84,17 @@ export class AudioEngine {
       if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => {})
       return
     }
+    let ctx: AudioContext
     try {
-      const ctx = new AudioContext()
+      ctx = this.createContext()
       this.bus = createMasterBus(ctx, this._muted ? 0 : this._volume)
       this.ctx = ctx
     } catch {
       /* no Web Audio: stay silent */
+      return
     }
+    // lazy: the files are fetched the first time audio actually starts (a tap with sound on)
+    void this.samples?.load(ctx)
   }
 
   dispose() {

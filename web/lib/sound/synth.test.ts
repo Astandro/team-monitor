@@ -4,60 +4,7 @@ import type { SoundCue } from './cues'
 import { RECIPES, recipeDuration, type Voice } from './recipes'
 import { createMasterBus, LIMITER, scheduleCue, spaceImpulse, whiteNoise } from './synth'
 
-// ─── a minimal fake of the Web Audio graph: records nodes, connections and automation ───
-
-class FakeParam {
-  value = 0
-  calls: [string, number, number][] = []
-  setValueAtTime(v: number, t: number) { this.calls.push(['set', v, t]); return this }
-  linearRampToValueAtTime(v: number, t: number) { this.calls.push(['linear', v, t]); return this }
-  exponentialRampToValueAtTime(v: number, t: number) { this.calls.push(['exp', v, t]); return this }
-  setTargetAtTime(v: number, t: number) { this.calls.push(['target', v, t]); return this }
-}
-
-class FakeNode {
-  out: unknown[] = []
-  constructor(readonly kind: string, readonly ctx: FakeCtx) { ctx.nodes.push(this) }
-  connect(target: unknown) { this.out.push(target); return target }
-  disconnect() {}
-}
-
-class FakeSource extends FakeNode {
-  startAt: number | null = null
-  stopAt: number | null = null
-  onended: (() => void) | null = null
-  start(t: number) { this.startAt = t }
-  stop(t: number) { this.stopAt = t }
-}
-
-class FakeCtx {
-  nodes: FakeNode[] = []
-  sampleRate = 8000
-  currentTime = 0
-  destination = new FakeNode('destination', this)
-  createGain() { return Object.assign(new FakeNode('gain', this), { gain: new FakeParam() }) }
-  createOscillator() {
-    return Object.assign(new FakeSource('oscillator', this), { type: 'sine', frequency: new FakeParam(), detune: new FakeParam() })
-  }
-  createBufferSource() { return Object.assign(new FakeSource('buffer', this), { buffer: null, loop: false }) }
-  createBiquadFilter() {
-    return Object.assign(new FakeNode('filter', this), { type: 'lowpass', frequency: new FakeParam(), Q: new FakeParam() })
-  }
-  createWaveShaper() { return Object.assign(new FakeNode('shaper', this), { curve: null, oversample: 'none' }) }
-  createStereoPanner() { return Object.assign(new FakeNode('panner', this), { pan: new FakeParam() }) }
-  createConvolver() { return Object.assign(new FakeNode('convolver', this), { buffer: null }) }
-  createDynamicsCompressor() {
-    return Object.assign(new FakeNode('compressor', this), {
-      threshold: new FakeParam(), knee: new FakeParam(), ratio: new FakeParam(), attack: new FakeParam(), release: new FakeParam(),
-    })
-  }
-  createBuffer(channels: number, length: number, sampleRate: number) {
-    const data = Array.from({ length: channels }, () => new Float32Array(length))
-    return { length, sampleRate, duration: length / sampleRate, numberOfChannels: channels, getChannelData: (i: number) => data[i] }
-  }
-}
-
-type AnyNode = FakeNode & Record<string, unknown>
+import { FakeCtx, FakeSource, type AnyNode, type FakeNode, type FakeParam } from './fake-audio'
 
 function setup() {
   const ctx = new FakeCtx()
