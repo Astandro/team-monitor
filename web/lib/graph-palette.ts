@@ -1,7 +1,9 @@
 /**
  * Graph palette built from the team panel's tokens (team-panel.css, `.tm-themed`), so the graph and the panel read
- * as one app: Terang = bone-white canvas, ink nodes and edges, teal accent for activity; Gelap = the panel's warm
- * dark. Status colours keep their meaning (running = accent, tool = amber, done = green, error = red).
+ * as one app (owner direction 13 Nov): Terang = mostly white, ink nodes, blue accent for everything interactive or
+ * active; Gelap = a near-black night sky with dark grey cards just above it. Status colours keep their meaning
+ * (running = accent, tool = amber, done = green, error = red). The background particles (soft blue dust in Terang,
+ * white and gold stars in Gelap) live in sky.ts.
  *
  * Contract kept from the upstream palette: every key that was a 6-digit hex stays a 6-digit hex (callers append a
  * 2-digit alpha, e.g. `COLORS.idle + '40'`), `*Base` keys are partial `rgba(r, g, b,` strings.
@@ -10,7 +12,7 @@
 export type GraphTheme = 'light' | 'dark'
 
 /** The panel's tokens, copied from team-panel.css (a test keeps them in sync). `slate` is the graph's one extra hue,
- *  the darker sibling of the panel's `--lead`, for "thinking" and for reasoning tokens. */
+ *  a muted violet kept apart from the blue accent, for reasoning (thinking bubbles, reasoning tokens). */
 export interface PanelTokens {
   bg: string; surface: string; sunk: string; ink: string; muted: string; line: string
   accent: string; done: string; review: string; blocked: string
@@ -19,14 +21,14 @@ export interface PanelTokens {
 
 export const PANEL_TOKENS: Record<GraphTheme, PanelTokens> = {
   light: {
-    bg: '#F6F1E7', surface: '#FFFDF8', sunk: '#EFE8DA', ink: '#2A2620', muted: '#655D51', line: '#E2D9C8',
-    accent: '#1D6B66', done: '#2F7448', review: '#8A5A0B', blocked: '#A3352A',
-    slate: '#4C5A86', errorSurface: '#F6DED8',
+    bg: '#F4F7FC', surface: '#FFFFFF', sunk: '#EAF0F8', ink: '#16202F', muted: '#506079', line: '#D9E1EE',
+    accent: '#1E5FD0', done: '#1F7046', review: '#8A5A0B', blocked: '#B3261E',
+    slate: '#5A4FA0', errorSurface: '#FBE3E1',
   },
   dark: {
-    bg: '#15130F', surface: '#1E1B16', sunk: '#26221B', ink: '#EEE7D9', muted: '#A99F8E', line: '#332E25',
-    accent: '#62C3B9', done: '#79C793', review: '#E2B355', blocked: '#F08A7E',
-    slate: '#A3AED6', errorSurface: '#3A211C',
+    bg: '#05060A', surface: '#16171D', sunk: '#1E2026', ink: '#ECEEF2', muted: '#A2A8B4', line: '#2D3038',
+    accent: '#79AEFF', done: '#6FCF97', review: '#EDBB5C', blocked: '#F4897E',
+    slate: '#B7AEF0', errorSurface: '#3A1A18',
   },
 }
 
@@ -58,7 +60,7 @@ export function graphPalette(theme: GraphTheme) {
     // Ink for structure, accent for activity
     holoBase: t.muted,
     holoBright: t.ink,
-    holoHot: dark ? '#FFF8EC' : t.ink,
+    holoHot: dark ? '#FFFFFF' : t.ink,
 
     // Agent states
     idle: t.ink,

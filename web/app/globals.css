@@ -124,12 +124,12 @@
   }
 }
 
-/* Floating card (panels, popups, control bar). Default = the team panel's warm dark (the graph palette's default
-   theme, used where no page theme exists, e.g. the VS Code webview). The standalone app overrides these with its
-   theme tokens in team-panel.css. */
+/* Floating card (panels, popups, control bar). Default = the team panel's night-sky dark (the graph palette's
+   default theme, used where no page theme exists, e.g. the VS Code webview). The standalone app overrides these with
+   its theme tokens in team-panel.css. */
 .glass-card {
-  background: #1E1B16;
-  border: 1px solid #332E25;
+  background: #16171D;
+  border: 1px solid #2D3038;
   border-radius: 14px;
   padding: 12px;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3), 0 8px 22px -12px rgba(0, 0, 0, 0.7);
@@ -139,19 +139,24 @@
 .glass-card input,
 .glass-card textarea,
 .glass-card select {
-  background: #26221B !important;
-  border: 1px solid #332E25 !important;
-  color: #EEE7D9 !important;
+  background: #1E2026 !important;
+  border: 1px solid #2D3038 !important;
+  color: #ECEEF2 !important;
+}
+
+.glass-card input[type="range"] {
+  background: transparent !important;
+  border: 0 !important;
 }
 
 .glass-card input::placeholder,
 .glass-card textarea::placeholder {
-  color: #A99F8E;
+  color: #A2A8B4;
 }
 
 .glass-card input:focus,
 .glass-card textarea:focus {
-  border-color: #62C3B9 !important;
+  border-color: #79AEFF !important;
   outline: none;
 }
 

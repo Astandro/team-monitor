@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { graphPalette, PANEL_TOKENS, contrastRatio, type GraphTheme } from './graph-palette'
+import { graphPalette, PANEL_TOKENS, contrastRatio, luminance, type GraphTheme } from './graph-palette'
 import { COLORS, ROLE_COLORS, applyGraphTheme, getGraphTheme, graphBloomEnabled, liveColor } from './colors'
 
 const THEMES: GraphTheme[] = ['light', 'dark']
@@ -31,11 +31,8 @@ for (const theme of THEMES) {
     for (const k of SHARED) assert.equal(chrome[k], panel[k], `${theme} --g-${k}`)
   })
 
-  test(`${theme}: canvas is the panel background, warm, never navy`, () => {
-    const p = graphPalette(theme)
-    assert.equal(p.void, PANEL_TOKENS[theme].bg)
-    const [r, , b] = [1, 3, 5].map((i) => parseInt(p.void.slice(i, i + 2), 16))
-    assert.ok(b <= r, `${theme} background ${p.void} leans blue`)
+  test(`${theme}: canvas is the panel background`, () => {
+    assert.equal(graphPalette(theme).void, PANEL_TOKENS[theme].bg)
   })
 
   test(`${theme}: status colours keep their meaning and reach 3:1 on the canvas`, () => {
@@ -71,6 +68,54 @@ for (const theme of THEMES) {
     }
   })
 }
+
+/** [r, g, b] of a #RRGGBB colour */
+function rgbOf(hex: string): [number, number, number] {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number]
+}
+
+test('Terang (owner 13 Nov): mostly white, blue accent for interactive and active things', () => {
+  const t = PANEL_TOKENS.light
+  // white surfaces and a near-white background, not bone-white: no warm cast
+  assert.equal(t.surface, '#FFFFFF')
+  assert.ok(luminance(t.bg) > 0.9, `background ${t.bg} is not near white`)
+  const [br, , bb] = rgbOf(t.bg)
+  assert.ok(bb >= br, `background ${t.bg} is warm (bone-white look)`)
+  // the accent is clearly blue
+  const [r, g, b] = rgbOf(t.accent)
+  assert.ok(b > r + 80 && b > g + 40, `accent ${t.accent} is not blue`)
+  const p = graphPalette('light')
+  assert.equal(p.thinking, t.accent, 'active node ring is the accent')
+  assert.equal(p.message, t.accent, 'edges in flight are the accent')
+  assert.equal(p.toggleActive.startsWith(`rgba(${r}, ${g}, ${b},`), true, 'active toggles use the accent')
+})
+
+test('Gelap (owner 13 Nov): near-black night sky, cards dark grey just above black', () => {
+  const t = PANEL_TOKENS.dark
+  assert.ok(luminance(t.bg) < 0.005, `background ${t.bg} is not near black`)
+  for (const k of ['surface', 'sunk'] as const) {
+    const l = luminance(t[k])
+    assert.ok(l > luminance(t.bg) && l < 0.03, `${k} ${t[k]} is not a dark grey just above black`)
+    const [r, g, b] = rgbOf(t[k])
+    assert.ok(Math.max(r, g, b) - Math.min(r, g, b) <= 12, `${k} ${t[k]} is tinted, not grey`)
+  }
+  assert.ok(contrastRatio(t.surface, t.bg) >= 1.1, 'cards stand off the sky')
+})
+
+test('the default floating card (globals.css, VS Code webview) uses the Gelap tokens', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf-8')
+  const start = css.indexOf('.glass-card {')
+  const body = css.slice(start, css.indexOf('}', start))
+  assert.match(body, new RegExp(`background: ${PANEL_TOKENS.dark.surface}`, 'i'))
+  assert.match(body, new RegExp(`border: 1px solid ${PANEL_TOKENS.dark.line}`, 'i'))
+})
+
+test('the two themes differ in every surface token (no warm leftovers from the old palette)', () => {
+  const old = ['#F6F1E7', '#FFFDF8', '#EFE8DA', '#15130F', '#1E1B16', '#26221B', '#1D6B66', '#62C3B9']
+  for (const theme of THEMES) {
+    for (const v of Object.values(PANEL_TOKENS[theme])) assert.ok(!old.includes(v), `${theme} still uses ${v}`)
+  }
+})
 
 test('both themes define the same keys, solid colours stay 6-digit hex, bases stay partial rgba', () => {
   const light = graphPalette('light')

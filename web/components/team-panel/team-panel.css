@@ -1,21 +1,23 @@
-/* Team panel. Tokens and structure ported from the artifact monitor the owner already likes (bone-white light theme,
-   working dark theme). Tokens and base rules live on .tm-themed (the team pane and the bottom bar only), never on
-   .tm-root, which also wraps the graph: that keeps Tailwind's --radius, colours and inheritance in the graph as upstream.
+/* Team panel. Palettes (owner direction 13 Nov): Terang = mostly white with a blue accent for whatever is interactive
+   or active; Gelap = near-black night sky, cards in dark greys just above black so they stay readable. Status colours
+   keep their meaning in both. The graph uses the same values (web/lib/graph-palette.ts, a test keeps them in sync).
+   Tokens and base rules live on .tm-themed (the team pane and the bottom bar only), never on .tm-root, which also
+   wraps the graph: that keeps Tailwind's --radius, colours and inheritance in the graph as upstream.
    Font: system stack. The page is served by the local app and loads no external fonts. */
 .tm-themed{
-  --bg:#F6F1E7; --surface:#FFFDF8; --sunk:#EFE8DA; --ink:#2A2620; --muted:#655D51; --line:#E2D9C8;
-  --accent:#1D6B66; --accent-soft:rgba(29,107,102,.14); --done:#2F7448; --review:#8A5A0B; --blocked:#A3352A;
-  --opus:#EAD8C3; --sonnet:#D7E3D4; --lead:#D9DDEA;
-  --radius:14px; --shadow:0 1px 0 rgba(42,38,32,.04),0 6px 18px -10px rgba(42,38,32,.25);
+  --bg:#F4F7FC; --surface:#FFFFFF; --sunk:#EAF0F8; --ink:#16202F; --muted:#506079; --line:#D9E1EE;
+  --accent:#1E5FD0; --accent-soft:rgba(30,95,208,.12); --done:#1F7046; --review:#8A5A0B; --blocked:#B3261E;
+  --opus:#F2E6D6; --sonnet:#DCEBDF; --lead:#DCE7F8;
+  --radius:12px; --shadow:0 1px 0 rgba(22,32,47,.04),0 4px 14px -8px rgba(22,32,47,.18);
   color-scheme:light;
   font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   color:var(--ink); background:var(--bg); -webkit-font-smoothing:antialiased;
 }
 .tm-root[data-tm-theme="dark"] .tm-themed{
-  --bg:#15130F; --surface:#1E1B16; --sunk:#26221B; --ink:#EEE7D9; --muted:#A99F8E; --line:#332E25;
-  --accent:#62C3B9; --accent-soft:rgba(98,195,185,.16); --done:#79C793; --review:#E2B355; --blocked:#F08A7E;
-  --opus:#4A3B2C; --sonnet:#2F3E31; --lead:#343A4D;
-  --shadow:0 1px 0 rgba(0,0,0,.3),0 8px 22px -12px rgba(0,0,0,.7);
+  --bg:#05060A; --surface:#16171D; --sunk:#1E2026; --ink:#ECEEF2; --muted:#A2A8B4; --line:#2D3038;
+  --accent:#79AEFF; --accent-soft:rgba(121,174,255,.14); --done:#6FCF97; --review:#EDBB5C; --blocked:#F4897E;
+  --opus:#3A3024; --sonnet:#22332A; --lead:#232E45;
+  --shadow:0 1px 0 rgba(0,0,0,.4);
   color-scheme:dark;
 }
 .tm-themed, .tm-themed *{box-sizing:border-box}
@@ -41,17 +43,17 @@
    --g- prefix here because the graph also uses Tailwind, whose --muted / --accent / --radius mean other things.
    The canvas itself takes the same values from web/lib/graph-palette.ts (a test keeps the two in sync). */
 .tm-pane-graph{
-  --g-bg:#F6F1E7; --g-surface:#FFFDF8; --g-sunk:#EFE8DA; --g-ink:#2A2620; --g-muted:#655D51; --g-line:#E2D9C8;
-  --g-accent:#1D6B66; --g-accent-soft:rgba(29,107,102,.14);
-  --g-shadow:0 1px 0 rgba(42,38,32,.04),0 6px 18px -10px rgba(42,38,32,.25);
+  --g-bg:#F4F7FC; --g-surface:#FFFFFF; --g-sunk:#EAF0F8; --g-ink:#16202F; --g-muted:#506079; --g-line:#D9E1EE;
+  --g-accent:#1E5FD0; --g-accent-soft:rgba(30,95,208,.12);
+  --g-shadow:0 1px 0 rgba(22,32,47,.04),0 4px 14px -8px rgba(22,32,47,.18);
   --g-font:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --g-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   background:var(--g-bg); color:var(--g-ink); font-family:var(--g-font); color-scheme:light;
 }
 .tm-root[data-tm-theme="dark"] .tm-pane-graph{
-  --g-bg:#15130F; --g-surface:#1E1B16; --g-sunk:#26221B; --g-ink:#EEE7D9; --g-muted:#A99F8E; --g-line:#332E25;
-  --g-accent:#62C3B9; --g-accent-soft:rgba(98,195,185,.16);
-  --g-shadow:0 1px 0 rgba(0,0,0,.3),0 8px 22px -12px rgba(0,0,0,.7);
+  --g-bg:#05060A; --g-surface:#16171D; --g-sunk:#1E2026; --g-ink:#ECEEF2; --g-muted:#A2A8B4; --g-line:#2D3038;
+  --g-accent:#79AEFF; --g-accent-soft:rgba(121,174,255,.14);
+  --g-shadow:0 1px 0 rgba(0,0,0,.4);
   color-scheme:dark;
 }
 /* Readable sans like the panel; code, paths and command output keep a monospace face (.tm-code). */
@@ -85,7 +87,7 @@
 .tm-nav .count{min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--blocked);color:var(--surface);font-size:12px;display:inline-grid;place-items:center;font-variant-numeric:tabular-nums}
 @media (min-width:1024px){
   .tm-nav{display:none}
-  .tm-panes{display:grid;grid-template-columns:minmax(400px,460px) minmax(0,1fr)}
+  .tm-panes{display:grid;grid-template-columns:352px minmax(0,1fr)}
   .tm-pane{position:relative;inset:auto;min-height:0}
   .tm-pane[data-active="false"]{visibility:visible;pointer-events:auto}
   .tm-pane-team{border-right:1px solid var(--line)}
@@ -96,9 +98,10 @@
 .tm-heading{flex:1 1 240px;min-width:0}
 .tm-themed h1{font-size:22px;line-height:1.25;margin:0;font-weight:700;letter-spacing:-.01em}
 .tm-themed .sub{color:var(--muted);margin:4px 0 0;font-size:14px}
-.tm-tools{display:flex;flex-wrap:wrap;gap:8px}
-.tm-volume{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px;font-weight:600;color:var(--muted)}
-.tm-volume input{width:110px;min-height:44px;margin:0;accent-color:var(--accent)}
+/* Theme picker: one small icon button (sun / moon / half circle), tooltip and aria-label carry the words */
+.tm-icon-btn{flex-shrink:0;width:44px;height:44px;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
+.tm-icon-btn:hover{background:var(--sunk);color:var(--accent)}
+.tm-icon-btn:active{transform:translateY(1px)}
 .tm-btn{font:inherit;font-size:13px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;min-height:44px;padding:0 14px}
 .tm-btn:hover{background:var(--sunk)}
 .tm-btn:active{transform:translateY(1px)}
@@ -108,9 +111,10 @@
 .tm-themed h2{font-size:13px;font-weight:700;color:var(--muted);margin:30px 0 12px;letter-spacing:.02em}
 .tm-themed .note{color:var(--muted);font-size:13px}
 
-.tm-switch{margin-top:14px;display:flex;flex-direction:column;gap:4px}
+.tm-switch{margin-bottom:14px;display:flex;flex-direction:column;gap:4px}
 .tm-switch label{font-size:12px;font-weight:600;color:var(--muted)}
-.tm-switch select{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;min-height:44px;padding:0 12px;width:100%}
+.tm-switch-row{display:flex;gap:8px;align-items:center}
+.tm-switch select{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;min-height:44px;padding:0 12px;flex:1;min-width:0}
 
 .tm-banner{margin-top:14px;padding:10px 14px;border-radius:12px;background:var(--sunk);font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 .tm-banner.err{color:var(--blocked)}
@@ -172,7 +176,6 @@ a.tm-stat.hot b{color:var(--blocked)}
 .tm-bubble.running.enter{animation:tm-pop .5s cubic-bezier(.2,.9,.25,1.15) both,tm-breathe 2.6s ease-in-out .5s infinite}
 @keyframes tm-breathe{0%,100%{box-shadow:var(--shadow),0 0 0 0 var(--accent-soft)}50%{box-shadow:var(--shadow),0 0 0 7px var(--accent-soft)}}
 @keyframes tm-pop{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
-.tm-calm .tm-bubble,.tm-calm .tm-av{animation:none!important}
 @media (prefers-reduced-motion:reduce){.tm-themed .tm-bubble,.tm-themed .tm-av{animation:none!important}}
 
 .tm-list{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);margin-top:10px}
@@ -269,3 +272,41 @@ a.tm-stat.hot b{color:var(--blocked)}
   .tm-wrap{padding:28px 24px 56px}
   .tm-themed h1{font-size:26px}
 }
+
+/* Desktop column (352px, owner request 13 Nov): denser, so the graph gets the room. Smaller secondary text, tighter
+   cards and gaps; body text and titles keep their size and still wrap in full (O3). */
+@media (min-width:1024px){
+  .tm-pane-team .tm-wrap{padding:16px 14px 40px}
+  .tm-pane-team h1{font-size:20px}
+  .tm-pane-team .sub{font-size:13px}
+  .tm-pane-team h2{margin:22px 0 8px;font-size:12px}
+  .tm-pane-team .tm-stats{margin-top:14px}
+  .tm-pane-team .tm-stat{min-height:64px;padding:10px 6px}
+  .tm-pane-team .tm-stat b{font-size:20px}
+  .tm-pane-team .tm-stat b small{font-size:14px}
+  .tm-pane-team .tm-team{padding:12px 8px}
+  .tm-pane-team .tm-team .members{gap:12px 4px}
+  .tm-pane-team .tm-av{width:42px;height:42px;border-radius:13px;font-size:15px}
+  .tm-pane-team .tm-av.big{width:48px;height:48px;font-size:16px}
+  .tm-pane-team .tm-av .st{width:14px;height:14px;right:-4px;top:-4px}
+  .tm-pane-team .tm-member .nm{font-size:13px;margin-top:6px}
+  .tm-pane-team .tm-member .rl, .tm-pane-team .tm-member .tk{font-size:11.5px}
+  .tm-pane-team .tm-bubbles{gap:8px}
+  .tm-pane-team .tm-bubble{padding:10px 12px;gap:10px;border-radius:14px}
+  .tm-pane-team .tm-bubble .tm-av{width:34px;height:34px;border-radius:10px;font-size:13px}
+  .tm-pane-team .tm-bubble .tt{font-size:14px}
+  .tm-pane-team .tm-bubble .nt{font-size:12.5px}
+  .tm-pane-team .tm-row{padding:8px 12px}
+  .tm-pane-team .tm-list summary{padding:10px 12px}
+  .tm-pane-team .tm-dec{padding:12px}
+  .tm-pane-team .tm-dec h3{font-size:15px}
+  .tm-pane-team .tm-stage{padding:10px 12px;gap:8px}
+  .tm-pane-team .tm-chat-card{padding:10px}
+  .tm-pane-team .tm-msg .tx{font-size:14px}
+}
+
+/* The graph's sound control: bigger targets on touch screens; the range in its popover keeps the native look */
+@media (pointer:coarse){
+  .tm-pane-graph .tm-sound-btn{min-height:44px!important;min-width:44px!important}
+}
+.tm-pane-graph .glass-card input[type="range"]{background:transparent!important;border:0!important;padding:0}

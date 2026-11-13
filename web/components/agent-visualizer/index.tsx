@@ -101,7 +101,7 @@ export function AgentVisualizer({ projectId = null }: {
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
   const [isReviewing, setIsReviewing] = useState(false)
-  const { isMuted, seekingRef, handleToggleMute } = useAudioEffects({
+  const { seekingRef, handleToggleMute } = useAudioEffects({
     agents, toolCalls, particles, isReviewing,
     sessionKey: bridge.selectedSessionId,
     sessions: bridge.sessions,
@@ -505,10 +505,8 @@ export function AgentVisualizer({ projectId = null }: {
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
         showTimeline={showTimeline}
-        isMuted={isMuted}
         onTogglePanel={toggleExclusivePanel}
         onToggleTimeline={() => setShowTimeline(prev => !prev)}
-        onToggleMute={handleToggleMute}
         finishedCount={offboardSession ? finishedCount : 0}
         onOffboardAll={handleOffboardAll}
         offboardNotice={menuOffboardError}

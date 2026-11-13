@@ -10,28 +10,7 @@ import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 import type { OffboardResult } from "@/lib/team/offboard"
 import { OffboardButton } from "./offboard-button"
-
-// ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
-
-function MutedIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line x1="23" y1="9" x2="17" y2="15" />
-      <line x1="17" y1="9" x2="23" y2="15" />
-    </svg>
-  )
-}
-
-function UnmutedIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-    </svg>
-  )
-}
+import { SoundControl } from "./sound-control"
 
 // ─── Toggle Button ──────────────────────────────────────────────────────────
 
@@ -100,10 +79,8 @@ export interface TopBarProps {
   showTranscript: boolean
   showCostOverlay: boolean
   showTimeline: boolean
-  isMuted: boolean
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
   onToggleTimeline: () => void
-  onToggleMute: () => void
   /** Finished sub-agents that can be offboarded here (0 hides the action) */
   finishedCount?: number
   onOffboardAll?: () => Promise<OffboardResult>
@@ -128,8 +105,8 @@ export const TopBar = memo(function TopBar({
   onSelectSession, onCloseSession,
   isVSCode, connectionStatus,
   agentCount, totalTokens,
-  showFileAttention, showTranscript, showCostOverlay, showTimeline, isMuted,
-  onTogglePanel, onToggleTimeline, onToggleMute,
+  showFileAttention, showTranscript, showCostOverlay, showTimeline,
+  onTogglePanel, onToggleTimeline,
   finishedCount = 0, onOffboardAll, offboardNotice,
   onLayout, children,
 }: TopBarProps) {
@@ -203,12 +180,8 @@ export const TopBar = memo(function TopBar({
 
         {/* Independent toggles */}
         <ToggleButton active={showTimeline} onClick={onToggleTimeline} title="Linimasa kerja tiap agent">Linimasa</ToggleButton>
-        <ToggleButton active={!isMuted} onClick={onToggleMute} title={isMuted ? 'Nyalakan suara' : 'Matikan suara'} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
-          <span className="inline-flex items-center gap-1">
-            {isMuted ? <MutedIcon /> : <UnmutedIcon />}
-            {isMuted ? 'Suara: mati' : 'Suara: nyala'}
-          </span>
-        </ToggleButton>
+        {/* The page's only sound control: mute button plus a volume popover */}
+        <SoundControl />
       </div>
       {/* Offboarding finished agents (D22): own row so its status text has room and never pushes the toggles */}
       {(finishedCount > 0 && onOffboardAll || offboardNotice) && (
