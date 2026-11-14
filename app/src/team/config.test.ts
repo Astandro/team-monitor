@@ -12,7 +12,7 @@ test('teamHome honours TEAM_MONITOR_HOME', () => {
 })
 
 test('slugify makes safe ids', () => {
-  assert.equal(slugify('My App Web'), 'my-app')
+  assert.equal(slugify('My App Web'), 'my-app-web')
   assert.equal(slugify('../..'), 'project')
   assert.equal(slugify('Café_ß'), 'cafe')
 })

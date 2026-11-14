@@ -8,13 +8,15 @@ Compatible with agent-flow hooks: the hook discovery directory (`~/.claude/agent
 
 ## Install and run
 
-From this private repo:
+From a clone of this repository:
 
 ```bash
 npx -y pnpm@10 install
 npx -y pnpm@10 run build:app
 node app/dist/app.js
 ```
+
+Or from a GitHub release: download `team-monitor-<version>.tgz`, check it against its `.sha256`, unpack it and run `node team-monitor-<version>/app.js`.
 
 The app opens in your browser and starts a local server on port 3002 (the VS Code extension and dev relay still use 3001, which upstream agent-flow also uses, so both can run side by side). Start a Claude Code session in another terminal and events stream in as they happen.
 
@@ -63,4 +65,4 @@ The extension's uninstall script removes agent-flow hooks from your Claude Code 
 
 ## License
 
-Apache 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Upstream trademark policy is kept in [TRADEMARK.md](TRADEMARK.md) for reference.
+Apache 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Upstream trademark policy is kept in [TRADEMARK.md](TRADEMARK.md) for reference. The `extension/` folder carries upstream Agent Flow's own licence file, [extension/LICENSE](extension/LICENSE) (MIT), unchanged.

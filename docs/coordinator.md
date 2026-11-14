@@ -18,7 +18,7 @@ The monitor runs as a service (`docs/setup.md`) and comes back by itself. In the
 ## 1. Register the project
 
 ```sh
-node ~/projects/team-monitor/app/dist/app.js project add ~/projects/my-app --name "My App web"
+node ~/projects/team-monitor/app/dist/app.js project add ~/projects/my-app --name "My App"
 ```
 
 This writes `~/.team-monitor/config.json` (atomically, 0600; override the folder with `TEAM_MONITOR_HOME`), creates
@@ -28,7 +28,7 @@ the installed service right away (`--no-restart` to skip; without a service, res
 `project list` shows what is registered. The config file format, if you edit it by hand:
 
 ```json
-{"projects": [{"id": "my-app", "name": "My App web", "path": "/Users/me/projects/my-app"}]}
+{"projects": [{"id": "my-app", "name": "My App", "path": "/Users/me/projects/my-app"}]}
 ```
 
 `id` is optional (default: slug of the folder name, made unique). Folders that do not exist are skipped. A one-off
@@ -261,7 +261,7 @@ Logging out (`POST /logout`) ends that session at once, including its open live 
 streams are closed within a minute.
 
 Accepted Host names in remote mode: loopback names, the Tailscale IP, the MagicDNS name and its short form
-(`http://my-machine:3002` works when MagicDNS is on), plus `--host-allow <name>` extras.
+(`http://<machine>:3002` works when MagicDNS is on), plus `--host-allow <name>` extras.
 
 Failed logins: 5 per client per 15 minutes, then 429 with `Retry-After`. There is no global cap, so other devices
 cannot lock the owner out. The client is the socket address for direct connections, and the last

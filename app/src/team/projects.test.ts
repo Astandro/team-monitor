@@ -12,7 +12,7 @@ const readJson = (p: string) => JSON.parse(fs.readFileSync(p, 'utf-8')) as Recor
 function setup(): { root: string; home: string; repo: string } {
   const root = makeTmpDir()
   const home = path.join(root, 'home')
-  const repo = path.join(root, 'My App Web')
+  const repo = path.join(root, 'My App')
   fs.mkdirSync(path.join(repo, '.git', 'info'), { recursive: true })
   return { root, home, repo }
 }

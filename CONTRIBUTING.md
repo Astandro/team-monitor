@@ -1,6 +1,6 @@
 # Contributing to Team Monitor
 
-This is a private repository. Work happens on a branch per task (`tm/<task>`), reviewed before merge into `main`.
+Work happens on a branch per task (`tm/<task>`), reviewed before merge into `main`.
 
 ## Checks before a merge
 
