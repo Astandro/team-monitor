@@ -88,7 +88,8 @@ export async function startServer(options: ServerOptions) {
       openURL(url)
     }
 
-    // Best effort, never fatal: a monitor without --public-ui that Funnel exposes says so loudly (P-02/P-03).
+    // Best effort, never fatal: a monitor without --public-ui that Funnel exposes, or any monitor behind a TCP
+    // Funnel, says so loudly (P-02/P-03).
     void teamSetup.funnelWarning(port).then((lines) => {
       for (const l of lines) console.log(l)
       if (lines.length) console.error('[funnel] WARNING: this monitor is reachable from the internet through Tailscale Funnel; see the lines above.')

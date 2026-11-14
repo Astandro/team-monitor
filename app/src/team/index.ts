@@ -8,7 +8,9 @@ import { buildRegistry, ensureHome, readAutoOffboardMinutes, readConfigProjects,
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
 import { INGEST_TOKEN_FILE, IngestService } from './ingest'
 import { OffboardStore } from './offboard'
-import { funnelEntries, funnelOffCommand, unexpectedFunnelExposure } from './doctor'
+import {
+  foregroundStop, funnelEntries, funnelOffCommand, tcpFunnelOffCommand, tcpFunnels, tcpWhere, unexpectedFunnelExposure,
+} from './doctor'
 import {
   AsyncTailscaleRunner, defaultTailscaleBin, makeAsyncTailscaleRunner, makeTailscaleRunner, PUBLIC_UI_NEEDS,
   publicUiFunnelCommand, resolveRemoteConfig, TailscaleRunner,
@@ -69,8 +71,9 @@ export function remoteBannerLines(remote: RemoteAccess | null, port: number, pub
 /**
  * Start-up Funnel check of a monitor WITHOUT --public-ui (P-02/P-03): best effort (`tailscale serve status --json`,
  * short timeout); no binary, an error or unreadable output give no lines and never stop the start. When a Funnel
- * host:port reaches this monitor on paths its flags do not allow (with --ingest: anything but /api/ingest), the
- * warning lines for the log and banner.
+ * host:port (background or foreground) reaches this monitor on paths its flags do not allow (with --ingest: anything
+ * but /api/ingest), or a TCP Funnel forwards to its port (in every mode, --public-ui included: raw TCP looks local),
+ * the warning lines for the log and banner.
  */
 export async function funnelStartWarning(
   port: number,
@@ -78,21 +81,28 @@ export async function funnelStartWarning(
   run: AsyncTailscaleRunner,
   bin = 'tailscale',
 ): Promise<string[]> {
-  if (flags.publicUi) return []
   let json: string
   try { json = await run(['serve', 'status', '--json']) } catch { return [] }
-  const exposed = unexpectedFunnelExposure(funnelEntries(json, port), flags)
-  if (!exposed.length) return []
-  const where = exposed.map((x) => `${x.paths.join(', ')} on ${x.hostPort}`).join('; ')
-  const cmds = exposed.flatMap((x) => x.paths.map((m) => funnelOffCommand(x.hostPort, m, bin)))
-  return [
-    '',
-    '!!! WARNING: this monitor is REACHABLE FROM THE INTERNET through Tailscale Funnel !!!',
-    `!!! Funnel maps ${where} to 127.0.0.1:${port}, but the monitor was not started with --public-ui.`,
-    `!!! Turn it off: ${cmds.join(' ; ')}`,
-    '!!! (or, if a public UI is intended, run with --remote --bind loopback --public-ui). Check with: team-monitor doctor',
-    '',
+  const exposed = flags.publicUi ? [] : unexpectedFunnelExposure(funnelEntries(json, port), flags)
+  const tcp = tcpFunnels(json, port)
+  if (!exposed.length && !tcp.length) return []
+  const lines = ['', '!!! WARNING: this monitor is REACHABLE FROM THE INTERNET through Tailscale Funnel !!!']
+  if (exposed.length) {
+    const where = exposed.map((x) => `${x.paths.join(', ')} on ${x.hostPort}${x.foreground ? ' (foreground)' : ''}`).join('; ')
+    lines.push(`!!! Funnel maps ${where} to 127.0.0.1:${port}, but the monitor was not started with --public-ui.`)
+  }
+  for (const t of tcp) {
+    lines.push(`!!! Funnel forwards raw TCP on ${tcpWhere(t)} to ${t.target}${t.tls ? ' (TLS terminated)' : ''}${t.foreground ? ' (foreground)' : ''}: no forwarded headers, so requests from the internet look like requests made on this machine.`)
+  }
+  const cmds = [
+    ...exposed.flatMap((x) => x.foreground ? [foregroundStop(bin)] : x.paths.map((m) => funnelOffCommand(x.hostPort, m, bin))),
+    ...tcp.map((t) => t.foreground ? foregroundStop(bin) : tcpFunnelOffCommand(t, bin)),
   ]
+  lines.push(`!!! Turn it off: ${[...new Set(cmds)].join(' ; ')}`)
+  if (exposed.length) lines.push('!!! (or, if a public UI is intended, run with --remote --bind loopback --public-ui). Check with: team-monitor doctor')
+  if (tcp.length) lines.push(`!!! Never use a TCP Funnel (--tcp, --tls-terminated-tcp) for the monitor.${exposed.length ? '' : ' Check with: team-monitor doctor'}`)
+  lines.push('')
+  return lines
 }
 
 /** Accept any Host: only for a monitor started by cloud mode inside a cloud session. */
