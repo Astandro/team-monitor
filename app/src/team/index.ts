@@ -8,7 +8,11 @@ import { buildRegistry, ensureHome, readAutoOffboardMinutes, readConfigProjects,
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
 import { INGEST_TOKEN_FILE, IngestService } from './ingest'
 import { OffboardStore } from './offboard'
-import { defaultTailscaleBin, makeTailscaleRunner, resolveRemoteConfig, TailscaleRunner } from './remote'
+import {
+  defaultTailscaleBin, makeTailscaleRunner, PUBLIC_UI_NEEDS, publicUiFunnelCommand, resolveRemoteConfig, TailscaleRunner,
+} from './remote'
+
+export { PUBLIC_UI_NEEDS, publicUiFunnelCommand }
 
 export interface TeamCliOptions {
   projects: string[]
@@ -22,9 +26,41 @@ export interface TeamCliOptions {
    *  (still loopback only), so the cloud app's preview pane can show the UI; state-changing requests still need a
    *  loopback Host (the preview is view-only). Never with --remote or --ingest. */
   cloud?: boolean
+  /** Public UI through Tailscale Funnel (`--public-ui`, Addendum G): only with `--remote --bind loopback`. The
+   *  server behaves as in remote mode (login for everything but /login, /logout and the ingest routes); in addition
+   *  the login limiter keys on the Funnel client address (publicClientKey) and logins are logged. Off by default. */
+  publicUi?: boolean
 }
 
 export class CloudModeError extends Error {}
+export class PublicUiError extends Error {}
+
+/** Refuse `--public-ui` unless it comes with `--remote --bind loopback` (and not with `--cloud`). */
+export function checkPublicUi(opts: Pick<TeamCliOptions, 'publicUi' | 'remote' | 'bind' | 'cloud'>): void {
+  if (!opts.publicUi) return
+  if (!opts.remote || (opts.bind ?? '').trim() !== 'loopback' || opts.cloud) throw new PublicUiError(PUBLIC_UI_NEEDS)
+}
+
+/** Start-up lines about where the UI can be reached in remote mode (printed by server.ts once listening). */
+export function remoteBannerLines(remote: RemoteAccess | null, port: number, publicUi: boolean): string[] {
+  if (!remote) return []
+  if (publicUi) {
+    const dns = remote.config.dnsName ?? '<machine>.<tailnet>.ts.net'
+    return [
+      'PUBLIC UI: this monitor is meant to be reachable from the INTERNET through Tailscale Funnel. Anyone with the',
+      'access token can log in and see, answer, chat and offboard. Rotate the token file or run "logout-all" to end sessions.',
+      `Funnel: run "${publicUiFunnelCommand(port)}" and open https://${dns}/login`,
+    ]
+  }
+  if (remote.config.bindMode === 'loopback') {
+    const dns = remote.config.dnsName ?? '<machine>.ts.net'
+    return [
+      `Remote mode behind tailscale serve: run "tailscale serve --bg http://127.0.0.1:${port}" and open https://${dns}/login`,
+      `If port 443 is already used there: "tailscale serve --bg --https=8443 http://127.0.0.1:${port}" and open https://${dns}:8443/login`,
+    ]
+  }
+  return [`Remote mode: open http://${remote.config.dnsName ?? remote.config.bindAddress}:${port}/login on your phone`]
+}
 
 /** Accept any Host: only for a monitor started by cloud mode inside a cloud session. */
 export function acceptsAnyHost(opts: Pick<TeamCliOptions, 'cloud' | 'remote' | 'ingest'>, env: NodeJS.ProcessEnv): boolean {
@@ -40,6 +76,8 @@ export interface TeamSetup {
   listenHost: string
   /** Token file path when the token was created in this run, else null. */
   tokenFile: string | null
+  /** `--public-ui` is on (remote mode behind Funnel). */
+  publicUi: boolean
   createHandler: (fallback: (req: http.IncomingMessage, res: http.ServerResponse) => void) => http.RequestListener
   dispose: () => void
 }
@@ -50,6 +88,8 @@ export interface SetupDeps {
   log?: (msg: string) => void
   warn?: (msg: string) => void
   watcherTiming?: { debounceMs?: number; pollMs?: number }
+  /** Server-side log of the request handler (login lines, error details); default console.error. */
+  handlerLog?: (msg: string) => void
 }
 
 /** Throws RemoteConfigError / TokenError with a user-facing message when remote mode cannot start safely. */
@@ -60,6 +100,8 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
   if (opts.cloud && (opts.remote || opts.ingest)) {
     throw new CloudModeError('--cloud (cloud mode in a container) cannot be combined with --remote or --ingest.')
   }
+  checkPublicUi(opts)
+  const publicUi = opts.publicUi === true
   const home = teamHome(env)
   ensureHome(home)
   const anyHost = acceptsAnyHost(opts, env)
@@ -108,6 +150,7 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
     team.onDispose(() => service.dispose())
     ingest = service
   }
+  if (publicUi) log('Public UI on (--public-ui): login, UI and API are meant to be reachable from the internet through Tailscale Funnel.')
 
   return {
     team,
@@ -115,7 +158,8 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
     ingest,
     listenHost,
     tokenFile,
-    createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest, anyHost }),
+    publicUi,
+    createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest, anyHost, publicUi, ...(deps.handlerLog ? { log: deps.handlerLog } : {}) }),
     dispose: () => team.dispose(),
   }
 }

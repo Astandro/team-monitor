@@ -14,7 +14,7 @@ export function parseArgs(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (parseTeamArg(arg, argv[i + 1], team)) {
-      if (arg !== '--remote' && arg !== '--ingest') i++
+      if (arg !== '--remote' && arg !== '--ingest' && arg !== '--public-ui') i++
     } else if ((arg === '--port' || arg === '-p') && argv[i + 1]) {
       const n = parseInt(argv[i + 1], 10)
       if (!isNaN(n) && n > 0 && n < 65536) port = n
@@ -43,8 +43,11 @@ Team monitor:
   --host-allow <name>  With --remote: extra accepted Host name (repeatable)
   --tailscale-bin <p>  Path to the tailscale CLI
   --ingest             Hub intake for cloud sessions on /api/ingest (token in ~/.team-monitor/ingest-token)
+  --public-ui          With --remote --bind loopback: the whole UI behind Tailscale Funnel (public internet,
+                       token login; anyone with the token can steer the team)
   wait-answer ...      Wait for a decision answer or a chat message (see docs/coordinator.md)
   ask ...              Add an open decision D<n> to state.json, optionally --wait for it
+  logout-all           End every login session (running or stopped monitor; devices must log in again)
 
 Cloud sessions (see docs/cloud.md):
   cloud start [--project <path>] [--port <n>]  Start the monitor (and forwarder to TEAM_MONITOR_HUB_URL) detached
@@ -52,8 +55,8 @@ Cloud sessions (see docs/cloud.md):
 
 Setup (see docs/setup.md):
   project add <path> [--name <n>] | project remove <id> | project list
-  service install [--port <n>] [--remote --bind loopback] [--host-allow <name>] [--ingest] | service status|restart|uninstall
-  doctor [--ingest]    Check build, service, projects, tailscale serve/funnel, tokens, hooks (exit 0 = all good)
+  service install [--port <n>] [--remote --bind loopback [--public-ui]] [--host-allow <name>] [--ingest] | service status|restart|uninstall
+  doctor [--ingest] [--public-ui]  Check build, service, projects, tailscale serve/funnel, tokens, hooks (exit 0 = all good)
 `)
       process.exit(0)
     }
@@ -66,6 +69,7 @@ Setup (see docs/setup.md):
 export function parseTeamArg(arg: string, next: string | undefined, team: TeamCliOptions): boolean {
   if (arg === '--remote') { team.remote = true; return true }
   if (arg === '--ingest') { team.ingest = true; return true }
+  if (arg === '--public-ui') { team.publicUi = true; return true }
   if (next === undefined) return false
   if (arg === '--project') { team.projects.push(next); return true }
   if (arg === '--bind') { team.bind = next; return true }

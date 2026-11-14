@@ -18,7 +18,8 @@ import { APP_DEFAULT_PORT } from '../args'
 import { ensureHome, expandHome, teamHome } from './config'
 import { loadConfig, storedProjects } from './projects'
 import {
-  defaultTailscaleBin, getTailscaleDNSName, getTailscaleIPv4, isTailnetIPv4, makeTailscaleRunner, TailscaleRunner,
+  defaultTailscaleBin, getTailscaleDNSName, getTailscaleIPv4, isTailnetIPv4, makeTailscaleRunner, PUBLIC_UI_NEEDS,
+  publicUiFunnelCommand, TailscaleRunner,
 } from './remote'
 
 export const DEFAULT_LABEL = 'com.astandro.team-monitor'
@@ -55,6 +56,8 @@ export interface ServiceSpec {
   tailscaleBin?: string
   /** Hub intake for cloud sources (`--ingest`). */
   ingest?: boolean
+  /** Public UI through Funnel (`--public-ui`; only with remote, bind loopback). */
+  publicUi?: boolean
   workingDirectory: string
   /** HOME and TEAM_MONITOR_HOME written into the service environment. */
   home: string
@@ -68,6 +71,7 @@ export function programArguments(s: ServiceSpec): string[] {
   for (const h of s.hostAllow) args.push('--host-allow', h)
   if (s.tailscaleBin) args.push('--tailscale-bin', s.tailscaleBin)
   if (s.ingest) args.push('--ingest')
+  if (s.publicUi) args.push('--public-ui')
   return args
 }
 
@@ -190,6 +194,8 @@ export interface ServiceRecord {
   tailscaleBin?: string
   /** Installed with `--ingest` (hub intake); doctor then checks the ingest token and the Funnel mapping. */
   ingest?: boolean
+  /** Installed with `--public-ui`; doctor then expects one Funnel mapping of the whole app. */
+  publicUi?: boolean
   appJs: string
   node: string
   logFile: string
@@ -381,6 +387,7 @@ export interface InstallOptions {
   workspace?: string
   logFile?: string
   ingest?: boolean
+  publicUi?: boolean
 }
 
 /** First registered project that exists, else the team home. Hooks forward events only for sessions under it. */
@@ -418,6 +425,7 @@ export function buildSpec(opts: InstallOptions, deps: ServiceDeps = {}): { spec:
   const label = opts.label ?? (platform === 'darwin' ? DEFAULT_LABEL : DEFAULT_LINUX_UNIT)
   if (!LABEL_RE.test(label)) throw new ServiceError(`--label "${label}" may only hold letters, digits, ".", "_" and "-".`)
   if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535) throw new ServiceError('--port must be 1-65535.')
+  if (opts.publicUi && (!opts.remote || opts.bind !== 'loopback')) throw new ServiceError(PUBLIC_UI_NEEDS.replace('; not started.', '.'))
 
   const appJs = path.resolve(deps.appJs ?? process.argv[1] ?? '')
   if (!/\.js$/.test(appJs) || !fs.existsSync(appJs)) {
@@ -456,6 +464,7 @@ export function buildSpec(opts: InstallOptions, deps: ServiceDeps = {}): { spec:
     hostAllow,
     tailscaleBin: opts.tailscaleBin ? path.resolve(expandHome(opts.tailscaleBin)) : undefined,
     ...(opts.ingest ? { ingest: true } : {}),
+    ...(opts.publicUi ? { publicUi: true } : {}),
     workingDirectory: opts.workspace ? path.resolve(expandHome(opts.workspace)) : defaultWorkspace(ctx.teamHome),
     home: ctx.homedir,
     teamHome: ctx.teamHome,
@@ -502,7 +511,7 @@ export async function installService(opts: InstallOptions, deps: ServiceDeps = {
 
   const record: ServiceRecord = {
     platform: spec.platform, label: spec.label, file, port: spec.port, remote: spec.remote, bind: spec.bind,
-    listenHost, hostAllow: spec.hostAllow, tailscaleBin: spec.tailscaleBin, ...(spec.ingest ? { ingest: true } : {}), appJs: spec.appJs, node: spec.node, logFile: spec.logFile,
+    listenHost, hostAllow: spec.hostAllow, tailscaleBin: spec.tailscaleBin, ...(spec.ingest ? { ingest: true } : {}), ...(spec.publicUi ? { publicUi: true } : {}), appJs: spec.appJs, node: spec.node, logFile: spec.logFile,
     installedAt: new Date().toISOString(),
   }
   writeFileAtomic(serviceRecordFile(ctx.teamHome), JSON.stringify(record, null, 2) + '\n', 0o600)
@@ -603,6 +612,7 @@ export async function uninstallService(deps: ServiceDeps = {}, labelOverride?: s
 const USAGE = `Usage:
   team-monitor service install [--port ${APP_DEFAULT_PORT}] [--remote --bind loopback|tailscale] [--host-allow <name>]...
                                [--tailscale-bin <path>] [--label <label>] [--workspace <path>] [--log <file>] [--ingest]
+                               [--public-ui (with --remote --bind loopback)]
   team-monitor service status
   team-monitor service restart
   team-monitor service uninstall [--label <label>]`
@@ -614,6 +624,7 @@ export function parseInstallArgs(argv: string[]): InstallOptions | string {
     const v = argv[i + 1]
     if (a === '--remote') { o.remote = true; continue }
     if (a === '--ingest') { o.ingest = true; continue }
+    if (a === '--public-ui') { o.publicUi = true; continue }
     if (v === undefined) return `${a} needs a value`
     if (a === '--port') {
       const n = Number(v)
@@ -640,7 +651,8 @@ export async function runServiceCli(argv: string[], deps: ServiceDeps = {}): Pro
       if (typeof opts === 'string') { ctx.err(`${opts}\n${USAGE}`); return 2 }
       const rec = await installService(opts, deps)
       ctx.out(`Installed ${rec.label}: ${rec.file}`)
-      ctx.out(`Runs: ${rec.node} ${rec.appJs} (port ${rec.port}${rec.remote ? `, remote, bind ${rec.bind}` : ''}${rec.hostAllow.length ? `, host-allow ${rec.hostAllow.join(' ')}` : ''}${rec.ingest ? ', ingest' : ''})`)
+      ctx.out(`Runs: ${rec.node} ${rec.appJs} (port ${rec.port}${rec.remote ? `, remote, bind ${rec.bind}` : ''}${rec.hostAllow.length ? `, host-allow ${rec.hostAllow.join(' ')}` : ''}${rec.ingest ? ', ingest' : ''}${rec.publicUi ? ', PUBLIC UI through Funnel' : ''})`)
+      if (rec.publicUi) ctx.out(`Public UI: run "${publicUiFunnelCommand(rec.port, 443, rec.tailscaleBin || 'tailscale')}" once, then check with: team-monitor doctor`)
       ctx.out('Projects come from config.json (team-monitor project add <path>).')
       if (rec.platform === 'linux') {
         ctx.out('Hint: to start it at boot without a login, run once: loginctl enable-linger "$USER"')

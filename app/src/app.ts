@@ -19,6 +19,7 @@ import { runProjectCli } from './team/projects'
 import { restartIfInstalled, runServiceCli } from './team/service'
 import { runDoctorCli } from './team/doctor'
 import { runCloudCli } from './team/cloud'
+import { runLogoutAllCli } from './team/logout-all'
 
 const subcommands: Record<string, (argv: string[]) => Promise<number>> = {
   'cloud': (argv) => runCloudCli(argv),
@@ -27,6 +28,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<number>> = {
   'project': (argv) => runProjectCli(argv, { restartService: () => restartIfInstalled() }),
   'service': (argv) => runServiceCli(argv),
   'doctor': (argv) => runDoctorCli(argv),
+  'logout-all': (argv) => runLogoutAllCli(argv),
 }
 const sub = subcommands[process.argv[2]]
 

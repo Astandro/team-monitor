@@ -101,6 +101,7 @@ export class SessionStore {
 
   create(): string {
     const id = crypto.randomBytes(32).toString('base64url')
+    this.sync()
     this.prune()
     while (this.sessions.size >= MAX_SESSIONS) {
       const oldest = [...this.sessions.entries()].sort((a, b) => a[1] - b[1])[0]
@@ -116,13 +117,53 @@ export class SessionStore {
   }
 
   isValidKey(key: string): boolean {
+    this.sync()
     const exp = this.sessions.get(key)
     return exp !== undefined && exp > this.now()
   }
 
   destroy(id: string | undefined): void {
     if (!id) return
+    this.sync()
     if (this.sessions.delete(sessionKey(id))) this.save()
+  }
+
+  /**
+   * Pick up a change of sessions.json made by another process (`logout-all`), without a restart: when the file is
+   * not the one this store last read or wrote (inode, size, mtime), its sessions replace the ones in memory. A file
+   * that is gone, unreadable or bound to another token ends every session (fail closed).
+   */
+  private sync(): void {
+    if (!this.file) return
+    const sig = this.signature()
+    if (sig === this.seen) return
+    this.seen = sig
+    let parsed: { token?: unknown; sessions?: unknown } | null = null
+    if (sig !== null) {
+      try { parsed = JSON.parse(fs.readFileSync(this.file, 'utf-8')) } catch { parsed = null }
+    }
+    this.sessions.clear()
+    if (parsed && parsed.token === this.fingerprint && parsed.sessions && typeof parsed.sessions === 'object') {
+      for (const [k, v] of Object.entries(parsed.sessions as Record<string, unknown>)) {
+        if (/^[0-9a-f]{64}$/.test(k) && typeof v === 'number') this.sessions.set(k, v)
+      }
+      this.prune()
+    } else if (sig !== null) {
+      this.save() // rewrite it bound to our token, empty
+    }
+  }
+
+  /** The file as last read or written by this store (null: none). */
+  private seen: string | null = null
+
+  private signature(): string | null {
+    if (!this.file) return null
+    try {
+      const st = fs.statSync(this.file)
+      return `${st.ino}:${st.size}:${st.mtimeMs}`
+    } catch {
+      return null
+    }
   }
 
   private prune(): void {
@@ -133,6 +174,7 @@ export class SessionStore {
   private load(): void {
     if (!this.file) return
     let parsed: { token?: unknown; sessions?: unknown }
+    this.seen = this.signature()
     try {
       parsed = JSON.parse(fs.readFileSync(this.file, 'utf-8'))
     } catch {
@@ -157,10 +199,40 @@ export class SessionStore {
       const body = { token: this.fingerprint, sessions: Object.fromEntries(this.sessions) }
       fs.writeFileSync(tmp, JSON.stringify(body), { mode: 0o600, flag: 'wx' })
       fs.renameSync(tmp, this.file)
+      this.seen = this.signature()
     } catch {
       try { fs.unlinkSync(tmp) } catch { /* ignore */ }
     }
   }
+}
+
+/**
+ * `logout-all`: end every stored login session. Rewrites sessions.json with no sessions, keeping its token binding,
+ * so a stopped monitor starts with none and a running one drops them at its next session check (SessionStore.sync).
+ * Returns how many were stored (null when there was no sessions file).
+ */
+export function logoutAll(home: string): number | null {
+  const file = path.join(home, 'sessions.json')
+  let text: string
+  try {
+    text = fs.readFileSync(file, 'utf-8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw e
+  }
+  let parsed: { token?: unknown; sessions?: unknown } | null = null
+  try { parsed = JSON.parse(text) } catch { parsed = null }
+  const stored = parsed && parsed.sessions && typeof parsed.sessions === 'object' ? Object.keys(parsed.sessions).length : 0
+  const body = { token: typeof parsed?.token === 'string' ? parsed.token : null, sessions: {} }
+  const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(body), { mode: 0o600, flag: 'wx' })
+    fs.renameSync(tmp, file)
+  } catch (e) {
+    try { fs.unlinkSync(tmp) } catch { /* ignore */ }
+    throw e
+  }
+  return stored
 }
 
 /**
@@ -185,6 +257,11 @@ export class LoginLimiter {
     if (list.length < this.perClient) return 0
     const until = list[list.length - this.perClient] + this.windowMs
     return until > t ? Math.ceil((until - t) / 1000) : 0
+  }
+
+  /** Failed tries left for `client` before it is limited (for the login log). */
+  triesLeft(client: string): number {
+    return Math.max(0, this.perClient - this.trim(this.failures.get(client) ?? [], this.now()).length)
   }
 
   fail(client: string): void {

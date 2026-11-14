@@ -4,7 +4,9 @@
  * on /events and the static UI).
  */
 import type * as http from 'http'
+import * as net from 'net'
 import { isLoopbackHost } from '../../../extension/src/request-guard'
+import { LogLimiter } from '../../../scripts/log-limit'
 import { AnswerError, parseAnswerBody, writeAnswer } from './answers'
 import { ChatError, MAX_MESSAGE_BODY_BYTES, MessageLimiter, parseMessageBody, writeInboxMessage } from './chat'
 import {
@@ -171,6 +173,10 @@ export interface HandlerOptions {
   /** Cloud mode in a container (team/index.ts `acceptsAnyHost`): any Host for GET/HEAD; state-changing requests
    *  still need a loopback Host. Never set with `remote`. */
   anyHost?: boolean
+  /** `--public-ui` (with remote, bind loopback, behind Funnel): the login limiter keys on publicClientKey and every
+   *  login (failed, refused by the limiter, successful) is logged through a LogLimiter with that key. Routes and
+   *  checks are those of remote mode. */
+  publicUi?: boolean
 }
 
 /** What the request handler needs from the hub intake (implemented by IngestService in ingest.ts). `route` is one of
@@ -382,6 +388,9 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
   const { team, remote, fallback } = opts
   const log = opts.log ?? console.error
   const streams = new SessionStreams()
+  const login: LoginPolicy = opts.publicUi && remote
+    ? { key: publicClientKey, log: new LogLimiter(log) }
+    : { key: clientKey, log: null }
   if (remote) {
     const sweep = setInterval(() => streams.sweep((k) => remote.sessions.isValidKey(k)), opts.sessionSweepMs ?? 60_000)
     sweep.unref?.()
@@ -429,7 +438,7 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
     }
 
     if (remote) {
-      if (pathname === '/login') return void handleLogin(req, res, remote)
+      if (pathname === '/login') return void handleLogin(req, res, remote, login)
       if (pathname === '/logout') return void handleLogout(req, res, remote, streams)
       if (!isLocalRequest(req)) {
         const sid = sessionId(req)
@@ -697,11 +706,74 @@ export function clientKey(req: http.IncomingMessage): string {
   return addr
 }
 
+/** The 8 16-bit groups of an IPv6 address (with `::` and a trailing dotted IPv4 expanded), or null. */
+function ipv6Groups(ip: string): number[] | null {
+  if (net.isIP(ip) !== 6) return null
+  let s = ip.toLowerCase()
+  const v4 = /^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(s)
+  if (v4) {
+    const o = v4[2].split('.').map(Number)
+    s = `${v4[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`
+  }
+  const [head, tail] = s.includes('::') ? s.split('::') : [s, null]
+  const h = head ? head.split(':') : []
+  const t = tail ? tail.split(':') : []
+  const groups = tail === null ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
+  return groups.length === 8 ? groups.map((g) => parseInt(g, 16)) : null
+}
+
+/**
+ * One client address as the login limiter counts it: an IPv4 address as is (also when sent IPv4-mapped), an IPv6
+ * address by its /64 prefix (one subscriber usually holds a whole /64, so rotating addresses inside it gains
+ * nothing). A port or brackets around it are removed. Anything that is not an IP address: null.
+ */
+export function limiterAddress(value: string): string | null {
+  let v = value.trim()
+  const bracket = /^\[([^\]]+)\](?::\d+)?$/.exec(v)
+  if (bracket) v = bracket[1]
+  else if (/^[\d.]+:\d+$/.test(v)) v = v.slice(0, v.lastIndexOf(':'))
+  v = v.replace(/%.*$/, '') // zone id
+  if (net.isIP(v) === 4) return v
+  const g = ipv6Groups(v)
+  if (!g) return null
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return `${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`
+  return `${g.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`
+}
+
+/**
+ * Key for the login limiter with `--public-ui` (behind Tailscale Funnel; Addendum G).
+ *
+ * Trusted: ONLY the last entry of `X-Forwarded-For`, and only on a loopback socket. Funnel's proxy (tailscaled, on
+ * this machine) connects over loopback and sets X-Forwarded-For to the address of the client it accepted; a header
+ * of that name sent by the client is dropped or comes before it (if a proxy appends instead), so the last entry is
+ * always the one this machine's proxy wrote. `Forwarded`, `X-Real-IP`, `Tailscale-*` and every earlier
+ * X-Forwarded-For entry are client data and never read here. The address is normalised by limiterAddress (IPv6 by
+ * /64). A last entry that is not an IP address (only possible from a process on this machine) counts under one
+ * shared `fwd:invalid` key, never under an address. A loopback socket without the header is a local request: the
+ * socket address. A non-loopback socket (not possible with --bind loopback): the socket address, normalised.
+ */
+export function publicClientKey(req: http.IncomingMessage): string {
+  const addr = req.socket.remoteAddress ?? 'unknown'
+  if (!isLoopbackAddress(addr)) return `ip:${limiterAddress(addr) ?? addr}`
+  const fwd = req.headers['x-forwarded-for']
+  if (fwd === undefined) return addr
+  const last = String(fwd).split(',').map((s) => s.trim()).filter(Boolean).pop()
+  const a = last ? limiterAddress(last) : null
+  return a ? `fwd:${a}` : 'fwd:invalid'
+}
+
+/** How logins are counted and logged: remote mode as before, or `--public-ui`. */
+interface LoginPolicy {
+  key: (req: http.IncomingMessage) => string
+  /** Login log (only with --public-ui): one line per login and client per minute, never the token. */
+  log: LogLimiter | null
+}
+
 function cookie(value: string, maxAgeS: number, secure: boolean): string {
   return `${SESSION_COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAgeS}${secure ? '; Secure' : ''}`
 }
 
-async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, remote: RemoteAccess): Promise<void> {
+async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, remote: RemoteAccess, policy: LoginPolicy): Promise<void> {
   if (req.method === 'GET' || req.method === 'HEAD') {
     res.writeHead(200, PAGE_HEADERS)
     res.end(req.method === 'HEAD' ? undefined : loginPage(null))
@@ -711,9 +783,10 @@ async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, 
 
   if (!isSameOriginRequest(req)) { closeAfter(res); return sendError(res, 403, 'cross-origin request refused') }
 
-  const client = clientKey(req)
+  const client = policy.key(req)
   const wait = remote.limiter.retryAfter(client)
   if (wait > 0) {
+    policy.log?.line('login-limited', client, `[login] refused for ${client}: too many failed logins, retry in ${wait} s`)
     closeAfter(res)
     res.writeHead(429, { ...PAGE_HEADERS, 'Retry-After': String(wait) })
     res.end(loginPage('Terlalu banyak percobaan gagal. Coba lagi nanti.'))
@@ -739,12 +812,16 @@ async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, 
 
   if (!token || !tokenMatches(token.trim(), remote.token)) {
     remote.limiter.fail(client)
+    // Never the token or any part of it: only the counted client and what is left before the limit.
+    const left = remote.limiter.triesLeft(client)
+    policy.log?.line('login-failed', client, `[login] failed login from ${client} (wrong or missing token; ${left} tr${left === 1 ? 'y' : 'ies'} left before the limit)`)
     res.writeHead(401, PAGE_HEADERS)
     res.end(loginPage('Token salah.'))
     return
   }
 
   remote.limiter.succeed(client)
+  policy.log?.line('login-ok', client, `[login] successful login from ${client}`)
   const id = remote.sessions.create()
   res.writeHead(303, {
     Location: '/',

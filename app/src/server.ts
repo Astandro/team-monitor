@@ -10,7 +10,7 @@ import { exec, execFile } from 'child_process'
 import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
 import { serveStatic } from './static'
-import { listenErrorMessage, TeamSetup } from './team'
+import { listenErrorMessage, remoteBannerLines, TeamSetup } from './team'
 import { AutoOffboarder } from './team/auto-offboard'
 
 interface ServerOptions {
@@ -81,13 +81,7 @@ export async function startServer(options: ServerOptions) {
   server.listen(port, teamSetup.listenHost, () => {
     const url = `http://${teamSetup.listenHost}:${port}`
     console.log(`Server running at ${url}`)
-    if (teamSetup.remote?.config.bindMode === 'loopback') {
-      const dns = teamSetup.remote.config.dnsName ?? '<machine>.ts.net'
-      console.log(`Remote mode behind tailscale serve: run "tailscale serve --bg http://127.0.0.1:${port}" and open https://${dns}/login`)
-      console.log(`If port 443 is already used there: "tailscale serve --bg --https=8443 http://127.0.0.1:${port}" and open https://${dns}:8443/login`)
-    } else if (teamSetup.remote) {
-      console.log(`Remote mode: open http://${teamSetup.remote.config.dnsName ?? teamSetup.listenHost}:${port}/login on your phone`)
-    }
+    for (const line of remoteBannerLines(teamSetup.remote, port, teamSetup.publicUi)) console.log(line)
     console.log('Waiting for agent events...\n')
 
     if (openBrowser) {
