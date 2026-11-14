@@ -11,6 +11,14 @@ export const MAC_TAILSCALE_BIN = '/Applications/Tailscale.app/Contents/MacOS/Tai
 
 export type BindMode = 'tailscale' | 'loopback'
 
+/** The one line printed when `--public-ui` comes without `--remote --bind loopback` (Addendum G, G2). */
+export const PUBLIC_UI_NEEDS = '--public-ui needs --remote --bind loopback (the monitor behind Tailscale Funnel on 127.0.0.1); not started.'
+
+/** The Funnel command for the public UI (`--public-ui`): the whole app on one Funnel port. */
+export function publicUiFunnelCommand(port: number, httpsPort = 443, bin = 'tailscale'): string {
+  return `${bin.includes(' ') ? `"${bin}"` : bin} funnel --bg --https=${httpsPort} http://127.0.0.1:${port}`
+}
+
 export class RemoteConfigError extends Error {}
 
 /** Runs the tailscale CLI with the given args and returns stdout. Injected in tests. */
