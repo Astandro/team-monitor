@@ -46,6 +46,7 @@ fs.writeFileSync(TAILSCALE, [
   'case "$1" in',
   '  ip) echo 100.64.0.10 ;;',
   `  status) echo '{"Self":{"DNSName":"${DNS}."}}' ;;`,
+  '  serve) if [ -n "$FAKE_SERVE_STATUS" ]; then cat "$FAKE_SERVE_STATUS"; else exit 1; fi ;;',
   '  *) exit 1 ;;',
   'esac',
   '',
@@ -183,8 +184,11 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
     assert.match(out, /PUBLIC UI: this monitor is meant to be reachable from the INTERNET/)
     assert.ok(out.includes(`tailscale funnel --bg --https=443 http://127.0.0.1:${port}`), out)
 
-    // The session is on the graph stream before the audit (asked locally: loopback, no forwarded headers).
-    const local = { Host: `127.0.0.1:${port}` }
+    // The session is on the graph stream before the audit. With --public-ui there is no local exception (P-01): a
+    // request from this machine needs a session too, so this one logs in first (another address than the audit's).
+    const pre = String((await login(port, token, '192.0.2.9')).headers['set-cookie']).split(';')[0]
+    assert.equal((await stream(port, '/events', { Host: `127.0.0.1:${port}` }, 300)).status, 401, 'no login-free local request')
+    const local = { Host: `127.0.0.1:${port}`, Cookie: pre }
     let seen = ''
     for (let i = 0; i < 20 && !seen.includes(SESSION); i++) seen = (await stream(port, '/events', local, 1000)).text
     assert.ok(seen.includes(MARKER), 'the relay picked up the session')
@@ -315,7 +319,25 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
 
     // ── G6: logout-all from another process, no restart ──
     const second = String((await login(port, token, '192.0.2.11')).headers['set-cookie']).split(';')[0]
+    // P-05: an open team stream of that session, timed from the moment logout-all returns.
+    let streamClosedAt = 0
+    const open = http.request({ host: '127.0.0.1', port, path: `/api/team/events?project=${PID}`, headers: { ...fwdHeaders, Cookie: second } }, (res) => {
+      res.resume()
+      res.on('close', () => { streamClosedAt = Date.now() })
+    })
+    open.on('error', () => { /* closed by the server */ })
+    open.end()
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(streamClosedAt, 0, 'the stream is open')
     const lo = await run(['logout-all'], e)
+    const loDone = Date.now()
+    await waitFor(() => streamClosedAt > 0, 3000, 20)
+    assert.ok(streamClosedAt - loDone < 1500, `stream closed ${streamClosedAt - loDone} ms after logout-all`)
+    // P-01: the health route answers without a session (fixed body), also through Funnel.
+    for (const h of [{ Host: `127.0.0.1:${port}` }, { Host: DNS, 'X-Forwarded-For': '203.0.113.1' }]) {
+      const hr = await request(port, { path: '/healthz', headers: h })
+      assert.deepEqual([hr.status, hr.body], [200, '{"ok":true}'])
+    }
     assert.equal(lo.code, 0, lo.err)
     assert.match(lo.out, /Ended \d+ login session\(s\)/)
     for (const c of [cookie, second]) {
@@ -338,6 +360,41 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
   } finally {
     hub.kill('SIGTERM')
     await new Promise((r) => { if (hub.exitCode !== null || hub.signalCode !== null) r(null); else hub.once('exit', r) })
+  }
+  await waitFor(() => pidsWith(['--port', String(port)]).length === 0, 8000)
+})
+
+test('P-02/P-03: a default-mode monitor on a Funnel mapping warns at start and refuses forwarded requests', { skip: !linux && 'needs Linux /proc' }, async () => {
+  const port = await freePort()
+  const e = env('default')
+  const statusFile = path.join(root, 'default', 'serve-status.json')
+  fs.writeFileSync(statusFile, JSON.stringify({
+    Web: { [`${DNS}:443`]: { Handlers: { '/': { Proxy: `http://127.0.0.1:${port}` } } } },
+    AllowFunnel: { [`${DNS}:443`]: true },
+  }))
+  let out = ''
+  let err = ''
+  const mon = spawn(process.execPath, [APP, '--no-open', '--port', String(port), '--tailscale-bin', TAILSCALE], {
+    env: { ...e, FAKE_SERVE_STATUS: statusFile }, cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  started.push(mon)
+  mon.stdout!.on('data', (d: Buffer) => { out += d })
+  mon.stderr!.on('data', (d: Buffer) => { err += d })
+  try {
+    await waitFor(() => out.includes('Turn it off:'), 20_000, 50)
+    assert.match(out, /WARNING: this monitor is REACHABLE FROM THE INTERNET through Tailscale Funnel/)
+    assert.ok(out.includes(`Funnel maps / on ${DNS}:443 to 127.0.0.1:${port}, but the monitor was not started with --public-ui.`), out)
+    assert.ok(out.includes(`Turn it off: ${TAILSCALE} funnel --https=443 off`), out)
+    assert.match(err, /\[funnel\] WARNING/)
+    // A request as Funnel delivers it (even with a loopback Host): 403, fixed text. A plain local request: as before.
+    const fwd = await funnel(port, { path: '/api/team/projects', headers: { Host: 'localhost' } })
+    assert.equal(fwd.status, 403)
+    assert.match(fwd.body, /^Forbidden: this monitor runs without --remote/)
+    assert.equal((await request(port, { path: '/api/team/projects' })).status, 200)
+    assert.deepEqual([(await request(port, { path: '/healthz' })).body], ['{"ok":true}'])
+  } finally {
+    mon.kill('SIGTERM')
+    await new Promise((r) => { if (mon.exitCode !== null || mon.signalCode !== null) r(null); else mon.once('exit', r) })
   }
   await waitFor(() => pidsWith(['--port', String(port)]).length === 0, 8000)
 })

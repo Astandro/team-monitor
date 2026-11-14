@@ -7,6 +7,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { teamHome } from './config'
+import { HEALTH_PATH } from './http'
 import { loadConfig, ProjectError, storedProjects } from './projects'
 import { defaultTailscaleBin, makeTailscaleRunner, publicUiFunnelCommand, TailscaleRunner } from './remote'
 import { readServiceRecord, ServiceDeps, serviceStatus } from './service'
@@ -30,16 +31,25 @@ export interface DoctorDeps extends ServiceDeps {
 
 const DEFAULT_HTTPS_PORT = 8443
 
-/** The https ports `tailscale serve` maps to 127.0.0.1:<port> / localhost:<port>, from `serve status --json`. */
+/**
+ * The https ports `tailscale serve` maps to 127.0.0.1:<port> / localhost:<port> on the TAILNET only, from
+ * `serve status --json`. A host:port with Funnel on (`AllowFunnel`) is public and never counted here (P-02): it is
+ * reported by the Funnel checks instead.
+ */
 export function serveMappings(statusJson: string, port: number): string[] {
   let data: unknown
   try { data = JSON.parse(statusJson) } catch { return [] }
+  const allowFunnel = data && typeof data === 'object' ? (data as { AllowFunnel?: unknown }).AllowFunnel : undefined
+  const isFunnel = (hostPort: string | null) =>
+    hostPort !== null && !!allowFunnel && typeof allowFunnel === 'object' && (allowFunnel as Record<string, unknown>)[hostPort] === true
   const found = new Set<string>()
   const targetRe = new RegExp(`^(?:https?://)?(?:127\\.0\\.0\\.1|localhost)?:?${port}/?$`)
   const walk = (node: unknown, webKey: string | null) => {
     if (!node || typeof node !== 'object') return
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === 'AllowFunnel') continue
       if (k === 'Proxy' && typeof v === 'string' && targetRe.test(v.trim())) {
+        if (isFunnel(webKey)) continue
         const m = webKey ? /:(\d+)$/.exec(webKey) : null
         found.add(m ? m[1] : webKey ?? '?')
       } else {
@@ -65,6 +75,8 @@ export interface FunnelEntry {
   root: boolean
   /** Its other mount paths (anything else on a Funnel port is public too). */
   others: string[]
+  /** Every mount path whose handler proxies to this monitor's port (any target path), the ingest mount included. */
+  mine: string[]
 }
 
 /** Per https host:port of `tailscale serve status --json`: Funnel on or off, the ingest mount, other mounts. */
@@ -74,21 +86,59 @@ export function funnelEntries(statusJson: string, port: number): FunnelEntry[] {
   if (!data || typeof data !== 'object') return []
   const targetRe = new RegExp(`^(?:https?://)?(?:127\\.0\\.0\\.1|localhost):${port}(?:/api/ingest)?/?$`)
   const rootRe = new RegExp(`^(?:https?://)?(?:127\\.0\\.0\\.1|localhost):${port}/?$`)
+  const anyPathRe = new RegExp(`^(?:https?://)?(?:127\\.0\\.0\\.1|localhost|\\[::1\\])?:?${port}(?:[/?#].*)?$`, 'i')
   const out: FunnelEntry[] = []
   for (const [hostPort, web] of Object.entries(data.Web ?? {})) {
     const handlers = web && typeof web === 'object' && web.Handlers && typeof web.Handlers === 'object' ? web.Handlers : {}
     let ingest = false
     let root = false
     const others: string[] = []
+    const mine: string[] = []
     for (const [mount, h] of Object.entries(handlers)) {
       const proxy = h && typeof h.Proxy === 'string' ? h.Proxy.trim() : ''
       if (mount.replace(/\/$/, '') === INGEST_MOUNT && targetRe.test(proxy)) ingest = true
       else others.push(mount)
       if (mount === '/' && rootRe.test(proxy)) root = true
+      if (proxy && anyPathRe.test(proxy)) mine.push(mount)
     }
-    out.push({ hostPort, funnel: data.AllowFunnel?.[hostPort] === true, ingest, root, others })
+    out.push({ hostPort, funnel: data.AllowFunnel?.[hostPort] === true, ingest, root, others, mine })
   }
   return out
+}
+
+/** One Funnel host:port that reaches this monitor on paths its flags do not allow. */
+export interface FunnelExposure { hostPort: string; paths: string[] }
+
+/**
+ * The mounts of this monitor (port `port`) on Funnel-enabled host:ports that are NOT expected for the given flags
+ * (P-02/P-03): with `publicUi` nothing is unexpected (the whole app is meant to be public); with `ingest` only, every
+ * mount except exactly `/api/ingest`; otherwise every mount. Used by doctor and by the start-up warning.
+ */
+export function unexpectedFunnelExposure(entries: FunnelEntry[], flags: { publicUi?: boolean; ingest?: boolean }): FunnelExposure[] {
+  if (flags.publicUi) return []
+  const out: FunnelExposure[] = []
+  for (const e of entries) {
+    if (!e.funnel) continue
+    const paths = e.mine.filter((m) => !(flags.ingest && m.replace(/\/$/, '') === INGEST_MOUNT && e.ingest))
+    if (paths.length) out.push({ hostPort: e.hostPort, paths })
+  }
+  return out
+}
+
+/** The command that turns one Funnel mount off: `tailscale funnel --https=<port> [--set-path <path>] off`. */
+export function funnelOffCommand(hostPort: string, mount: string, bin = 'tailscale'): string {
+  const quoted = bin.includes(' ') ? `"${bin}"` : bin
+  const p = /:(\d+)$/.exec(hostPort)?.[1] ?? '443'
+  return mount === '/' ? `${quoted} funnel --https=${p} off` : `${quoted} funnel --https=${p} --set-path ${mount} off`
+}
+
+/** One doctor FAIL per exposed host:port: reachable from the internet, where, and the exact command(s) to stop it. */
+export function exposureChecks(exposed: FunnelExposure[], port: number, bin: string): Check[] {
+  return exposed.map((x) => ({
+    level: 'fail' as const,
+    what: `the monitor is reachable from the internet: tailscale funnel makes ${x.paths.join(', ')} on ${x.hostPort} public (to 127.0.0.1:${port}) without --public-ui`,
+    fix: `turn that Funnel mapping off: ${x.paths.map((m) => funnelOffCommand(x.hostPort, m, bin)).join(' ; ')}`,
+  }))
 }
 
 /** The Funnel port doctor suggests: the first one Funnel allows that the tailnet UI (`--https-port`) does not use. */
@@ -149,14 +199,52 @@ export function ingestChecks(home: string, port: number, uiHttpsPort: number, bi
   } else {
     checks.push({ level: 'ok', what: `tailscale funnel exposes ${INGEST_MOUNT} on ${exposed.map((e) => e.hostPort).join(', ')}` })
   }
-  for (const e of entries.filter((x) => x.funnel && x.others.length)) {
+  // Any other path of this monitor on a Funnel port: the monitor is reachable from the internet (P-02).
+  checks.push(...exposureChecks(unexpectedFunnelExposure(entries, { ingest: true }), port, bin))
+  // Other services' paths on the same Funnel port (as before).
+  for (const e of entries.filter((x) => x.funnel)) {
+    const foreign = e.others.filter((m) => !e.mine.includes(m))
+    if (!foreign.length) continue
     checks.push({
       level: 'fail',
-      what: `tailscale funnel makes ${e.others.join(', ')} on ${e.hostPort} public (the UI and login must stay tailnet-only)`,
+      what: `tailscale funnel makes ${foreign.join(', ')} on ${e.hostPort} public (the UI and login must stay tailnet-only)`,
       fix: `serve the UI on a port without Funnel (e.g. "${quoted} serve --bg --https=${uiHttpsPort} http://127.0.0.1:${port}") and keep only ${INGEST_MOUNT} on the Funnel port`,
     })
   }
   return checks
+}
+
+/** A runner that runs each distinct command once (doctor reads `serve status` in more than one step). */
+function memoRunner(run: TailscaleRunner): TailscaleRunner {
+  const seen = new Map<string, { out?: string; err?: unknown }>()
+  return (args) => {
+    const k = args.join('\0')
+    let r = seen.get(k)
+    if (!r) {
+      try { r = { out: run(args) } } catch (e) { r = { err: e } }
+      seen.set(k, r)
+    }
+    if ('err' in r) throw r.err
+    return r.out as string
+  }
+}
+
+/**
+ * Funnel check without --public-ui and without --ingest (P-02/P-03): no path of this monitor may be on a
+ * Funnel-enabled host:port. No `tailscale` binary: nothing to check (no line). Status unreadable: a warning (unless
+ * `reportUnreadable` is false because another step already failed on it).
+ */
+export function funnelChecks(port: number, bin: string, run: TailscaleRunner, reportUnreadable = true): Check[] {
+  let json: string
+  try {
+    json = run(['serve', 'status', '--json'])
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT' || !reportUnreadable) return []
+    return [{ level: 'warn', what: `cannot read tailscale serve status (${(e as Error).message.split('\n')[0]}): not checked whether Funnel exposes the monitor` }]
+  }
+  const exposed = unexpectedFunnelExposure(funnelEntries(json, port), {})
+  if (exposed.length) return exposureChecks(exposed, port, bin)
+  return [{ level: 'ok', what: `no tailscale funnel mapping reaches 127.0.0.1:${port} (not public)` }]
 }
 
 /** The `ask-hook.js` path inside a hook command (quoted or not), or null. */
@@ -235,7 +323,7 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<Check[]> {
       checks.push({ level: 'ok', what: `service ${r.label} running, pid ${st.manager.pid}` })
     }
     checks.push(st.health.ok
-      ? { level: 'ok', what: `healthy: GET http://${r.listenHost}:${r.port}/api/team/projects 200, ${st.health.projects} project(s)` }
+      ? { level: 'ok', what: `healthy: GET http://${r.listenHost}:${r.port}${HEALTH_PATH} 200` }
       : { level: 'fail', what: `not healthy on ${r.listenHost}:${r.port} (${st.listening ? `HTTP ${st.health.status}` : 'port not listening'})`, fix: `see the log: ${r.logFile}` })
   }
 
@@ -263,17 +351,23 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<Check[]> {
     checks.push({ level: 'fail', what: `config invalid: ${e.message}` })
   }
 
-  // 6. Tailscale serve mapping (remote mode behind serve only).
+  // Flags, port and the tailscale CLI for steps 6 and 8. `serve status` is read once per run.
+  const ingestOn = !!(record?.ingest || deps.ingest)
+  const publicUiOn = !!(record?.publicUi || deps.publicUi)
+  const monitorPort = record?.port ?? deps.port ?? 3002
+  const bin = record?.tailscaleBin || defaultTailscaleBin(env)
+  const run = memoRunner(deps.runTailscale ?? makeTailscaleRunner(bin))
+
+  // 6. Tailscale serve mapping on the tailnet (remote mode behind serve only). A Funnel host:port is never counted
+  //    here (it is public: step 8). With --public-ui the Funnel root mapping serves the tailnet too, so a missing
+  //    tailnet-only mapping is not a failure there.
   if (record?.remote && record.bind === 'loopback') {
     const httpsPort = deps.httpsPort ?? DEFAULT_HTTPS_PORT
-    const bin = record.tailscaleBin || defaultTailscaleBin(env)
-    const run = deps.runTailscale ?? makeTailscaleRunner(bin)
     const cmd = `${bin.includes(' ') ? `"${bin}"` : bin} serve --bg --https=${httpsPort} http://127.0.0.1:${record.port}`
     try {
       const ports = serveMappings(run(['serve', 'status', '--json']), record.port)
-      checks.push(ports.length
-        ? { level: 'ok', what: `tailscale serve maps https port ${ports.join(', ')} to 127.0.0.1:${record.port}` }
-        : { level: 'fail', what: `tailscale serve has no mapping to 127.0.0.1:${record.port}`, fix: cmd })
+      if (ports.length) checks.push({ level: 'ok', what: `tailscale serve maps https port ${ports.join(', ')} to 127.0.0.1:${record.port} (tailnet only)` })
+      else if (!publicUiOn) checks.push({ level: 'fail', what: `tailscale serve has no tailnet-only mapping to 127.0.0.1:${record.port}`, fix: cmd })
     } catch (e) {
       checks.push({ level: 'fail', what: `cannot read tailscale serve status (${(e as Error).message.split('\n')[0]})`, fix: `is Tailscale up? then: ${cmd}` })
     }
@@ -292,22 +386,20 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<Check[]> {
     else checks.push({ level: 'ok', what: 'token file is 600' })
   }
 
-  // 8. Hub intake (--ingest on the service, or doctor --ingest): token file and the Funnel mapping.
-  //    With --public-ui (on the service, or doctor --public-ui) the Funnel check is the one for the whole app instead
-  //    (it also serves /api/ingest); the ingest token file is still checked when ingest is on.
-  const ingestOn = !!(record?.ingest || deps.ingest)
-  const publicUiOn = !!(record?.publicUi || deps.publicUi)
-  if (ingestOn || publicUiOn) {
-    const port = record?.port ?? deps.port ?? 3002
-    const bin = record?.tailscaleBin || defaultTailscaleBin(env)
-    const run = deps.runTailscale ?? makeTailscaleRunner(bin)
-    const uiHttpsPort = deps.httpsPort ?? DEFAULT_HTTPS_PORT
-    if (publicUiOn) {
-      if (ingestOn) checks.push(ingestTokenCheck(home))
-      checks.push(...publicUiChecks(port, uiHttpsPort, bin, run, ingestOn))
-    } else {
-      checks.push(...ingestChecks(home, port, uiHttpsPort, bin, run))
-    }
+  // 8. Funnel, in every mode (P-02/P-03).
+  //    --public-ui (on the service, or doctor --public-ui): the whole-app mapping is expected (it also serves
+  //    /api/ingest); the ingest token file is still checked when ingest is on.
+  //    --ingest only: token file and exactly the /api/ingest mount on Funnel.
+  //    Neither: any path of this monitor on a Funnel host:port fails, with the command that turns it off.
+  const uiHttpsPort = deps.httpsPort ?? DEFAULT_HTTPS_PORT
+  if (publicUiOn) {
+    if (ingestOn) checks.push(ingestTokenCheck(home))
+    checks.push(...publicUiChecks(monitorPort, uiHttpsPort, bin, run, ingestOn))
+  } else if (ingestOn) {
+    checks.push(...ingestChecks(home, monitorPort, uiHttpsPort, bin, run))
+  } else {
+    // A failure to read the status was already reported by step 6 in remote mode behind serve.
+    checks.push(...funnelChecks(monitorPort, bin, run, !(record?.remote && record.bind === 'loopback')))
   }
 
   // 9. Claude Code hooks (read only).

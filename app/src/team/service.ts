@@ -16,6 +16,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { APP_DEFAULT_PORT } from '../args'
 import { ensureHome, expandHome, teamHome } from './config'
+import { HEALTH_PATH } from './http'
 import { loadConfig, storedProjects } from './projects'
 import {
   defaultTailscaleBin, getTailscaleDNSName, getTailscaleIPv4, isTailnetIPv4, makeTailscaleRunner, PUBLIC_UI_NEEDS,
@@ -256,7 +257,9 @@ export interface ServiceDeps {
   err?: (msg: string) => void
 }
 
-export interface HealthResult { ok: boolean; status: number; projects: number | null; error?: string }
+/** Result of GET HEALTH_PATH. `projects` is no longer reported (the health route carries no project information);
+ *  the field stays optional so older callers and fakes still fit. */
+export interface HealthResult { ok: boolean; status: number; projects?: number | null; error?: string }
 export interface Probe {
   portOpen: (host: string, port: number) => Promise<boolean>
   health: (host: string, port: number) => Promise<HealthResult>
@@ -272,23 +275,23 @@ export const realProbe: Probe = {
   }),
   health: (host, port) => new Promise((resolve) => {
     const req = http.request({
-      host, port, path: '/api/team/projects', method: 'GET', timeout: 3000,
+      // The unauthenticated health route (every mode, also --public-ui): it needs no login and no local exception.
+      host, port, path: HEALTH_PATH, method: 'GET', timeout: 3000,
       headers: { Host: `${host}:${port}`, Accept: 'application/json' },
     }, (res) => {
       const chunks: Buffer[] = []
-      res.on('data', (c: Buffer) => { if (chunks.length < 256) chunks.push(c) })
+      res.on('data', (c: Buffer) => { if (chunks.length < 16) chunks.push(c) })
       res.on('end', () => {
         const status = res.statusCode ?? 0
-        let projects: number | null = null
+        let ok = false
         try {
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { projects?: unknown }
-          if (Array.isArray(body.projects)) projects = body.projects.length
+          ok = status === 200 && (JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { ok?: unknown }).ok === true
         } catch { /* not JSON */ }
-        resolve({ ok: status === 200 && projects !== null, status, projects })
+        resolve({ ok, status })
       })
     })
     req.on('timeout', () => req.destroy(new Error('timed out')))
-    req.on('error', (e) => resolve({ ok: false, status: 0, projects: null, error: e.message }))
+    req.on('error', (e) => resolve({ ok: false, status: 0, error: e.message }))
     req.end()
   }),
 }
@@ -531,7 +534,7 @@ export interface ServiceStatus {
 export async function serviceStatus(deps: ServiceDeps = {}): Promise<ServiceStatus> {
   const ctx = ctxOf(deps)
   const record = readServiceRecord(ctx.teamHome)
-  const noHealth: HealthResult = { ok: false, status: 0, projects: null }
+  const noHealth: HealthResult = { ok: false, status: 0 }
   if (!record) {
     return { record, installed: false, manager: { loaded: false, running: false, pid: null, detail: 'not installed' }, listening: false, health: noHealth }
   }
@@ -549,7 +552,7 @@ export function statusLines(s: ServiceStatus): { lines: string[]; ok: boolean } 
     `Service: ${r.label} (${r.platform === 'darwin' ? 'launchd' : 'systemd --user'}), file ${r.file}${s.installed ? '' : ' (MISSING)'}`,
     `Loaded: ${s.manager.loaded ? 'yes' : 'no'} (${s.manager.detail})${s.manager.pid ? `, pid ${s.manager.pid}` : ''}`,
     `Port ${r.port} on ${r.listenHost}: ${s.listening ? 'listening' : 'not listening'}`,
-    `Health GET /api/team/projects: ${s.health.ok ? `200, ${s.health.projects} project(s)` : s.health.status ? `HTTP ${s.health.status}` : 'no answer'}`,
+    `Health GET ${HEALTH_PATH}: ${s.health.ok ? '200 ok' : s.health.status ? `HTTP ${s.health.status}` : 'no answer'}`,
     `Log: ${r.logFile}`,
   ]
   return { lines, ok: s.installed && s.manager.loaded && s.manager.running && s.listening && s.health.ok }

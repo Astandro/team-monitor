@@ -131,12 +131,13 @@ export class SessionStore {
   /**
    * Pick up a change of sessions.json made by another process (`logout-all`), without a restart: when the file is
    * not the one this store last read or wrote (inode, size, mtime), its sessions replace the ones in memory. A file
-   * that is gone, unreadable or bound to another token ends every session (fail closed).
+   * that is gone, unreadable or bound to another token ends every session (fail closed). True when the file had
+   * changed (the sessions in memory were replaced).
    */
-  private sync(): void {
-    if (!this.file) return
+  private sync(): boolean {
+    if (!this.file) return false
     const sig = this.signature()
-    if (sig === this.seen) return
+    if (sig === this.seen) return false
     this.seen = sig
     let parsed: { token?: unknown; sessions?: unknown } | null = null
     if (sig !== null) {
@@ -151,6 +152,13 @@ export class SessionStore {
     } else if (sig !== null) {
       this.save() // rewrite it bound to our token, empty
     }
+    return true
+  }
+
+  /** Check sessions.json for a change by another process now (the request handler polls this to close the streams
+   *  of dropped sessions at once). True when it changed. */
+  refresh(): boolean {
+    return this.sync()
   }
 
   /** The file as last read or written by this store (null: none). */

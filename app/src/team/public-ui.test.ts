@@ -186,12 +186,20 @@ describe('doctor with --public-ui and --ingest (four combinations)', () => {
     assert.equal(funnelEntries(status({ 'h:443': { Handlers: { '/': { Proxy: `http://127.0.0.1:${PORT}/x` } } } }, ['h:443']), PORT)[0].root, false)
   })
 
-  test('neither flag: no Funnel checks at all (unchanged)', async () => {
+  test('neither flag: Funnel is checked too (P-02); any path of the monitor on Funnel fails with the off command', async () => {
     await install({})
-    for (const json of [TAILNET_ONLY, ROOT_FUNNEL, INGEST_FUNNEL]) {
-      serve.json = json
-      assert.deepEqual(await funnelChecks(), [], json)
-    }
+    serve.json = TAILNET_ONLY
+    assert.deepEqual((await funnelChecks()).map((c) => [c.level, c.what]), [['ok', `no tailscale funnel mapping reaches 127.0.0.1:${PORT} (not public)`]])
+    serve.json = ROOT_FUNNEL
+    let f = await funnelChecks()
+    assert.deepEqual(f.map((c) => c.level), ['fail'])
+    assert.match(f[0].what, /reachable from the internet: tailscale funnel makes \/ on machine\.tailnet\.ts\.net:443 public/)
+    assert.equal(f[0].fix, 'turn that Funnel mapping off: tailscale funnel --https=443 off')
+    serve.json = INGEST_FUNNEL
+    f = await funnelChecks()
+    assert.deepEqual(f.map((c) => c.level), ['fail'])
+    assert.match(f[0].what, /makes \/api\/ingest on machine\.tailnet\.ts\.net:443 public/)
+    assert.equal(f[0].fix, 'turn that Funnel mapping off: tailscale funnel --https=443 --set-path /api/ingest off')
     assert.equal(readServiceRecord(home)?.publicUi, undefined)
   })
 
@@ -291,11 +299,12 @@ describe('G5: login limiter key behind Funnel', () => {
       forwarded: 'for=198.51.100.1', 'x-real-ip': '198.51.100.1', 'tailscale-user-login': 'x', 'tailscale-client-ip': '198.51.100.1',
       'true-client-ip': '198.51.100.1', 'cf-connecting-ip': '198.51.100.1',
     }), 'fwd:203.0.113.7')
-    assert.equal(k({ forwarded: 'for=198.51.100.1', 'x-real-ip': '198.51.100.1' }), '127.0.0.1', 'no X-Forwarded-For: a local request, socket address')
+    // P-04: no usable client address is null (refused, counted under no key), never a shared key.
+    assert.equal(k({ forwarded: 'for=198.51.100.1', 'x-real-ip': '198.51.100.1' }), null, 'no X-Forwarded-For: no client address')
     assert.equal(k({ 'x-forwarded-for': '2001:db8:5:6::1' }), 'fwd:2001:db8:5:6::/64')
     assert.equal(k({ 'x-forwarded-for': '2001:db8:5:6:ffff::9' }), 'fwd:2001:db8:5:6::/64', 'same /64, same key')
-    assert.equal(k({ 'x-forwarded-for': '198.51.100.1, not-an-ip' }), 'fwd:invalid', 'junk last entry never falls back to an earlier one')
-    assert.equal(k({ 'x-forwarded-for': ' , ' }), 'fwd:invalid')
+    assert.equal(k({ 'x-forwarded-for': '198.51.100.1, not-an-ip' }), null, 'junk last entry never falls back to an earlier one')
+    assert.equal(k({ 'x-forwarded-for': ' , ' }), null)
     assert.equal(k({ 'x-forwarded-for': '203.0.113.7' }, '100.64.0.20'), 'ip:100.64.0.20', 'not behind a loopback proxy: the socket')
     // Remote mode without --public-ui keeps the old key.
     assert.equal(clientKey(fakeReq('127.0.0.1', { 'x-forwarded-for': '198.51.100.1, 203.0.113.7' })), 'fwd:203.0.113.7')
