@@ -15,8 +15,9 @@
  *   changes nothing. So holding the shared token is not enough to read or write another source.
  * - Every authenticated response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). An events post that
  *   names an older epoch in the same header is refused with 409: the forwarder then resends its sessions and history.
- * - Limits: JSON nesting 32 levels, one event 64 KB, buffered events 4 MB per cloud session and 16 MB per source
- *   (scripts/relay.ts), 200 cloud sessions and 100 sources (ended / stale ones evicted, 503 when all are live).
+ * - Limits: JSON nesting 32 levels, one event 64 KB, buffered events 4 MB per cloud session, 16 MB per source and
+ *   128 MB for all cloud sessions (scripts/relay.ts), 200 cloud sessions and 100 sources (ended / stale ones evicted,
+ *   503 when not enough can be).
  * - Events go into the relay as cloud sessions (scripts/relay.ts): same buffer, replay, offboarding and auto
  *   offboarding as local sessions; session list entries and lifecycle messages carry origin/sourceId/stale.
  * - State is mirrored to `<team home>/remote/<sourceId>/.agent-team/` (atomic writes) and that folder is registered

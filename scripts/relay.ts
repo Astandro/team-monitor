@@ -151,7 +151,7 @@ function broadcastEvent(event: AgentEvent) {
 
 /**
  * Buffer one event for the replay. Every buffer keeps at most MAX_EVENT_BUFFER events; a cloud session's buffer is
- * also capped in bytes, per session and per source (oldest events dropped first).
+ * also capped in bytes, per session, per source and across all cloud sessions (trimCloudBuffers, trimCloudTotal).
  */
 function bufferEvent(sessionId: string, event: AgentEvent, bytes: number) {
   let buf = eventBuffer.get(sessionId) || []
@@ -161,14 +161,18 @@ function bufferEvent(sessionId: string, event: AgentEvent, bytes: number) {
   if (sized) {
     sized.sizes.push({ bytes, n: ++cloudBufferSeq })
     sized.total += bytes
+    cloudTotalBytes += bytes
   }
   if (buf.length > MAX_EVENT_BUFFER) {
     const cut = buf.length - MAX_EVENT_BUFFER
     buf = buf.slice(cut)
-    if (sized) for (const s of sized.sizes.splice(0, cut)) sized.total -= s.bytes
+    if (sized) for (const s of sized.sizes.splice(0, cut)) { sized.total -= s.bytes; cloudTotalBytes -= s.bytes }
   }
   eventBuffer.set(sessionId, buf)
-  if (cloud) trimCloudBuffers(cloud)
+  if (cloud) {
+    trimCloudBuffers(cloud)
+    trimCloudTotal(cloud.id)
+  }
 }
 
 /** Auto offboarding (spec ui-cleanup item 6): the interval, and who hears about sub-agent spawns and completions. */
@@ -496,6 +500,8 @@ export const MAX_CLOUD_SESSIONS = 200
 /** Bytes of buffered events (as sent on /events) kept per cloud session and per source; oldest dropped first. */
 export const MAX_CLOUD_SESSION_BUFFER_BYTES = 4 * 1024 * 1024
 export const MAX_CLOUD_SOURCE_BUFFER_BYTES = 16 * 1024 * 1024
+/** Bytes of buffered events of all cloud sessions together (hub-wide); see trimCloudTotal for what goes first. */
+export const MAX_CLOUD_TOTAL_BUFFER_BYTES = 128 * 1024 * 1024
 /** Bytes of cloud events one new /events client gets in its replay (the newest first, per session). */
 export const MAX_CLOUD_REPLAY_BYTES = 32 * 1024 * 1024
 
@@ -503,6 +509,7 @@ export interface CloudLimits {
   maxSessions: number
   sessionBufferBytes: number
   sourceBufferBytes: number
+  totalBufferBytes: number
   replayBytes: number
 }
 
@@ -510,6 +517,7 @@ const DEFAULT_CLOUD_LIMITS: CloudLimits = {
   maxSessions: MAX_CLOUD_SESSIONS,
   sessionBufferBytes: MAX_CLOUD_SESSION_BUFFER_BYTES,
   sourceBufferBytes: MAX_CLOUD_SOURCE_BUFFER_BYTES,
+  totalBufferBytes: MAX_CLOUD_TOTAL_BUFFER_BYTES,
   replayBytes: MAX_CLOUD_REPLAY_BYTES,
 }
 let cloudLimits: CloudLimits = { ...DEFAULT_CLOUD_LIMITS }
@@ -523,6 +531,8 @@ const staleSince = new Map<string, number>()
 interface CloudBuffer { sizes: Array<{ bytes: number; n: number }>; total: number }
 const cloudBuffers = new Map<string, CloudBuffer>()
 let cloudBufferSeq = 0
+/** Sum of `total` over every entry of cloudBuffers (kept exact by every add, drop and eviction). */
+let cloudTotalBytes = 0
 
 function cloudBufferOf(sessionId: string): CloudBuffer {
   let b = cloudBuffers.get(sessionId)
@@ -536,7 +546,63 @@ function dropOldestCloudEvent(sessionId: string): void {
   const sized = cloudBuffers.get(sessionId)
   if (!buf || !sized || !sized.sizes.length) return
   buf.shift()
-  sized.total -= sized.sizes.shift()!.bytes
+  const bytes = sized.sizes.shift()!.bytes
+  sized.total -= bytes
+  cloudTotalBytes -= bytes
+}
+
+/**
+ * Keep the buffers of all cloud sessions together under the hub-wide cap (totalBufferBytes). Oldest events go first
+ * from sessions of stale sources, then from ended sessions, then from the largest live session buffers. The event
+ * just buffered for `keep` is never dropped, so a live source's new event is never refused because of other data.
+ */
+function trimCloudTotal(keep: string): void {
+  const over = () => cloudTotalBytes > cloudLimits.totalBufferBytes
+  if (!over()) return
+  const head = (id: string) => {
+    const b = cloudBuffers.get(id)
+    return b && b.sizes.length > (id === keep ? 1 : 0) ? b : null
+  }
+  const all = [...cloudSessions.values()]
+  const groups = [
+    all.filter((s) => staleSources.has(s.sourceId)),
+    all.filter((s) => !staleSources.has(s.sourceId) && s.status === 'completed'),
+  ]
+  for (const group of groups) {
+    while (over()) {
+      let oldest: string | null = null
+      let oldestN = Infinity
+      for (const s of group) {
+        const b = head(s.id)
+        if (b && b.sizes[0].n < oldestN) { oldestN = b.sizes[0].n; oldest = s.id }
+      }
+      if (oldest === null) break
+      dropOldestCloudEvent(oldest)
+    }
+  }
+  while (over()) {
+    let largest: string | null = null
+    let largestBytes = -1
+    for (const s of all) {
+      const b = head(s.id)
+      if (b && b.total > largestBytes) { largestBytes = b.total; largest = s.id }
+    }
+    if (largest === null) break
+    dropOldestCloudEvent(largest)
+  }
+}
+
+/** Buffered bytes of cloud sessions: the running total, the same recounted from every event, and per session (for
+ *  tests and diagnostics). */
+export function cloudBufferStats(): { total: number; recounted: number; sessions: Record<string, { bytes: number; events: number }> } {
+  const sessionsOut: Record<string, { bytes: number; events: number }> = {}
+  let recounted = 0
+  for (const [id, b] of cloudBuffers) {
+    const bytes = b.sizes.reduce((s, e) => s + e.bytes, 0)
+    recounted += bytes
+    sessionsOut[id] = { bytes, events: eventBuffer.get(id)?.length ?? 0 }
+  }
+  return { total: cloudTotalBytes, recounted, sessions: sessionsOut }
 }
 
 /** Keep a cloud session's buffer, and its source's buffers together, under their byte caps (oldest first). */
@@ -564,6 +630,7 @@ function trimCloudBuffers(s: CloudSession): void {
 function evictCloudSession(s: CloudSession): void {
   cloudSessions.delete(s.id)
   eventBuffer.delete(s.id)
+  cloudTotalBytes -= cloudBuffers.get(s.id)?.total ?? 0
   cloudBuffers.delete(s.id)
   graphAgents.forget(s.id)
   if (s.status === 'active') broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
@@ -622,6 +689,8 @@ function claimCloudSession(sessionId: string, sourceId: string, projectId: strin
   const existing = cloudSessions.get(sessionId)
   if (existing) return existing.sourceId === sourceId ? existing : null
   if (cloudSessions.size >= cloudLimits.maxSessions) return null
+  // A leftover buffer under this id (not a cloud one, so not counted in bytes) would no longer match its sizes.
+  if (!cloudBuffers.has(sessionId)) eventBuffer.delete(sessionId)
   const s: CloudSession = {
     id: sessionId, sourceId, projectId, label: `Session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`,
     status: 'active', startTime: now, lastActivityTime: now,

@@ -61,9 +61,11 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
   applied. When the forwarder sees a new epoch (on any reply) it resends `session-started` for its sessions and
   their buffered history, so running and idle sessions come back with label, prompt and history.
 - Limits: JSON nested deeper than 32 levels: 400. One event larger than 64 KB as JSON: 400 for the batch (the
-  forwarder drops such an event on its own first, with a log line). Buffered events per cloud session 4 MB and per
-  source 16 MB (oldest dropped, like the 5,000-event cap); a new viewer's replay carries at most 32 MB of cloud
-  events (newest sessions and events first). Real events are a few hundred bytes.
+  forwarder drops such an event on its own first, with a log line). Buffered events per cloud session 4 MB, per
+  source 16 MB and for all cloud sessions together 128 MB (oldest dropped, like the 5,000-event cap; over the
+  128 MB first from sessions of stale sources, then from ended sessions, then from the largest live buffers, and a
+  new event is never refused for it); a new viewer's replay carries at most 32 MB of cloud events (newest sessions
+  and events first). Real events are a few hundred bytes.
 - Capacity: 200 cloud sessions and 100 sources. At the cap, ended sessions and sessions of stale sources are
   evicted (stale longest first), and the longest-stale source is removed with its mirror. A live source or an
   active session of a live source is never evicted: if everything is live the hub answers 503 with `Retry-After`

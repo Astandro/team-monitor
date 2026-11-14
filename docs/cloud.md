@@ -143,8 +143,10 @@ loopback Host. Answer and chat in the hub.
   first.
 - **Size limits.** Events post: 512 KB, 500 messages. State: 1 MB. One event: 64 KB. JSON nesting: 32 levels.
   Over a limit: 413 (size) or 400 (shape, nesting, one big event). Answer files 16 KB, chat files 32 KB.
-- **Buffers.** The hub keeps at most 5,000 events per cloud session, 4 MB per session and 16 MB per source (oldest
-  dropped); a new viewer's replay carries at most 32 MB of cloud events. At most 200 cloud sessions and 100
+- **Buffers.** The hub keeps at most 5,000 events per cloud session, 4 MB per session, 16 MB per source and 128 MB
+  for all cloud sessions together (bytes of events as JSON). Over the 128 MB the oldest events go first from
+  sessions of stale sources, then from ended sessions, then from the largest live session buffers; a new event is
+  never refused for it. A new viewer's replay carries at most 32 MB of cloud events. At most 200 cloud sessions and 100
   sources. At the cap the hub evicts ended sessions and sessions of stale sources (stale longest first) and then
   the longest-stale source with its mirror; a live source or an active session of a live source is never evicted.
   If everything is live, the post gets 503 with `Retry-After: 30` and the forwarder retries. At most 64 outbox long
@@ -173,7 +175,8 @@ loopback Host. Answer and chat in the hub.
   sessions and their history again; while the container is down or the hub is unreachable they stay lost.
 - One container serves one project; a project added while the container's monitor already runs is picked up at the
   monitor's next start.
-- No global cap on cloud buffers: the worst case is 200 sessions of 4 MB each.
+- With the 128 MB hub-wide cap a busy source can push older history of other sessions out of the hub's memory
+  (the containers keep their own copy; a hub restart brings it back).
 - Over a proxy, the TLS name check of a hub given by IP address is wrong; use a host name (Funnel gives one).
 - `cloud status` can show a `Last error` of a loop that has already recovered.
 - The hook was tested on Linux only; macOS (bsdtar, `shasum`) is untested. The end-to-end test runs on Linux only.
