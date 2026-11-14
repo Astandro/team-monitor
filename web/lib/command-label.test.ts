@@ -16,8 +16,8 @@ describe('readableCommand: setup is dropped, the action stays (real commands fro
     ['npm test', 'npm test', null],
     ['git status --short', 'git status --short', null],
     // chained &&: everything after the setup is the action
-    ['cd /Users/example-developer-account/projects/my-app-team/team-monitor && cat README.md && cat spec-chat.md && cat spec-offboard-names.md',
-      'cat README.md && cat spec-chat.md && cat spec-offboard-names.md', 'team-monitor'],
+    ['cd /Users/example-developer-account/projects/my-app-team/team-monitor && cat README.md && cat spec-example.md && cat notes-example.md',
+      'cat README.md && cat spec-example.md && cat notes-example.md', 'team-monitor'],
     ['cd /Users/example-developer-account/projects/team-monitor-wt/chat-offboard-ui/web && sed -n 1,209p components/agent-visualizer/top-bar.tsx',
       'sed -n 1,209p components/agent-visualizer/top-bar.tsx', 'web'],
     // pipes stay inside the action
@@ -26,7 +26,7 @@ describe('readableCommand: setup is dropped, the action stays (real commands fro
     ['cd /Users/example-developer-account/projects/my-app-wt/feature-x && npm test 2>&1 | grep -E "^# |^ℹ (tests|pass|fail)|✖" | head -30',
       'npm test 2>&1 | grep -E "^# |^ℹ (tests|pass|fail)|✖" | head -30', 'feature-x'],
     // two cd steps: the last one names the folder
-    ['cd /Users/a/projects && cd team-monitor-wt/haze-commands && git log --oneline -3', 'git log --oneline -3', 'haze-commands'],
+    ['cd /Users/a/projects && cd my-app-wt/feature-y && git log --oneline -3', 'git log --oneline -3', 'feature-y'],
     // variable, cd, inline env: all setup
     [`S=${S}; cd $S/qa && QA_LOG=$S/logs/s1.log node s1-setup.mjs $S/qa/state.json && cat state.json`,
       'node s1-setup.mjs $S/qa/state.json && cat state.json', 'qa'],
@@ -40,7 +40,7 @@ describe('readableCommand: setup is dropped, the action stays (real commands fro
     ['source .venv/bin/activate && pytest -q', 'pytest -q', null],
     ['DEV_LOGIN=1 ADMIN_EMAILS=x@y.com npm start', 'npm start', null],
     ['env CI=1 npm test', 'npm test', null],
-    ['GH_TOKEN=$(gh auth token -u Astandro) git push origin tm/x', 'git push origin tm/x', null],
+    ['GH_TOKEN=$(gh auth token -u dev) git push origin tm/x', 'git push origin tm/x', null],
     // quotes: a && inside quotes is not a separator
     ['cd /a && git commit -m "fix: a && b; c"', 'git commit -m "fix: a && b; c"', 'a'],
     ["cd /a && echo 'x; cd /b && y'", "echo 'x; cd /b && y'", 'a'],
@@ -121,10 +121,11 @@ describe('tool wiring', () => {
     assert.equal(isCommandTool(undefined), false)
   })
   it('the full command (inputData) wins over the summarised args, which the extension cuts at 80 characters', () => {
-    const full = 'cd /Users/example-developer-account/projects/team-monitor-wt/haze-commands && npx -y pnpm@10 test'
+    const full = 'cd /Users/example-developer-account/projects/my-app-wt/feature-x && npx -y pnpm@10 test'
     const args = full.slice(0, 80)
+    assert.notEqual(args, full)
     assert.equal(commandText(args, { command: full }), full)
-    assert.deepEqual(toolArgsDisplay('Bash', args, { command: full }), { action: 'npx -y pnpm@10 test', dir: 'haze-commands' })
+    assert.deepEqual(toolArgsDisplay('Bash', args, { command: full }), { action: 'npx -y pnpm@10 test', dir: 'feature-x' })
     assert.equal(commandText('ls -la', undefined), 'ls -la')
     assert.equal(commandText('ls', { command: '' }), 'ls')
   })

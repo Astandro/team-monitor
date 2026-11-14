@@ -47,7 +47,7 @@ test('tool_call_start puts a readable label, not the raw tool code, in the trans
 
 test('shell command: timeline block and particle show the action, not the cd setup, cut in the middle', () => {
   const state = makeState()
-  const command = 'cd /Users/example-developer-account/projects/team-monitor-wt/haze-commands && npx -y pnpm@10 --dir extension test 2>&1 | tail -5'
+  const command = 'cd /Users/example-developer-account/projects/my-app-wt/feature-x && npx -y pnpm@10 --dir extension test 2>&1 | tail -5'
   handleToolCallStart({ agent: 'main', tool: 'Bash', args: command.slice(0, 80), inputData: { command } }, 1, state, ctx)
   const block = state.timelineEntries.get('main')!.blocks[0]
   assert.ok(block.label.startsWith('Jalanin perintah: npx -y'), block.label)
@@ -64,7 +64,7 @@ test('shell command: timeline block and particle show the action, not the cd set
 
 test('hook event first (args only), transcript copy second (full input): the card keeps the full command', () => {
   const state = makeState()
-  const command = 'cd /Users/example-developer-account/projects/team-monitor-wt/haze-commands && npx -y pnpm@10 run build:webview'
+  const command = 'cd /Users/example-developer-account/projects/my-app-wt/feature-x && npx -y pnpm@10 run build:webview'
   handleToolCallStart({ agent: 'main', tool: 'Bash', args: command.slice(0, 80) }, 1, state, ctx)
   handleToolCallStart({ agent: 'main', tool: 'Bash', args: command.slice(0, 80), inputData: { command } }, 1.2, state, ctx)
   assert.equal(state.toolCalls.size, 1)
