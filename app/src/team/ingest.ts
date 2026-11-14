@@ -36,6 +36,7 @@ import * as path from 'path'
 import type { AgentEvent, CoordinatorInfo } from '../../../extension/src/protocol'
 import type { CloudIntake, CloudMessage } from '../../../scripts/relay'
 import { coordinatorFromState } from '../../../scripts/session-projects'
+import { LogLimiter } from '../../../scripts/log-limit'
 import { LoginLimiter, tokenMatches } from './auth'
 import { INBOX_FILE_RE, MAX_INBOX_FILE_BYTES } from './chat'
 import { HEARTBEAT_FILE, EndReason, HeartbeatRecord, writeHeartbeat } from './heartbeat'
@@ -88,8 +89,16 @@ const CURSOR_RE = /^([0-9a-f]{8})-([0-9]{1,9})$/
 const END_REASONS: ReadonlySet<string> = new Set(['message', 'answer', 'timeout', 'signal', 'error'])
 
 export class IngestError extends Error {
-  /** `message` goes to the client (no paths); `detail` is for the server log only. */
-  constructor(readonly status: 400 | 403 | 404 | 405 | 409 | 413 | 500 | 503, message: string, readonly detail?: string, readonly retryAfterS?: number) {
+  /** The source the request named, when known (the log limit counts per client and source). */
+  source?: string
+  /**
+   * `message` goes to the client (no paths); `detail` is for the server log only, written through the log limit
+   * (one line per `kind` and client/source per minute). `kind` is a fixed name; default `refused-<status>`.
+   */
+  constructor(
+    readonly status: 400 | 403 | 404 | 405 | 409 | 413 | 500 | 503, message: string, readonly detail?: string, readonly retryAfterS?: number,
+    readonly kind?: string,
+  ) {
     super(message)
   }
 }
@@ -308,10 +317,10 @@ export function mirrorPath(remoteDir: string, sourceId: string): string {
 /** Create `dir` (0700) if missing; refuse a symlink or a file in its place. */
 function ensurePlainDir(dir: string): void {
   try { fs.mkdirSync(dir, { mode: 0o700 }) } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw new IngestError(500, 'cannot create the mirror', `cannot create ${dir}: ${(e as Error).message}`)
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw new IngestError(500, 'cannot create the mirror', `cannot create ${dir}: ${(e as Error).message}`, undefined, 'mirror')
   }
   const st = fs.lstatSync(dir)
-  if (!st.isDirectory() || st.isSymbolicLink()) throw new IngestError(500, 'cannot use the mirror', `${dir} is not a plain directory (symlink or file)`)
+  if (!st.isDirectory() || st.isSymbolicLink()) throw new IngestError(500, 'cannot use the mirror', `${dir} is not a plain directory (symlink or file)`, undefined, 'mirror')
 }
 
 function unlinkFile(file: string): void {
@@ -401,6 +410,8 @@ export interface IngestOptions {
   /** Defaults MAX_SOURCES and MAX_OUTBOX_WAITERS; smaller values for tests. */
   maxSources?: number
   maxOutboxWaiters?: number
+  /** Log limit interval (default one minute). */
+  logIntervalMs?: number
 }
 
 export class IngestService implements IngestHandler {
@@ -424,6 +435,8 @@ export class IngestService implements IngestHandler {
   private sweepTimer: NodeJS.Timeout | null = null
   private waiters = new Set<() => void>()
   private disposed = false
+  /** Every log line a request can cause goes through here: one per kind and client/source per minute (NEW-1). */
+  private readonly limitedLog: LogLimiter
 
   constructor(opts: IngestOptions) {
     this.remoteDir = path.join(opts.home, 'remote')
@@ -432,6 +445,7 @@ export class IngestService implements IngestHandler {
     this.limiter = opts.limiter ?? new LoginLimiter()
     this.now = opts.now ?? Date.now
     this.log = opts.log ?? console.warn
+    this.limitedLog = new LogLimiter(this.log, { now: this.now, intervalMs: opts.logIntervalMs })
     this.staleMs = opts.staleMs ?? STALE_AFTER_MS
     this.sweepMs = opts.sweepMs ?? 5000
     this.mirrorMaxIdleMs = opts.mirrorMaxIdleMs ?? MIRROR_MAX_IDLE_MS
@@ -535,6 +549,7 @@ export class IngestService implements IngestHandler {
     if (given === null || !tokenMatches(given, this.token)) {
       closeAfter(res)
       const wait = this.limiter.retryAfter(client)
+      this.limitedLog.line('token', client, `[ingest] refused (${wait > 0 ? 429 : 401}): no or wrong ingest token from ${client}`)
       if (wait > 0) return sendError(res, 429, 'too many failed attempts, try again later', { 'Retry-After': String(wait) })
       this.limiter.fail(client)
       return sendError(res, 401, 'ingest token required', { 'WWW-Authenticate': 'Bearer' })
@@ -560,11 +575,14 @@ export class IngestService implements IngestHandler {
     } catch (e) {
       if (res.headersSent) return
       if (e instanceof IngestError) {
-        if (e.detail) this.log(`[ingest] refused (${e.status}): ${e.detail}`)
+        if (e.detail) {
+          const who = e.source ? `${client} ${e.source}` : client
+          this.limitedLog.line(e.kind ?? `refused-${e.status}`, who, `[ingest] refused (${e.status}): ${e.detail} (client ${client})`)
+        }
         if (e.status === 400 || e.status === 413 || e.status === 403) closeAfter(res)
         return sendError(res, e.status, e.message, e.retryAfterS ? { 'Retry-After': String(e.retryAfterS) } : {})
       }
-      this.log(`[ingest] failed: ${(e as Error)?.stack ?? String(e)}`)
+      this.limitedLog.line('failed', client, `[ingest] failed: ${(e as Error)?.stack ?? String(e)}`)
       sendError(res, 500, 'internal error')
     }
   }
@@ -595,7 +613,9 @@ export class IngestService implements IngestHandler {
     const hash = hashKey(key)
     const bound = this.sources.get(sourceId)?.keyHash
     if (bound && !sameHash(bound, hash)) {
-      throw new IngestError(403, 'this sourceId belongs to another source key', `source key mismatch for ${sourceId}`)
+      const err = new IngestError(403, 'this sourceId belongs to another source key', `source key mismatch for ${sourceId}`, undefined, 'key-mismatch')
+      err.source = sourceId
+      throw err
     }
     return hash
   }
@@ -627,7 +647,7 @@ export class IngestService implements IngestHandler {
     // Room for new sessions (ended or stale ones are evicted); when everything is live, refused before seq moves on,
     // so the forwarder retries the same body later.
     if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages))) {
-      throw new IngestError(503, 'hub at capacity: every cloud session on it is live; retry later', undefined, CAPACITY_RETRY_S)
+      throw new IngestError(503, 'hub at capacity: every cloud session on it is live; retry later', `cloud session cap reached, events of ${src.id} not applied`, CAPACITY_RETRY_S, 'capacity-sessions')
     }
     src.lastSeq = input.seq
     let applied = 0
@@ -670,7 +690,7 @@ export class IngestService implements IngestHandler {
       try {
         writeFileAtomic(stateFile, text + '\n', 0o600)
       } catch (e) {
-        throw new IngestError(500, 'cannot write state', `cannot write ${stateFile}: ${(e as Error).message}`)
+        throw new IngestError(500, 'cannot write state', `cannot write ${stateFile}: ${(e as Error).message}`, undefined, 'state-write')
       }
     }
     this.mirrorWatcher(src, input.watcher)
@@ -718,7 +738,7 @@ export class IngestService implements IngestHandler {
     if (result.files.length === 0 && waitMs > 0 && !this.disposed) {
       // Too many polls held: say so (the forwarder backs off) instead of an empty reply it would repeat at once.
       if (this.waiters.size >= this.maxWaiters) {
-        throw new IngestError(503, 'too many outbox polls open; retry later', undefined, OUTBOX_BUSY_RETRY_S)
+        throw new IngestError(503, 'too many outbox polls open; retry later', `${this.maxWaiters} outbox long polls open (${sourceId})`, OUTBOX_BUSY_RETRY_S, 'outbox-busy')
       }
       result = await this.waitOutbox(res, sourceId, index, waitMs)
       const after = this.sources.get(sourceId)
@@ -839,7 +859,7 @@ export class IngestService implements IngestHandler {
       return true
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return true
-      this.log(`[ingest] cannot remove the mirror ${dir}: ${(e as Error).message}`)
+      this.limitedLog.line('mirror-remove', '', `[ingest] cannot remove the mirror ${dir}: ${(e as Error).message}`)
       return false
     }
   }
@@ -850,7 +870,7 @@ export class IngestService implements IngestHandler {
     this.relay?.forgetSource(src.id)
     this.team.removeCloudProject(src.projectId)
     this.removeMirror(src.root)
-    this.log(`[ingest] removed source ${src.id} (${why === 'idle' ? 'silent for more than 24 hours' : 'longest stale, room for a new source'})`)
+    this.limitedLog.line(`evict-${why}`, '', `[ingest] removed source ${src.id} (${why === 'idle' ? 'silent for more than 24 hours' : 'longest stale, room for a new source'})`)
   }
 
   private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number, keyHash: string | null): Source {
@@ -861,7 +881,7 @@ export class IngestService implements IngestHandler {
     if (this.sources.size >= this.maxSources) {
       // Evict the source that has been stale longest; never a live one.
       const victim = [...this.sources.values()].filter((s) => s.stale).sort((a, b) => a.lastSeen - b.lastSeen)[0]
-      if (!victim) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources, all live; retry later`, undefined, CAPACITY_RETRY_S)
+      if (!victim) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources, all live; retry later`, `source cap reached, ${sourceId} not registered`, CAPACITY_RETRY_S, 'capacity-sources')
       this.evictSource(victim, 'capacity')
     }
     ensurePlainDir(this.remoteDir)
@@ -888,7 +908,7 @@ export class IngestService implements IngestHandler {
       writeFileAtomic(path.join(src.root, SOURCE_FILE), JSON.stringify(rec) + '\n', 0o600)
       src.lastTouch = src.lastSeen
     } catch (e) {
-      this.log(`[ingest] cannot write ${path.join(src.root, SOURCE_FILE)}: ${(e as Error).message}`)
+      this.limitedLog.line('source-file', src.id, `[ingest] cannot write ${path.join(src.root, SOURCE_FILE)}: ${(e as Error).message}`)
     }
   }
 

@@ -780,6 +780,55 @@ describe('capacity', () => {
   })
 })
 
+// ─── Refusal log lines are limited (NEW-1) ──────────────────────────────────
+
+describe('refusal log limit', () => {
+  test('a client repeating any refused request writes at most one line per kind and client/source per minute, with the count on the next', async () => {
+    const ctx = await setup({ maxSources: 1, maxOutboxWaiters: 0 })
+    try {
+      assert.equal((await putState(ctx)).status, 200) // SRC bound to KEY
+      const lines = (re: RegExp) => ctx.logs.filter((l) => re.test(l))
+      const start = ctx.logs.length
+      const fwd = (i: number) => ({ 'X-Forwarded-For': `198.51.100.${i}` })
+
+      // The QA repro: wrong source key in a loop.
+      for (let i = 0; i < 200; i++) {
+        assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      }
+      assert.equal(lines(/source key mismatch/).length, 1)
+      // Wrong token from one client (401, then 429).
+      for (let i = 0; i < 100; i++) await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, { ...fwd(1), ...auth('x') })
+      assert.equal(lines(/ingest token/).length, 1)
+      // Wrong token from many clients: bounded per kind (10 per minute).
+      for (let i = 2; i < 102; i++) await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, { ...fwd(i), ...auth('x') })
+      assert.equal(lines(/ingest token/).length, 10)
+      // Capacity: sources (cap 1), sessions, outbox polls.
+      for (let i = 0; i < 50; i++) assert.equal((await putState(ctx, null, null, 'other-box')).status, 503)
+      assert.equal(lines(/source cap/).length, 1)
+      ctx.relay.room = false
+      for (let i = 0; i < 50; i++) assert.equal((await events(ctx, 5)).status, 503)
+      assert.equal(lines(/cloud session cap/).length, 1)
+      ctx.relay.room = true
+      for (let i = 0; i < 50; i++) assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=5`)).status, 503)
+      assert.equal(lines(/outbox long polls/).length, 1)
+      // Bad paths, bad bodies, other refusals: no line at all.
+      for (let i = 0; i < 50; i++) {
+        await send(ctx, 'GET', '/api/ingest/v1/nope')
+        await send(ctx, 'POST', '/api/ingest/v1/events', '{bad json')
+        await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: '../x', project, state: null, watcher: null })
+      }
+      const written = ctx.logs.length - start
+      assert.ok(written <= 14, `${written} lines for ${200 + 200 + 150 + 150} refused requests`)
+
+      // After the minute: the next line carries the count of what was held back.
+      ctx.clock.t += 60_000
+      assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.match(ctx.logs[ctx.logs.length - 1], /source key mismatch for cloud-box-1 .*\(199 more like it suppressed\)$/)
+      for (const l of ctx.logs) assert.ok(!l.includes(INGEST) && !l.includes(OTHER_KEY) && !l.includes(KEY), 'no secret in the log')
+    } finally { await teardown(ctx) }
+  })
+})
+
 // ─── Limits: JSON depth, event size, outbox polls; hub epoch ────────────────
 
 describe('limits and epoch', () => {

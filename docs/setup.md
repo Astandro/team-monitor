@@ -71,6 +71,9 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
   active session of a live source is never evicted: if everything is live the hub answers 503 with `Retry-After`
   (the forwarder logs it and retries). Messages the hub accepts but ignores are counted in `ignored`; the forwarder
   logs them and `cloud status` shows the count. More than 64 outbox long polls at once: 503 with `Retry-After: 5`.
+- Hub log: refused ingest requests are logged at most once per minute per kind and client or source (the next line
+  says how many were left out), and at most 10 lines per kind per minute in all, so a client in a loop cannot fill
+  `team-monitor.log`.
 - Mirrors: `~/.team-monitor/remote/<sourceId>/.agent-team/`, registered at runtime as project `cloud-<sourceId>`
   (never written to `config.json`). A source silent for 60 s is `stale`; a source silent for 24 hours is removed
   with its mirror (at start and while running).

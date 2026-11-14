@@ -22,6 +22,7 @@ import {
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
+import { LogLimiter } from './log-limit'
 import { mainSpawnPayload, matchProjectDir, projectSessionLabel, sameCoordinator, watchTargets, type WatchedProject } from './session-projects'
 import { GraphAgents, NO_OFFBOARDING, type AutoOffboardGraph, type OffboardLookup } from './graph-agents'
 import type { TelemetryClient } from './telemetry'
@@ -125,7 +126,10 @@ function broadcastEvent(event: AgentEvent) {
     if (typeof m === 'string' && m.length > 0) observedModels.add(m)
   }
   const sid = event.sessionId?.slice(0, SESSION_ID_DISPLAY) || '?'
-  log(`[event] ${event.type} (session ${sid})`)
+  const cloudSource = event.sessionId ? cloudSessions.get(event.sessionId)?.sourceId : undefined
+  // A cloud source decides how many events it sends: its lines are limited (one per source per minute).
+  if (cloudSource === undefined) log(`[event] ${event.type} (session ${sid})`)
+  else if (verbose) cloudLog.line('cloud-event', cloudSource, `[event] ${event.type} (session ${sid}, cloud ${cloudSource})`)
 
   const now = Date.now()
   const finishedAt = event.type === 'agent_complete' ? (subagentFinishedAt(event) ?? now) : undefined
@@ -523,6 +527,8 @@ const DEFAULT_CLOUD_LIMITS: CloudLimits = {
 let cloudLimits: CloudLimits = { ...DEFAULT_CLOUD_LIMITS }
 
 const cloudSessions = new Map<string, CloudSession>()
+/** Verbose lines caused by cloud sources (scripts/log-limit.ts): one per kind and source per minute. */
+const cloudLog = new LogLimiter((line) => log(line))
 const staleSources = new Set<string>()
 /** When each stale source became stale (eviction order: stale longest first). */
 const staleSince = new Map<string, number>()
@@ -634,7 +640,7 @@ function evictCloudSession(s: CloudSession): void {
   cloudBuffers.delete(s.id)
   graphAgents.forget(s.id)
   if (s.status === 'active') broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
-  log(`[cloud] evicted session ${s.id.slice(0, SESSION_ID_DISPLAY)} of ${s.sourceId}`)
+  if (verbose) cloudLog.line('cloud-evict', s.sourceId, `[cloud] evicted session ${s.id.slice(0, SESSION_ID_DISPLAY)} of ${s.sourceId}`)
 }
 
 /**

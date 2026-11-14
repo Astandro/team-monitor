@@ -151,6 +151,9 @@ loopback Host. Answer and chat in the hub.
   the longest-stale source with its mirror; a live source or an active session of a live source is never evicted.
   If everything is live, the post gets 503 with `Retry-After: 30` and the forwarder retries. At most 64 outbox long
   polls at once (503, `Retry-After: 5`).
+- **Hub log.** A refused ingest request (wrong token or source key, capacity, too many polls, a failed write) is
+  logged at most once per minute per kind of refusal and client or source, with the number of lines left out on
+  the next one; at most 10 such lines per kind per minute in all. Bad paths and bad bodies are not logged.
 - **Mirrors.** The hub writes a source's state to `~/.team-monitor/remote/<sourceId>/.agent-team/` and registers
   it at runtime as project `cloud-<sourceId>` (not in `config.json`). A source silent for 60 s is stale; a source
   silent for 24 hours is removed with its mirror, which also frees its source id for a new key.
