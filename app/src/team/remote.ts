@@ -4,7 +4,7 @@
  * Architecture call A3: never 0.0.0.0 or `::`. Either 127.0.0.1 (behind
  * `tailscale serve`) or the machine's Tailscale IPv4 address (100.64.0.0/10).
  */
-import { execFileSync } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import * as fs from 'fs'
 
 export const MAC_TAILSCALE_BIN = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
@@ -32,6 +32,18 @@ export function defaultTailscaleBin(env: NodeJS.ProcessEnv = process.env): strin
 
 export function makeTailscaleRunner(bin: string): TailscaleRunner {
   return (args) => execFileSync(bin, args, { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+/** Async form for best-effort calls that must not block the server (start-up Funnel check). */
+export type AsyncTailscaleRunner = (args: string[]) => Promise<string>
+
+export function makeAsyncTailscaleRunner(bin: string, timeoutMs = 3000): AsyncTailscaleRunner {
+  return (args) => new Promise((resolve, reject) => {
+    execFile(bin, args, { encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+  })
 }
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/

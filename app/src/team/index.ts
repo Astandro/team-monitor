@@ -8,8 +8,10 @@ import { buildRegistry, ensureHome, readAutoOffboardMinutes, readConfigProjects,
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
 import { INGEST_TOKEN_FILE, IngestService } from './ingest'
 import { OffboardStore } from './offboard'
+import { funnelEntries, funnelOffCommand, unexpectedFunnelExposure } from './doctor'
 import {
-  defaultTailscaleBin, makeTailscaleRunner, PUBLIC_UI_NEEDS, publicUiFunnelCommand, resolveRemoteConfig, TailscaleRunner,
+  AsyncTailscaleRunner, defaultTailscaleBin, makeAsyncTailscaleRunner, makeTailscaleRunner, PUBLIC_UI_NEEDS,
+  publicUiFunnelCommand, resolveRemoteConfig, TailscaleRunner,
 } from './remote'
 
 export { PUBLIC_UI_NEEDS, publicUiFunnelCommand }
@@ -50,6 +52,8 @@ export function remoteBannerLines(remote: RemoteAccess | null, port: number, pub
       'PUBLIC UI: this monitor is meant to be reachable from the INTERNET through Tailscale Funnel. Anyone with the',
       'access token can log in and see, answer, chat and offboard. Rotate the token file or run "logout-all" to end sessions.',
       `Funnel: run "${publicUiFunnelCommand(port)}" and open https://${dns}/login`,
+      `On this machine too, log in through https://${dns}/login (Funnel or tailnet URL): http://127.0.0.1:${port} has no`,
+      'client address, so every request there needs a login and its login is refused.',
     ]
   }
   if (remote.config.bindMode === 'loopback') {
@@ -60,6 +64,35 @@ export function remoteBannerLines(remote: RemoteAccess | null, port: number, pub
     ]
   }
   return [`Remote mode: open http://${remote.config.dnsName ?? remote.config.bindAddress}:${port}/login on your phone`]
+}
+
+/**
+ * Start-up Funnel check of a monitor WITHOUT --public-ui (P-02/P-03): best effort (`tailscale serve status --json`,
+ * short timeout); no binary, an error or unreadable output give no lines and never stop the start. When a Funnel
+ * host:port reaches this monitor on paths its flags do not allow (with --ingest: anything but /api/ingest), the
+ * warning lines for the log and banner.
+ */
+export async function funnelStartWarning(
+  port: number,
+  flags: { publicUi?: boolean; ingest?: boolean },
+  run: AsyncTailscaleRunner,
+  bin = 'tailscale',
+): Promise<string[]> {
+  if (flags.publicUi) return []
+  let json: string
+  try { json = await run(['serve', 'status', '--json']) } catch { return [] }
+  const exposed = unexpectedFunnelExposure(funnelEntries(json, port), flags)
+  if (!exposed.length) return []
+  const where = exposed.map((x) => `${x.paths.join(', ')} on ${x.hostPort}`).join('; ')
+  const cmds = exposed.flatMap((x) => x.paths.map((m) => funnelOffCommand(x.hostPort, m, bin)))
+  return [
+    '',
+    '!!! WARNING: this monitor is REACHABLE FROM THE INTERNET through Tailscale Funnel !!!',
+    `!!! Funnel maps ${where} to 127.0.0.1:${port}, but the monitor was not started with --public-ui.`,
+    `!!! Turn it off: ${cmds.join(' ; ')}`,
+    '!!! (or, if a public UI is intended, run with --remote --bind loopback --public-ui). Check with: team-monitor doctor',
+    '',
+  ]
 }
 
 /** Accept any Host: only for a monitor started by cloud mode inside a cloud session. */
@@ -78,6 +111,10 @@ export interface TeamSetup {
   tokenFile: string | null
   /** `--public-ui` is on (remote mode behind Funnel). */
   publicUi: boolean
+  /** Cloud mode in a container (preview pane): the UI may be framed, so the static headers omit the framing ban. */
+  frameable: boolean
+  /** Start-up Funnel check (funnelStartWarning) for this monitor's flags: warning lines, or none. Never throws. */
+  funnelWarning: (port: number) => Promise<string[]>
   createHandler: (fallback: (req: http.IncomingMessage, res: http.ServerResponse) => void) => http.RequestListener
   dispose: () => void
 }
@@ -90,6 +127,8 @@ export interface SetupDeps {
   watcherTiming?: { debounceMs?: number; pollMs?: number }
   /** Server-side log of the request handler (login lines, error details); default console.error. */
   handlerLog?: (msg: string) => void
+  /** Async tailscale CLI for the start-up Funnel check (injected in tests). */
+  runTailscaleAsync?: AsyncTailscaleRunner
 }
 
 /** Throws RemoteConfigError / TokenError with a user-facing message when remote mode cannot start safely. */
@@ -159,6 +198,12 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
     listenHost,
     tokenFile,
     publicUi,
+    frameable: anyHost,
+    funnelWarning: (port) => {
+      const bin = opts.tailscaleBin || defaultTailscaleBin(env)
+      const run = deps.runTailscaleAsync ?? makeAsyncTailscaleRunner(bin)
+      return funnelStartWarning(port, { publicUi, ingest: opts.ingest === true }, run, bin).catch(() => [])
+    },
     createHandler: (fallback) => createRequestHandler({ team, remote, fallback, ingest, anyHost, publicUi, ...(deps.handlerLog ? { log: deps.handlerLog } : {}) }),
     dispose: () => team.dispose(),
   }

@@ -224,7 +224,8 @@ test('status, restart and uninstall on macOS', async () => {
     const { lines, ok } = statusLines(st)
     assert.equal(ok, true)
     assert.ok(lines.some((l) => l.includes('pid 4242')))
-    assert.ok(lines.some((l) => l.includes('200, 1 project(s)')))
+    // The health route carries no project information (P-01): only its status.
+    assert.ok(lines.some((l) => l === 'Health GET /healthz: 200 ok'), lines.join('\n'))
 
     assert.equal(statusLines(await serviceStatus({ ...e.deps, probe: { portOpen: async () => true, health: async () => ({ ok: false, status: 401, projects: null }) } })).ok, false)
 

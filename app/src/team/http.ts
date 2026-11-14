@@ -166,6 +166,9 @@ export interface HandlerOptions {
   fallback: Handler
   /** How often open responses of expired sessions are closed (default 60 s). */
   sessionSweepMs?: number
+  /** How often sessions.json is checked for a change by another process (`logout-all`); when it changed, the
+   *  streams of sessions that are no longer valid close at once (default 500 ms). */
+  sessionCheckMs?: number
   /** Server-side log for error details (default console.error). */
   log?: (msg: string) => void
   /** Hub intake (`--ingest`); null or absent = every /api/ingest/* route answers 404. */
@@ -174,8 +177,10 @@ export interface HandlerOptions {
    *  still need a loopback Host. Never set with `remote`. */
   anyHost?: boolean
   /** `--public-ui` (with remote, bind loopback, behind Funnel): the login limiter keys on publicClientKey and every
-   *  login (failed, refused by the limiter, successful) is logged through a LogLimiter with that key. Routes and
-   *  checks are those of remote mode. */
+   *  login (failed, refused by the limiter, successful, refused for lack of a client address) is logged through a
+   *  LogLimiter. Routes and checks are those of remote mode, except that the local-request exception is off: every
+   *  request needs a session, whatever its Host or headers, except /login, /logout, the ingest routes and
+   *  HEALTH_PATH. */
   publicUi?: boolean
 }
 
@@ -221,7 +226,16 @@ export class SessionStreams {
   }
 }
 
-const FORWARD_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'tailscale-user-login']
+/** Headers a proxy adds (any one of them, even empty, marks a request as relayed); also every `Tailscale-*` header. */
+export const FORWARD_HEADERS: readonly string[] = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip', 'via']
+
+/** The request carries evidence of a proxy: one of FORWARD_HEADERS or any header whose name starts with `tailscale-`. */
+export function hasForwardingEvidence(req: http.IncomingMessage): boolean {
+  return Object.keys(req.headers).some((h) => {
+    const name = h.toLowerCase()
+    return FORWARD_HEADERS.includes(name) || name.startsWith('tailscale-')
+  })
+}
 
 export function isLoopbackAddress(addr: string | undefined): boolean {
   if (!addr) return false
@@ -231,13 +245,22 @@ export function isLoopbackAddress(addr: string | undefined): boolean {
 /**
  * A request typed on this machine: loopback socket, loopback Host, and not
  * relayed by a proxy (`tailscale serve` connects from loopback but adds
- * X-Forwarded-* headers and keeps the MagicDNS Host).
+ * X-Forwarded-* headers and keeps the MagicDNS Host). Any forwarding evidence
+ * (hasForwardingEvidence) makes a request non-local. With `--public-ui` this
+ * exception is not used at all (createRequestHandler).
  */
 export function isLocalRequest(req: http.IncomingMessage): boolean {
   if (!isLoopbackAddress(req.socket.remoteAddress)) return false
   if (!isLoopbackHost(req.headers.host)) return false
-  return !FORWARD_HEADERS.some((h) => req.headers[h] !== undefined)
+  return !hasForwardingEvidence(req)
 }
+
+/** Unauthenticated health route for `doctor` and `service status`: answers only HEALTH_BODY, in every mode. */
+export const HEALTH_PATH = '/healthz'
+export const HEALTH_BODY = '{"ok":true}'
+
+/** Default mode (no --remote): fixed answer to a request that came through a proxy (P-03). */
+export const FORWARDED_REFUSED = 'Forbidden: this monitor runs without --remote and answers only requests made on this machine, not through a proxy.'
 
 /** True when the browser reached us over https (directly or via a loopback proxy). */
 export function isHttpsRequest(req: http.IncomingMessage): boolean {
@@ -392,9 +415,14 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
     ? { key: publicClientKey, log: new LogLimiter(log) }
     : { key: clientKey, log: null }
   if (remote) {
-    const sweep = setInterval(() => streams.sweep((k) => remote.sessions.isValidKey(k)), opts.sessionSweepMs ?? 60_000)
+    const sweepNow = () => streams.sweep((k) => remote.sessions.isValidKey(k))
+    const sweep = setInterval(sweepNow, opts.sessionSweepMs ?? 60_000)
     sweep.unref?.()
-    team.onDispose(() => clearInterval(sweep))
+    // sessions.json changed under us (`logout-all`, a removed or garbled file): close dropped sessions' streams now,
+    // not at the next sweep (P-05). One stat per tick; the sweep runs only after a change.
+    const check = setInterval(() => { if (remote.sessions.refresh()) sweepNow() }, opts.sessionCheckMs ?? 500)
+    check.unref?.()
+    team.onDispose(() => { clearInterval(sweep); clearInterval(check) })
   }
 
   return (req, res) => {
@@ -425,6 +453,15 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
       return
     }
 
+    // Default mode (no --remote, not cloud mode) serves only this machine: a request that came through a proxy
+    // (tailscale serve/Funnel, or anything else that adds forwarding headers) is refused, whatever its Host (P-03).
+    // A browser or curl on this machine sends none of these headers.
+    if (!remote && opts.anyHost !== true && hasForwardingEvidence(req)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY_HEADERS })
+      res.end(FORWARDED_REFUSED)
+      return
+    }
+
     let pathname: string
     let query: URLSearchParams
     try {
@@ -437,10 +474,19 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
       return
     }
 
+    // Health route for doctor / service status, in every mode and without a session: a fixed body, nothing else.
+    if (pathname === HEALTH_PATH) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return sendError(res, 405, 'method not allowed', { Allow: 'GET, HEAD' })
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...SECURITY_HEADERS })
+      res.end(req.method === 'HEAD' ? undefined : HEALTH_BODY)
+      return
+    }
+
     if (remote) {
       if (pathname === '/login') return void handleLogin(req, res, remote, login)
       if (pathname === '/logout') return void handleLogout(req, res, remote, streams)
-      if (!isLocalRequest(req)) {
+      // The local-request exception (no login on this machine) is off with --public-ui (P-01).
+      if (opts.publicUi === true || !isLocalRequest(req)) {
         const sid = sessionId(req)
         if (!remote.sessions.isValid(sid)) {
           const wantsHtml = (req.method === 'GET' || req.method === 'HEAD') && String(req.headers.accept ?? '').includes('text/html')
@@ -748,23 +794,28 @@ export function limiterAddress(value: string): string | null {
  * of that name sent by the client is dropped or comes before it (if a proxy appends instead), so the last entry is
  * always the one this machine's proxy wrote. `Forwarded`, `X-Real-IP`, `Tailscale-*` and every earlier
  * X-Forwarded-For entry are client data and never read here. The address is normalised by limiterAddress (IPv6 by
- * /64). A last entry that is not an IP address (only possible from a process on this machine) counts under one
- * shared `fwd:invalid` key, never under an address. A loopback socket without the header is a local request: the
- * socket address. A non-loopback socket (not possible with --bind loopback): the socket address, normalised.
+ * /64). A loopback socket with no X-Forwarded-For, or a last entry that is not an IP address: null, "no usable
+ * client address" (P-04): the login is refused before the token is checked and counted under no key, so there is no
+ * shared bucket anyone could fill. A non-loopback socket (not possible with --bind loopback): the socket address,
+ * normalised.
  */
-export function publicClientKey(req: http.IncomingMessage): string {
+export function publicClientKey(req: http.IncomingMessage): string | null {
   const addr = req.socket.remoteAddress ?? 'unknown'
   if (!isLoopbackAddress(addr)) return `ip:${limiterAddress(addr) ?? addr}`
   const fwd = req.headers['x-forwarded-for']
-  if (fwd === undefined) return addr
+  if (fwd === undefined) return null
   const last = String(fwd).split(',').map((s) => s.trim()).filter(Boolean).pop()
   const a = last ? limiterAddress(last) : null
-  return a ? `fwd:${a}` : 'fwd:invalid'
+  return a ? `fwd:${a}` : null
 }
+
+/** With --public-ui, the fixed page text of a login without a usable client address (400). */
+export const NO_CLIENT_ADDRESS_MESSAGE = 'Masuk tidak bisa lewat alamat ini: buka URL Funnel atau tailnet (https://&lt;mesin&gt;.&lt;tailnet&gt;.ts.net/login), bukan http://127.0.0.1.'
 
 /** How logins are counted and logged: remote mode as before, or `--public-ui`. */
 interface LoginPolicy {
-  key: (req: http.IncomingMessage) => string
+  /** The limiter key; null = no usable client address (only with --public-ui): refused, never counted. */
+  key: (req: http.IncomingMessage) => string | null
   /** Login log (only with --public-ui): one line per login and client per minute, never the token. */
   log: LogLimiter | null
 }
@@ -784,6 +835,14 @@ async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse, 
   if (!isSameOriginRequest(req)) { closeAfter(res); return sendError(res, 403, 'cross-origin request refused') }
 
   const client = policy.key(req)
+  if (client === null) {
+    // --public-ui and no usable client address: refused before the token is read, not counted under any key.
+    policy.log?.line('login-no-address', 'no-address', '[login] refused a login without a usable client address (X-Forwarded-For missing or its last entry not an IP; not counted). Log in through the Funnel or tailnet URL, not http://127.0.0.1.')
+    closeAfter(res)
+    res.writeHead(400, PAGE_HEADERS)
+    res.end(loginPage(NO_CLIENT_ADDRESS_MESSAGE))
+    return
+  }
   const wait = remote.limiter.retryAfter(client)
   if (wait > 0) {
     policy.log?.line('login-limited', client, `[login] refused for ${client}: too many failed logins, retry in ${wait} s`)

@@ -37,11 +37,16 @@ collected by the hub; the forwarder fetches them (long poll) and writes them int
    it is not 3002.
    With the public UI (`--public-ui`, see `docs/setup.md`) the whole app is on Funnel instead:
    `tailscale funnel --bg --https=443 http://127.0.0.1:3002` also serves `/api/ingest`, so skip the `--set-path`
-   command. The default stays as above: only `/api/ingest` public, the UI tailnet only.
+   command. The default stays as above: only `/api/ingest` public, the UI tailnet only. A hub without `--remote`
+   (`node app/dist/app.js --ingest`) answers the ingest routes through Funnel too, but refuses every other request
+   that comes through a proxy (403), so its UI is reachable only on this machine.
 5. **Check.** `tm doctor` (with the service installed with `--ingest`) or `tm doctor --ingest [--port <n>]`. It
-   checks the token file (0600) and the Funnel mapping. It fails if the Funnel port also serves other paths, which
-   would make the UI public. With `--public-ui` (on the service, or `tm doctor --ingest --public-ui`) it expects the
-   one mapping of the whole app instead and does not fail because the UI is public. Exit 0 = all good.
+   checks the token file (0600) and the Funnel mapping. It fails if Funnel makes any other path of the monitor
+   public ("the monitor is reachable from the internet", with the host:port, the paths and the command that turns
+   that mapping off), or if the Funnel port also serves other paths. With `--public-ui` (on the service, or
+   `tm doctor --ingest --public-ui`) it expects the one mapping of the whole app instead and does not fail because
+   the UI is public. Exit 0 = all good. (Doctor looks at Funnel without `--ingest` too: there no path of the
+   monitor may be on Funnel; see `docs/setup.md` step 6.)
 
 The Funnel host name is `<machine>.<tailnet>.ts.net` (with `:<port>` if you did not use 443). You need it below.
 
@@ -172,16 +177,30 @@ loopback Host. Answer and chat in the hub.
   silent for 24 hours is removed with its mirror; its key binding is kept for 30 days more (see Source key).
 - **Public UI (`--public-ui`, off by default).** Only with `--remote --bind loopback`. The login page and, after
   login, the whole UI with full access (answers, chat, offboarding) are on the internet: anyone with the login
-  token (`~/.team-monitor/token`) can steer the team. Without a session only `/login`, `/logout` and the three
-  ingest routes answer; everything else gets a redirect to `/login` or 401 and no data. The ingest token still
-  opens only the ingest routes, and the login token or a session never opens them. Logins are limited to 5 wrong
-  tokens per 15 minutes per client address (the last `X-Forwarded-For` entry, which Funnel's local proxy writes;
-  other forwarded headers are ignored; IPv6 by /64) and logged without the token. End all sessions with
-  `tm logout-all`; rotate the token by deleting the file and restarting (`docs/setup.md`).
+  token (`~/.team-monitor/token`) can steer the team. Without a session only `/login`, `/logout`, `/healthz`
+  (always just `{"ok":true}`) and the three ingest routes answer; everything else gets a redirect to `/login` or
+  401 and no data, whatever the Host or headers: there is no login-free "local request" with `--public-ui`, so on
+  the hub machine too you log in through the Funnel or tailnet URL. The ingest token still opens only the ingest
+  routes, and the login token or a session never opens them. Logins are limited to 5 wrong tokens per 15 minutes
+  per client address (the last `X-Forwarded-For` entry, which Funnel's local proxy appends; other forwarded headers
+  are ignored; IPv6 by /64). A login without a usable address (no `X-Forwarded-For`, or a last entry that is not an
+  IP) gets 400 before the token is checked and is counted under no address. Logins are logged without the token,
+  rate-limited (one line per kind and address per minute, at most 10 per kind per minute; the next line says how
+  many were left out). End all sessions with `tm logout-all` (open live views close within about a second); rotate
+  the token by deleting the file and restarting (`docs/setup.md`).
+- **Funnel without `--public-ui`.** `tm doctor` fails, in every mode, when any path of the monitor is on a Funnel
+  port it is not set up for (with `--ingest`: anything but `/api/ingest`), and the monitor prints a warning at
+  start. A monitor without `--remote` refuses every request with a forwarding header (403), except the ingest
+  routes.
+- **Page headers.** The app page and its files carry a CSP that allows only the app's own script, stylesheet,
+  same-origin API and streams, and `data:` images, plus `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
+  `nosniff` and `Referrer-Policy: no-referrer` (details in `docs/setup.md`, "Who can reach the monitor").
 - **Host in cloud mode.** The container's monitor binds 127.0.0.1 only. When started by `cloud start` with
   `CLAUDE_CODE_REMOTE=true` it accepts any Host header for read requests (GET, HEAD), so the preview pane can load
-  it. Every changing request still needs a loopback Host. `--cloud` cannot be combined with `--remote` or
-  `--ingest`. Outside cloud mode nothing changes.
+  it, also when the pane's proxy adds forwarding headers (the refusal of forwarded requests applies to default mode
+  only). Every changing request still needs a loopback Host. Because the pane shows the page in a frame, cloud mode
+  omits `X-Frame-Options` and `frame-ancestors` (the rest of the CSP, `nosniff` and the referrer policy stay).
+  `--cloud` cannot be combined with `--remote` or `--ingest`. Outside cloud mode nothing changes.
 - **The container side.** The forwarder keeps at most 5,000 unsent messages (oldest dropped, one log line) and
   retries with 1 s to 30 s backoff. It never logs the token or the source key.
 

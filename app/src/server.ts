@@ -62,7 +62,7 @@ export async function startServer(options: ServerOptions) {
 
     // Static files (UI)
     if (req.method === 'GET') {
-      return serveStatic(req, res)
+      return serveStatic(req, res, { frameable: teamSetup.frameable })
     }
 
     res.writeHead(404)
@@ -87,6 +87,12 @@ export async function startServer(options: ServerOptions) {
     if (openBrowser) {
       openURL(url)
     }
+
+    // Best effort, never fatal: a monitor without --public-ui that Funnel exposes says so loudly (P-02/P-03).
+    void teamSetup.funnelWarning(port).then((lines) => {
+      for (const l of lines) console.log(l)
+      if (lines.length) console.error('[funnel] WARNING: this monitor is reachable from the internet through Tailscale Funnel; see the lines above.')
+    })
   })
 
   // Cleanup on exit. Idempotent — repeat signals (Ctrl+C spam, SIGTERM+SIGHUP,

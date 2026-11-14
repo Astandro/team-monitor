@@ -31,9 +31,46 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
    This is tailnet only, and the default. For a laptop without Tailscale see "public UI" below.
 5. **Claude Code hooks.** The graph hooks are written into `~/.claude/settings.json` by the monitor at start. Add
    the AskUserQuestion hook by hand (snippet in `docs/coordinator.md` section 4b).
-6. **Check.** `tm doctor`: build, service loaded and healthy, config, each project folder and `.agent-team/`, the
-   `tailscale serve` mapping (prints the exact command if missing; `--https-port <p>` if not 8443), token file
-   0600, hooks. Exit 0 = all good. It changes nothing.
+6. **Check.** `tm doctor`: build, service loaded and healthy (`GET /healthz`), config, each project folder and
+   `.agent-team/`, the tailnet-only `tailscale serve` mapping (prints the exact command if missing;
+   `--https-port <p>` if not 8443), Funnel (below), token file 0600, hooks. Exit 0 = all good. It changes nothing.
+   - Funnel is checked in every mode whenever a `tailscale` CLI is found: doctor reads `tailscale serve status`
+     including which host:ports have Funnel on. If any path of this monitor's port is on a Funnel host:port that
+     the monitor is not set up for, doctor FAILS with "the monitor is reachable from the internet", the host:port,
+     the paths, and the exact command to turn that mapping off (`tailscale funnel --https=<port> off`, or with
+     `--set-path <path>` for a sub-path). Set up for means: with `--public-ui` the whole-app mapping is expected;
+     with `--ingest` only, exactly `/api/ingest`; otherwise nothing. A Funnel mapping is never reported as the
+     "tailscale serve maps ..." line; that line is for tailnet-only mappings. No `tailscale` CLI: no Funnel line;
+     status unreadable: a warning (or the serve failure in remote mode).
+   - The monitor itself does the same check once at start (best effort, 3 s, never stops the start): started
+     without `--public-ui` on a port Funnel exposes, it prints a `WARNING: this monitor is REACHABLE FROM THE
+     INTERNET` block with the off command in its output and log.
+
+## Who can reach the monitor
+
+- **Default mode** (no `--remote`): loopback only and no login, for a browser or tool on this machine. A request
+  that carries any forwarding header (`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `Forwarded`,
+  `X-Real-IP`, `Via`, or any header starting with `Tailscale-`) is refused with 403 and the fixed text
+  `Forbidden: this monitor runs without --remote and answers only requests made on this machine, not through a
+  proxy.`, whatever its Host. So a default monitor behind `tailscale serve` or Funnel answers nothing but that
+  (the ingest routes of `--ingest` keep working: they are judged first and need the ingest token).
+- **Remote mode** (`--remote`): every request needs a login session, except `/login`, `/logout`, `/healthz` and,
+  with `--ingest`, the three ingest routes. One exception, for tools on this machine: a request with a loopback
+  socket, a loopback Host (`127.0.0.1`, `localhost`, `[::1]`) and none of the forwarding headers above needs no
+  login. `tailscale serve` and Funnel always add some of them, so their requests never get it.
+- **Public UI** (`--public-ui`): that exception is off. Every request needs a session, from this machine too
+  (see the public UI section).
+- **Health route** `GET /healthz` (also HEAD): no login in every mode, answers `{"ok":true}` and nothing else (no
+  project, version, path or mode). `tm doctor` and `tm service status` use it; it is harmless from the internet.
+- **Headers.** In every mode the app page and every static file (script, stylesheet, sounds, and their 404s) carry
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and a CSP with
+  `frame-ancestors 'none'`. The CSP allows exactly what the build loads: `default-src 'none'; script-src 'self';
+  style-src 'self' 'sha256-...'` (the hash of the page's one inline style), `img-src 'self' data:` (icon and the
+  graph's drawn images), `connect-src 'self'` (API, sounds, `/events` and `/api/team/events` on the same origin),
+  `base-uri 'none'; form-action 'self'`. No `unsafe-inline`, no `unsafe-eval` (the bundle needs neither). The login
+  page has its own strict CSP, the same framing ban and nosniff, and `Referrer-Policy: same-origin` (its form POST
+  would send `Origin: null` otherwise). In cloud mode (`docs/cloud.md`) the app page and files omit
+  `X-Frame-Options` and `frame-ancestors`, because the preview pane shows the page in a frame; the rest stays.
 
 ## Hub intake for cloud sessions (`--ingest`)
 
@@ -87,8 +124,9 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
 - Funnel: expose only `/api/ingest`, on a port the UI does not use:
   `tailscale funnel --bg --https=443 --set-path /api/ingest http://127.0.0.1:3002/api/ingest`. The UI and login
   stay on `tailscale serve` (8443, tailnet only). `tm doctor` (or `tm doctor --ingest` without a service) checks the
-  token file and the Funnel mapping, and fails if Funnel would also make the UI public. With `--public-ui` (below)
-  the one Funnel mapping of the whole app also serves `/api/ingest` instead.
+  token file and the Funnel mapping, and fails if Funnel also makes any other path of the monitor public (with the
+  command that turns it off) or another path on the Funnel port. With `--public-ui` (below) the one Funnel mapping
+  of the whole app also serves `/api/ingest` instead.
 
 ## Laptop without Tailscale: public UI through Funnel (`--public-ui`)
 
@@ -100,21 +138,34 @@ not start and says so in one line).
 - **What it exposes.** The login page, at `https://<machine>.<tailnet>.ts.net/login`, to anyone on the internet.
   After login a device has full access, as on the tailnet: graph, team panel, answering decisions, chat,
   offboarding. **Anyone who has the token can steer the team from the internet.** Without a session nothing but
-  `/login`, `/logout` (and, with `--ingest`, the three ingest routes, which need the ingest token) answers: every
-  page, asset, icon, sound, `/events` and API route gives a redirect to `/login` or 401 and no data.
+  `/login`, `/logout`, `/healthz` (the fixed `{"ok":true}`) and, with `--ingest`, the three ingest routes (which
+  need the ingest token) answers: every page, asset, icon, sound, `/events` and API route gives a redirect to
+  `/login` or 401 and no data, whatever the Host or headers.
+- **No login-free requests, also on this machine.** The remote-mode exception for local requests is off. Log in
+  from this machine through the Funnel or tailnet URL (`https://<machine>.<tailnet>.ts.net/login`), not
+  `http://127.0.0.1:3002`: a login there has no client address and is refused with 400 ("Masuk tidak bisa lewat
+  alamat ini ..."). `tm doctor` and `tm service status` use `/healthz` and need no login; `ask`, `ask-hook`,
+  `wait-answer` and the hooks work on files and the hook server, not on this HTTP API.
 - **Turn it on.** `tm service install --port 3002 --remote --bind loopback --public-ui` (add `--ingest` if you use
   the hub intake), then once: `tailscale funnel --bg --https=443 http://127.0.0.1:3002`. That one mapping serves the
   whole app (with `--ingest` also `/api/ingest`; no separate `--set-path` mapping is needed). The phone's
   `tailscale serve` mapping on 8443 can stay. Use the command `tm doctor` prints; it uses your monitor port.
 - **Check.** `tm doctor` (or `tm doctor --public-ui [--port <n>]` without a service) passes when Funnel maps `/` to
-  the monitor and prints the exact command when not. Without `--public-ui`, a UI on Funnel stays a failure when
-  `--ingest` is on, as before.
+  the monitor and prints the exact command when not. Without `--public-ui`, any path of the monitor on Funnel is a
+  doctor failure in every mode (with `--ingest`, all but `/api/ingest`), with the command to turn it off, and the
+  monitor prints a warning at start.
 - **Limits and log.** 5 wrong tokens in 15 minutes from one address, then 429 for that address only (the address
-  is the one Funnel reports; an IPv6 client counts by its /64). Every failed, refused and successful login is
-  logged in `~/.team-monitor/team-monitor.log` with that address, at most one line per kind and address per
-  minute, never the token. The session cookie is `Secure; HttpOnly; SameSite=Strict`; sessions last 30 days.
+  is the last `X-Forwarded-For` entry, which Funnel's or serve's proxy appends; an IPv6 client counts by its /64).
+  A login with no `X-Forwarded-For`, or whose last entry is not an IP address, is refused with 400 before the token
+  is checked and counted under no address, so nobody can fill a shared bucket and lock others out. Logins are
+  logged in `~/.team-monitor/team-monitor.log` (failed, refused by the limit, refused for lack of an address,
+  successful) with the counted address and never the token, rate-limited: at most one line per kind and address
+  per minute, and at most 10 lines per kind per minute in all; the next line written says how many were left
+  out. So in a flood not every attempt has its own line. The session cookie is `Secure; HttpOnly;
+  SameSite=Strict`; sessions last 30 days.
 - **Drop all sessions.** `tm logout-all` ends every login session at once, also while the monitor runs (no
-  restart): the next request of each device goes to the login page; open live views close within a minute.
+  restart): the next request of each device goes to the login page, and open live views (`/events`,
+  `/api/team/events`) of the dropped sessions close within about a second.
 - **Rotate the token** (lost device, token seen by someone): `rm ~/.team-monitor/token && tm service restart`. A
   new token is created (read it from the file; it is never printed) and every session made with the old one ends.
 - **Turn it off.** `tailscale funnel --https=443 off` (or `tailscale funnel reset`, which also removes an ingest
@@ -124,7 +175,7 @@ not start and says so in one line).
 
 | Command | What it does |
 |---|---|
-| `tm service status` | Loaded, pid, port listening, `GET /api/team/projects` on loopback. Exit 0 when healthy. |
+| `tm service status` | Loaded, pid, port listening, `GET /healthz` (no login, also with `--public-ui`). Exit 0 when healthy. |
 | `tm service restart` | `launchctl kickstart -k` / `systemctl --user restart`. |
 | `tm service uninstall [--label <l>]` | Unloads, removes the plist/unit and `service.json`. Keeps the log, config and token. |
 | `tm project add <path> [--name <n>]` / `remove <id>` / `list` | Edit `config.json`; add/remove restart the service. |
