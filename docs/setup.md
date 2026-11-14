@@ -57,8 +57,10 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
   is refused until its old binding expires.
 - Routes, matched exactly on the raw request path: `POST /api/ingest/v1/events` (512 KB, 500 messages),
   `PUT /api/ingest/v1/state` (1 MB), `GET /api/ingest/v1/outbox?sourceId=&after=&wait=0-25` (long poll for answers
-  and chat messages). Any other path under `/api/ingest` (dot segments, encoded dots, slashes or backslashes, a
-  trailing slash, other versions) is answered 400 there and never reaches the UI or the team API.
+  and chat messages). With `--ingest`, any other path starting with `/api/ingest` in any letter case (also sibling
+  names such as `/api/ingestX/...`, a trailing slash, other versions), and any path with a dot segment, an encoded
+  dot, slash or backslash or a backslash, is answered 400 before any other handler (token or not) and never
+  reaches the UI or the team API. Without `--ingest` such paths behave as before.
 - Epoch: every authenticated ingest response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). The
   forwarder sends the epoch it knows on each events post; after a hub restart that post gets 409 and nothing is
   applied. When the forwarder sees a new epoch (on any reply) it resends `session-started` for its sessions and

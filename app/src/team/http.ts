@@ -340,6 +340,39 @@ export function ingestTarget(url: string | undefined): { route: string | null; q
   return { route: INGEST_ROUTES.has(raw.path) ? raw.path : null, query: new URLSearchParams(raw.query) }
 }
 
+/** A `.` or `..` segment, an encoded dot, slash or backslash, or a backslash. */
+function hasTraversal(p: string): boolean {
+  if (/%2e|%2f|%5c|\\/i.test(p)) return true
+  return p.split('/').some((seg) => seg === '.' || seg === '..')
+}
+
+/**
+ * With `--ingest` (hub intake on, ingest routes reachable from the internet), every request target is judged on its
+ * raw path (as sent; the query string removed; the path of an absolute-form target) before any handler sees it:
+ * - `ingest`: the raw path is exactly one of INGEST_ROUTES;
+ * - `refuse` (400): any other path that starts with `/api/ingest` case-insensitively (also sibling names such as
+ *   `/api/ingestX/...`, `/api/ingest-x`, `/api/ingest:`), or once percent-decoded; or a path anywhere with a dot
+ *   segment, an encoded dot, slash or backslash, or a backslash (also once percent-decoded, so double encoding is
+ *   refused too);
+ * - `other`: everything else, handled as without `--ingest`.
+ */
+export function judgeTarget(url: string | undefined):
+  | { kind: 'ingest'; route: string; query: URLSearchParams }
+  | { kind: 'refuse'; ingestLike: boolean }
+  | { kind: 'other' } {
+  let target = url || '/'
+  const abs = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(.*)$/i.exec(target)
+  if (abs) target = abs[1] || '/'
+  const q = target.indexOf('?')
+  const raw = q >= 0 ? target.slice(0, q) : target
+  if (INGEST_ROUTES.has(raw)) return { kind: 'ingest', route: raw, query: new URLSearchParams(q >= 0 ? target.slice(q + 1) : '') }
+  let decoded = raw
+  try { decoded = decodeURIComponent(raw) } catch { /* malformed escapes: judged on the raw path */ }
+  const ingestLike = [raw, decoded].some((p) => p.toLowerCase().startsWith('/api/ingest'))
+  if (ingestLike || hasTraversal(raw) || hasTraversal(decoded)) return { kind: 'refuse', ingestLike }
+  return { kind: 'other' }
+}
+
 /** Safe read requests: in cloud mode the only ones accepted with a foreign Host (no GET route changes state). */
 function isSafeRead(req: http.IncomingMessage): boolean {
   return req.method === 'GET' || req.method === 'HEAD'
@@ -357,12 +390,19 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
 
   return (req, res) => {
     // Hub intake (`--ingest`): answered before the Host check and the login, because Funnel traffic carries the
-    // public host name. Every ingest request needs the ingest token instead (ingest.ts); without --ingest: 404.
-    // Decided on the raw path: anything under /api/ingest is answered here and never reaches the routes below.
-    const ingestPath = ingestTarget(req.url)
-    if (ingestPath !== null) {
-      if (!opts.ingest) return sendError(res, 404, 'not found')
-      return void opts.ingest.handle(req, res, ingestPath.route, ingestPath.query)
+    // public host name. Every ingest request needs the ingest token instead (ingest.ts). Decided on the raw request
+    // target only (judgeTarget): the three exact routes go to the intake; anything else that looks like
+    // /api/ingest, or any path with dot segments or encoded dots, slashes or backslashes, is refused with 400
+    // before any other handler sees it. Without --ingest: /api/ingest paths 404, everything else as before.
+    if (opts.ingest) {
+      const verdict = judgeTarget(req.url)
+      if (verdict.kind === 'ingest') return void opts.ingest.handle(req, res, verdict.route, verdict.query)
+      if (verdict.kind === 'refuse') {
+        closeAfter(res)
+        return sendError(res, 400, verdict.ingestLike ? 'not an ingest route' : 'bad request path')
+      }
+    } else if (ingestTarget(req.url) !== null) {
+      return sendError(res, 404, 'not found')
     }
 
     // Cloud mode (preview pane): a foreign Host only for safe reads; every state-changing request still needs a

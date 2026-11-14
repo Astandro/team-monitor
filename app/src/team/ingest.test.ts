@@ -705,19 +705,92 @@ describe('ingest routing on the raw path', () => {
       '/api/ingest/v1\\..\\..\\team\\projects', '/api/ingest%2fv1%2fevents', '/API/ingest/v1/events', '/api/ingest', '/api/ingest/',
       '/api/ingest/v1/outbox/..%5c..%5cteam',
     ]
-    for (const [i, p] of bad.entries()) {
+    for (const p of bad) {
       const r = await send(ctx, 'GET', p)
       assert.equal(r.status, 400, p)
       assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"'), p)
-      // Without the token: 401 (a client address per try, so the limiter does not answer 429 first).
-      assert.equal((await send(ctx, 'GET', p, undefined, { 'X-Forwarded-For': `198.51.100.${i + 1}` })).status, 401, `${p} without token`)
+      // Without the token too: refused before any handler (also the intake's token check) sees it.
+      assert.equal((await send(ctx, 'GET', p, undefined, {})).status, 400, `${p} without token`)
     }
     // The three routes still work, also with a query.
     assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=0`)).status, 200)
     // A path that only normalises into /api/ingest is neither an ingest request nor a UI one.
     const sneaky = await send(ctx, 'POST', '/x/../api/ingest/v1/events', { sourceId: SRC, project, seq: 1, messages: [] })
-    assert.equal(sneaky.status, 404)
+    assert.equal(sneaky.status, 400)
     assert.equal(ctx.relay.applied.length, 0)
+  })
+
+  test('QA gap: sibling names and dot segments anywhere are refused with 400 before any other handler (plain and remote hub)', async () => {
+    const remoteCtx = await setup({ remote: true })
+    try {
+      const bad = [
+        '/api/ingestX/../team/projects', '/api/ingest-x/../team/projects', '/api/ingest:/../team/projects', '/api/ingest@/../team/projects',
+        '/api/ingest~/../team/projects', '/api/ingestX/../../login', '/api/ingest-x', '/api/ingest:', '/API/INGESTX', '/api/Ingest/v1/events',
+        '/api/%69ngest/v1/events', '/api/ingest/v1/events#x', '/x/../api/team/projects', '/./api/team/projects', '/api/team/./projects',
+        '/api/team/%2e%2e/team/projects', '/api/team%2fprojects', '/static/..%5cx', '/x\\y', '/x/%2E/y', '/x/%252e%252e/api/team/projects',
+        '/x/..', '/..', '/.', '/events/..', '/login/../api/team/projects', 'http://evil.example/api/ingestX/../team/projects',
+      ]
+      for (const c of [ctx, remoteCtx]) {
+        for (const p of bad) {
+          for (const headers of [{}, auth(), { Host: 'public.example.ts.net' }, { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' }]) {
+            const r = await send(c, 'GET', p, undefined, headers)
+            assert.equal(r.status, 400, `${p} ${JSON.stringify(headers)}`)
+            assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"') && !r.body.includes('<form'), p)
+          }
+          assert.equal((await send(c, 'POST', p, {}, {})).status, 400, `POST ${p}`)
+        }
+      }
+      assert.equal(ctx.relay.applied.length, 0)
+      assert.deepEqual(ctx.logs.filter((l) => l.includes('[ingest]')), [], 'nothing reached the intake')
+    } finally { await teardown(remoteCtx) }
+  })
+
+  test('with --ingest, normal UI, static files, /events, login and /api/team requests work as before', async () => {
+    const remoteCtx = await setup({ remote: true })
+    try {
+      const writeHeaders = (c: Ctx) => ({ ...JSON_H, 'X-Team-Monitor': '1', Origin: `http://127.0.0.1:${c.port}` })
+      for (const p of ['/', '/index.html', '/favicon.ico', '/_next/static/chunks/app/page-0a1b2c.js', '/_next/static/css/a.b.c.css',
+        '/fonts/x.woff2', '/events', '/events?x=1', '/?next=../x&y=%2e%2e', '/apix', '/api/ingesx', '/.well-known/x', '/a..b/c.d']) {
+        const r = await request(ctx.port, { path: p })
+        assert.equal(r.status, 200, p)
+        assert.equal(r.body, 'fallback', p)
+      }
+      const list = await request(ctx.port, { path: '/api/team/projects' })
+      assert.equal(list.status, 200)
+      assert.ok(Array.isArray(JSON.parse(list.body).projects))
+      assert.equal((await request(ctx.port, { path: '/api/team/state?project=lokal' })).status, 200)
+      assert.equal((await request(ctx.port, { path: '/api/team/offboarded' })).status, 200)
+      const msg = await request(ctx.port, { method: 'POST', path: '/api/team/message', headers: writeHeaders(ctx), body: JSON.stringify({ project: 'lokal', text: 'halo' }) })
+      assert.equal(msg.status, 200, msg.body)
+      // Remote mode with --ingest: the login page, login and the logged-in UI.
+      const page = await request(remoteCtx.port, { path: '/login', headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' } })
+      assert.equal(page.status, 200)
+      assert.match(page.body, /<form/)
+      const login = await request(remoteCtx.port, {
+        method: 'POST', path: '/login', body: `token=${LOGIN}`,
+        headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9', 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'http://box.example.ts.net' },
+      })
+      assert.equal(login.status, 303, login.body)
+      const cookie = String(login.headers['set-cookie']).split(';')[0]
+      for (const p of ['/', '/events', '/api/team/projects']) {
+        const r = await request(remoteCtx.port, { path: p, headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9', Cookie: cookie } })
+        assert.equal(r.status, 200, p)
+      }
+      assert.equal((await request(remoteCtx.port, { path: '/api/team/projects', headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' } })).status, 401)
+    } finally { await teardown(remoteCtx) }
+  })
+})
+
+describe('raw-path refusal only with --ingest', () => {
+  let ctx: Ctx
+  before(async () => { ctx = await setup({ ingest: false }) })
+  after(async () => { await teardown(ctx) })
+
+  test('without --ingest, paths with dot segments are handled as before (normalised), /api/ingest still 404', async () => {
+    assert.equal((await request(ctx.port, { path: '/x/../api/team/projects' })).status, 200)
+    assert.equal((await request(ctx.port, { path: '/static/./a.js' })).body, 'fallback')
+    assert.equal((await request(ctx.port, { path: '/api/ingestX/../team/projects' })).status, 200, 'unchanged without --ingest (no intake to protect)')
+    assert.equal((await request(ctx.port, { path: '/api/ingest/v1/events' })).status, 404)
   })
 })
 
@@ -1046,7 +1119,7 @@ describe('limits and epoch', () => {
     const epoch = r.headers[EPOCH_HEADER]
     assert.match(String(epoch), /^[0-9a-f]{8}$/)
     assert.equal(epoch, ctx.ingest!.epoch)
-    assert.equal((await send(ctx, 'GET', '/api/ingest/v9')).headers[EPOCH_HEADER], epoch, 'also on errors')
+    assert.equal((await send(ctx, 'GET', '/api/ingest/v1/events')).headers[EPOCH_HEADER], epoch, 'also on errors (405)')
     assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, {})).headers[EPOCH_HEADER], undefined, 'not without the token')
     const before = ctx.relay.applied.length
     const old = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 100, messages: [eventMsg()] }, { ...auth(), [EPOCH_HEADER]: '00000000' })

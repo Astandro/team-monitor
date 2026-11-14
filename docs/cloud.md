@@ -141,10 +141,13 @@ loopback Host. Answer and chat in the hub.
   which then refuses the real container (403). It cannot: read or write a source it does not hold the key of,
   read answers or chat of other sources, open the UI, the login or the team API, or make the hub write outside
   `~/.team-monitor/remote/<sourceId>/`.
-- **Routes.** Matched exactly on the raw path: `POST /api/ingest/v1/events`, `PUT /api/ingest/v1/state`,
-  `GET /api/ingest/v1/outbox`. Anything else under `/api/ingest` (dot segments, encoded slashes, other versions)
-  gets 400. Ingest routes skip the Host check, because Funnel sends the public host name; the token is checked
-  first.
+- **Routes.** Matched exactly on the raw path (as sent, without the query string): `POST /api/ingest/v1/events`,
+  `PUT /api/ingest/v1/state`, `GET /api/ingest/v1/outbox`. On a hub with `--ingest`, any other path that starts
+  with `/api/ingest` in any letter case (also `/api/ingestX/...`, `/api/ingest-x`, other versions, a trailing
+  slash), and any path anywhere with a `.` or `..` segment, an encoded dot, slash or backslash (`%2e`, `%2f`,
+  `%5c`, also double-encoded) or a backslash, gets 400 before any other handler, with or without the token.
+  Browsers never send such paths, so the UI is not affected. Ingest routes skip the Host check, because Funnel
+  sends the public host name; the token is checked first. Without `--ingest` nothing changes (`/api/ingest`: 404).
 - **Size limits.** Events post: 512 KB, 500 messages. State: 1 MB. One event: 64 KB. JSON nesting: 32 levels.
   Over a limit: 413 (size) or 400 (shape, nesting, one big event). Answer files 16 KB, chat files 32 KB.
 - **Buffers.** The hub keeps at most 5,000 events per cloud session, 4 MB per session, 16 MB per source and 128 MB
