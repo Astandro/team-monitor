@@ -28,6 +28,7 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
 4. **Phone access.** Once per machine: `tailscale serve --bg --https=8443 http://127.0.0.1:3002` (use 443 if
    nothing else serves it). The access token is in `~/.team-monitor/token`; open
    `https://<machine>.<tailnet>.ts.net:8443/login` on the phone and paste it. `tailscale serve --bg` survives reboots.
+   This is tailnet only, and the default. For a laptop without Tailscale see "public UI" below.
 5. **Claude Code hooks.** The graph hooks are written into `~/.claude/settings.json` by the monitor at start. Add
    the AskUserQuestion hook by hand (snippet in `docs/coordinator.md` section 4b).
 6. **Check.** `tm doctor`: build, service loaded and healthy, config, each project folder and `.agent-team/`, the
@@ -86,7 +87,38 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
 - Funnel: expose only `/api/ingest`, on a port the UI does not use:
   `tailscale funnel --bg --https=443 --set-path /api/ingest http://127.0.0.1:3002/api/ingest`. The UI and login
   stay on `tailscale serve` (8443, tailnet only). `tm doctor` (or `tm doctor --ingest` without a service) checks the
-  token file and the Funnel mapping, and fails if Funnel would also make the UI public.
+  token file and the Funnel mapping, and fails if Funnel would also make the UI public. With `--public-ui` (below)
+  the one Funnel mapping of the whole app also serves `/api/ingest` instead.
+
+## Laptop without Tailscale: public UI through Funnel (`--public-ui`)
+
+The default stays tailnet only: the UI and the login are on `tailscale serve`, reachable from your own devices.
+For a device that cannot run Tailscale, `--public-ui` puts the whole UI on Tailscale Funnel, on the public
+internet. Off by default; it is accepted only together with `--remote --bind loopback` (otherwise the monitor does
+not start and says so in one line).
+
+- **What it exposes.** The login page, at `https://<machine>.<tailnet>.ts.net/login`, to anyone on the internet.
+  After login a device has full access, as on the tailnet: graph, team panel, answering decisions, chat,
+  offboarding. **Anyone who has the token can steer the team from the internet.** Without a session nothing but
+  `/login`, `/logout` (and, with `--ingest`, the three ingest routes, which need the ingest token) answers: every
+  page, asset, icon, sound, `/events` and API route gives a redirect to `/login` or 401 and no data.
+- **Turn it on.** `tm service install --port 3002 --remote --bind loopback --public-ui` (add `--ingest` if you use
+  the hub intake), then once: `tailscale funnel --bg --https=443 http://127.0.0.1:3002`. That one mapping serves the
+  whole app (with `--ingest` also `/api/ingest`; no separate `--set-path` mapping is needed). The phone's
+  `tailscale serve` mapping on 8443 can stay. Use the command `tm doctor` prints; it uses your monitor port.
+- **Check.** `tm doctor` (or `tm doctor --public-ui [--port <n>]` without a service) passes when Funnel maps `/` to
+  the monitor and prints the exact command when not. Without `--public-ui`, a UI on Funnel stays a failure when
+  `--ingest` is on, as before.
+- **Limits and log.** 5 wrong tokens in 15 minutes from one address, then 429 for that address only (the address
+  is the one Funnel reports; an IPv6 client counts by its /64). Every failed, refused and successful login is
+  logged in `~/.team-monitor/team-monitor.log` with that address, at most one line per kind and address per
+  minute, never the token. The session cookie is `Secure; HttpOnly; SameSite=Strict`; sessions last 30 days.
+- **Drop all sessions.** `tm logout-all` ends every login session at once, also while the monitor runs (no
+  restart): the next request of each device goes to the login page; open live views close within a minute.
+- **Rotate the token** (lost device, token seen by someone): `rm ~/.team-monitor/token && tm service restart`. A
+  new token is created (read it from the file; it is never printed) and every session made with the old one ends.
+- **Turn it off.** `tailscale funnel --https=443 off` (or `tailscale funnel reset`, which also removes an ingest
+  mapping), then install the service again without `--public-ui`.
 
 ## Service commands
 
@@ -96,6 +128,7 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
 | `tm service restart` | `launchctl kickstart -k` / `systemctl --user restart`. |
 | `tm service uninstall [--label <l>]` | Unloads, removes the plist/unit and `service.json`. Keeps the log, config and token. |
 | `tm project add <path> [--name <n>]` / `remove <id>` / `list` | Edit `config.json`; add/remove restart the service. |
+| `tm logout-all` | Ends every login session (running or stopped monitor, no restart). Devices must log in again. |
 
 Config changes are applied by a restart, not by watching the file: the server reads `config.json` once at start.
 `project add`/`remove` do the restart for you; after a hand edit run `tm service restart`.

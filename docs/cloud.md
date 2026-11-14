@@ -35,9 +35,13 @@ collected by the hub; the forwarder fetches them (long poll) and writes them int
    `tailscale serve` (tailnet only), on another port (8443 in `docs/setup.md`). If the UI is on 443, `doctor`
    suggests `--https=8443` for Funnel instead. Use the command `doctor` prints; it also uses your monitor port if
    it is not 3002.
+   With the public UI (`--public-ui`, see `docs/setup.md`) the whole app is on Funnel instead:
+   `tailscale funnel --bg --https=443 http://127.0.0.1:3002` also serves `/api/ingest`, so skip the `--set-path`
+   command. The default stays as above: only `/api/ingest` public, the UI tailnet only.
 5. **Check.** `tm doctor` (with the service installed with `--ingest`) or `tm doctor --ingest [--port <n>]`. It
    checks the token file (0600) and the Funnel mapping. It fails if the Funnel port also serves other paths, which
-   would make the UI public. Exit 0 = all good.
+   would make the UI public. With `--public-ui` (on the service, or `tm doctor --ingest --public-ui`) it expects the
+   one mapping of the whole app instead and does not fail because the UI is public. Exit 0 = all good.
 
 The Funnel host name is `<machine>.<tailnet>.ts.net` (with `:<port>` if you did not use 443). You need it below.
 
@@ -166,6 +170,14 @@ loopback Host. Answer and chat in the hub.
 - **Mirrors.** The hub writes a source's state to `~/.team-monitor/remote/<sourceId>/.agent-team/` and registers
   it at runtime as project `cloud-<sourceId>` (not in `config.json`). A source silent for 60 s is stale; a source
   silent for 24 hours is removed with its mirror; its key binding is kept for 30 days more (see Source key).
+- **Public UI (`--public-ui`, off by default).** Only with `--remote --bind loopback`. The login page and, after
+  login, the whole UI with full access (answers, chat, offboarding) are on the internet: anyone with the login
+  token (`~/.team-monitor/token`) can steer the team. Without a session only `/login`, `/logout` and the three
+  ingest routes answer; everything else gets a redirect to `/login` or 401 and no data. The ingest token still
+  opens only the ingest routes, and the login token or a session never opens them. Logins are limited to 5 wrong
+  tokens per 15 minutes per client address (the last `X-Forwarded-For` entry, which Funnel's local proxy writes;
+  other forwarded headers are ignored; IPv6 by /64) and logged without the token. End all sessions with
+  `tm logout-all`; rotate the token by deleting the file and restarting (`docs/setup.md`).
 - **Host in cloud mode.** The container's monitor binds 127.0.0.1 only. When started by `cloud start` with
   `CLAUDE_CODE_REMOTE=true` it accepts any Host header for read requests (GET, HEAD), so the preview pane can load
   it. Every changing request still needs a loopback Host. `--cloud` cannot be combined with `--remote` or
