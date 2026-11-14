@@ -19,6 +19,7 @@ import { setupTeam } from './index'
 import { parseInstallArgs, programArguments, ServiceSpec } from './service'
 import { waitForAnswer } from './wait-answer'
 import { listen, makeProject, makeTmpDir, removeTmpDir, request, Resp, sampleState } from './test-helpers'
+import { TombstoneStore } from './ingest-tombstones'
 
 const INGEST = 'cd'.repeat(32)
 const LOGIN = 'ab'.repeat(32)
@@ -704,19 +705,93 @@ describe('ingest routing on the raw path', () => {
       '/api/ingest/v1\\..\\..\\team\\projects', '/api/ingest%2fv1%2fevents', '/API/ingest/v1/events', '/api/ingest', '/api/ingest/',
       '/api/ingest/v1/outbox/..%5c..%5cteam',
     ]
-    for (const [i, p] of bad.entries()) {
+    for (const p of bad) {
       const r = await send(ctx, 'GET', p)
       assert.equal(r.status, 400, p)
       assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"'), p)
-      // Without the token: 401 (a client address per try, so the limiter does not answer 429 first).
-      assert.equal((await send(ctx, 'GET', p, undefined, { 'X-Forwarded-For': `198.51.100.${i + 1}` })).status, 401, `${p} without token`)
+      // Without the token too: refused before any handler (also the intake's token check) sees it.
+      assert.equal((await send(ctx, 'GET', p, undefined, {})).status, 400, `${p} without token`)
     }
     // The three routes still work, also with a query.
     assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=0`)).status, 200)
     // A path that only normalises into /api/ingest is neither an ingest request nor a UI one.
     const sneaky = await send(ctx, 'POST', '/x/../api/ingest/v1/events', { sourceId: SRC, project, seq: 1, messages: [] })
-    assert.equal(sneaky.status, 404)
+    assert.equal(sneaky.status, 400)
     assert.equal(ctx.relay.applied.length, 0)
+  })
+
+  test('QA gap: sibling names and dot segments anywhere are refused with 400 before any other handler (plain and remote hub)', async () => {
+    const remoteCtx = await setup({ remote: true })
+    try {
+      const bad = [
+        '/api/ingestX/../team/projects', '/api/ingest-x/../team/projects', '/api/ingest:/../team/projects', '/api/ingest@/../team/projects',
+        '/api/ingest~/../team/projects', '/api/ingestX/../../login', '/api/ingest-x', '/api/ingest:', '/API/INGESTX', '/api/Ingest/v1/events',
+        '/api/%69ngest/v1/events', '/api/ingest/v1/events#x', '/x/../api/team/projects', '/./api/team/projects', '/api/team/./projects',
+        '/api/team/%2e%2e/team/projects', '/api/team%2fprojects', '/static/..%5cx', '/x\\y', '/x/%2E/y', '/x/%252e%252e/api/team/projects',
+        '/x/..', '/..', '/.', '/events/..', '/login/../api/team/projects', 'http://evil.example/api/ingestX/../team/projects',
+      ]
+      for (const c of [ctx, remoteCtx]) {
+        for (const p of bad) {
+          const variants: Array<Record<string, string>> = [{}, auth(), { Host: 'public.example.ts.net' }, { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' }]
+          for (const headers of variants) {
+            const r = await send(c, 'GET', p, undefined, headers)
+            assert.equal(r.status, 400, `${p} ${JSON.stringify(headers)}`)
+            assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"') && !r.body.includes('<form'), p)
+          }
+          assert.equal((await send(c, 'POST', p, {}, {})).status, 400, `POST ${p}`)
+        }
+      }
+      assert.equal(ctx.relay.applied.length, 0)
+      assert.deepEqual(ctx.logs.filter((l) => l.includes('[ingest]')), [], 'nothing reached the intake')
+    } finally { await teardown(remoteCtx) }
+  })
+
+  test('with --ingest, normal UI, static files, /events, login and /api/team requests work as before', async () => {
+    const remoteCtx = await setup({ remote: true })
+    try {
+      const writeHeaders = (c: Ctx) => ({ ...JSON_H, 'X-Team-Monitor': '1', Origin: `http://127.0.0.1:${c.port}` })
+      for (const p of ['/', '/index.html', '/favicon.ico', '/_next/static/chunks/app/page-0a1b2c.js', '/_next/static/css/a.b.c.css',
+        '/fonts/x.woff2', '/events', '/events?x=1', '/?next=../x&y=%2e%2e', '/apix', '/api/ingesx', '/.well-known/x', '/a..b/c.d']) {
+        const r = await request(ctx.port, { path: p })
+        assert.equal(r.status, 200, p)
+        assert.equal(r.body, 'fallback', p)
+      }
+      const list = await request(ctx.port, { path: '/api/team/projects' })
+      assert.equal(list.status, 200)
+      assert.ok(Array.isArray(JSON.parse(list.body).projects))
+      assert.equal((await request(ctx.port, { path: '/api/team/state?project=lokal' })).status, 200)
+      assert.equal((await request(ctx.port, { path: '/api/team/offboarded' })).status, 200)
+      const msg = await request(ctx.port, { method: 'POST', path: '/api/team/message', headers: writeHeaders(ctx), body: JSON.stringify({ project: 'lokal', text: 'halo' }) })
+      assert.equal(msg.status, 200, msg.body)
+      // Remote mode with --ingest: the login page, login and the logged-in UI.
+      const page = await request(remoteCtx.port, { path: '/login', headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' } })
+      assert.equal(page.status, 200)
+      assert.match(page.body, /<form/)
+      const login = await request(remoteCtx.port, {
+        method: 'POST', path: '/login', body: `token=${LOGIN}`,
+        headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9', 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'http://box.example.ts.net' },
+      })
+      assert.equal(login.status, 303, login.body)
+      const cookie = String(login.headers['set-cookie']).split(';')[0]
+      for (const p of ['/', '/events', '/api/team/projects']) {
+        const r = await request(remoteCtx.port, { path: p, headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9', Cookie: cookie } })
+        assert.equal(r.status, 200, p)
+      }
+      assert.equal((await request(remoteCtx.port, { path: '/api/team/projects', headers: { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' } })).status, 401)
+    } finally { await teardown(remoteCtx) }
+  })
+})
+
+describe('raw-path refusal only with --ingest', () => {
+  let ctx: Ctx
+  before(async () => { ctx = await setup({ ingest: false }) })
+  after(async () => { await teardown(ctx) })
+
+  test('without --ingest, paths with dot segments are handled as before (normalised), /api/ingest still 404', async () => {
+    assert.equal((await request(ctx.port, { path: '/x/../api/team/projects' })).status, 200)
+    assert.equal((await request(ctx.port, { path: '/static/./a.js' })).body, 'fallback')
+    assert.equal((await request(ctx.port, { path: '/api/ingestX/../team/projects' })).status, 200, 'unchanged without --ingest (no intake to protect)')
+    assert.equal((await request(ctx.port, { path: '/api/ingest/v1/events' })).status, 404)
   })
 })
 
@@ -738,6 +813,14 @@ describe('capacity', () => {
 
       ctx.clock.t += 61_000
       ctx.ingest!.sweep() // all three stale
+      assert.equal((await putState(ctx, null, null, 'box-a')).status, 200, 'box-a is live again')
+      // box-d is not bound yet: it may evict a source with a bound key only once that has been stale for 10 minutes.
+      const early = await putState(ctx, null, null, 'box-d')
+      assert.equal(early.status, 503, early.body)
+      assert.match(JSON.parse(early.body).error, /none can be removed for a new one now \(a live source never is, a source with a bound key only after 10 minutes stale\)/)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-d')))
+      ctx.clock.t += 10 * 60_000
+      ctx.ingest!.sweep()
       assert.equal((await putState(ctx, null, null, 'box-a')).status, 200, 'box-a is live again')
       const r = await putState(ctx, null, null, 'box-d')
       assert.equal(r.status, 200, r.body)
@@ -771,11 +854,210 @@ describe('capacity', () => {
       ctx.relay.room = false
       const r = await events(ctx, 7)
       assert.equal(r.status, 503)
-      assert.match(JSON.parse(r.body).error, /capacity/)
+      assert.equal(JSON.parse(r.body).error, 'hub at capacity: the cloud session limit is reached and not enough ended or stale sessions can be evicted; retry later')
       assert.ok(Number(r.headers['retry-after']) > 0)
       assert.equal(ctx.relay.applied.length, 0)
+      // The refused request of a new source registered nothing: no project, no mirror, no key binding.
+      assert.ok(!(await projects(ctx)).some((p) => p.id === PID))
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.deepEqual(ctx.ingest!.sourceStates(), [])
       ctx.relay.room = true
-      assert.deepEqual(JSON.parse((await events(ctx, 7)).body), { ok: true, seq: 7, applied: 2, ignored: 0 })
+      const other = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 7, messages: [startMsg(), eventMsg()] }, auth(INGEST, OTHER_KEY))
+      assert.deepEqual(JSON.parse(other.body), { ok: true, seq: 7, applied: 2, ignored: 0 }, 'the refused key was not bound')
+    } finally { await teardown(ctx) }
+  })
+
+  test('a refused new source at the source cap leaves nothing behind', async () => {
+    const ctx = await setup({ maxSources: 1 })
+    try {
+      assert.equal((await putState(ctx, null, null, 'box-a')).status, 200)
+      const r = await events(ctx, 1, [startMsg(), eventMsg()], 'box-b')
+      assert.equal(r.status, 503)
+      assert.equal(r.headers['retry-after'], '30')
+      assert.deepEqual(ctx.ingest!.sourceStates().map((s) => s.sourceId), ['box-a'])
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-b')))
+      assert.ok(!(await projects(ctx)).some((p) => p.id === 'cloud-box-b'))
+      assert.equal(ctx.relay.applied.length, 0)
+    } finally { await teardown(ctx) }
+  })
+})
+
+// ─── Key bindings survive eviction (NEW-2) ──────────────────────────────────
+
+describe('key bindings after eviction', () => {
+  const tombFile = (ctx: Ctx) => path.join(ctx.home, 'ingest-tombstones.json')
+  const tombs = (ctx: Ctx) => (JSON.parse(fs.readFileSync(tombFile(ctx), 'utf-8')) as { tombstones: Array<{ sourceId: string; keyHash: string; evictedAt: string }> }).tombstones
+  const VICTIM = 'box-victim'
+
+  test('QA repro: a token holder fills the cap so a stale victim is evicted, then claims its sourceId: 403; the real key works again', async () => {
+    const ctx = await setup({ maxSources: 2 })
+    try {
+      assert.equal((await putState(ctx, sampleState(), null, VICTIM)).status, 200) // bound to KEY
+      ctx.clock.t += 1000
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: 'evil-1', project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep() // both stale (61 s)
+
+      // A new, unbound sourceId cannot evict the bound victim yet: 503, and nothing of it is registered.
+      const evil = (sourceId: string) => send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId, project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))
+      assert.equal((await evil('evil-2')).status, 503)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'evil-2')))
+      assert.ok(!fs.existsSync(tombFile(ctx)), 'nothing evicted')
+      // After 10 minutes stale it can be (the victim is the longest stale).
+      ctx.clock.t += 10 * 60_000
+      assert.equal((await evil('evil-2')).status, 200)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', VICTIM)), 'victim evicted with its mirror')
+      assert.equal(fs.statSync(tombFile(ctx)).mode & 0o777, 0o600)
+      assert.deepEqual(tombs(ctx).map((t) => [t.sourceId, t.keyHash]), [[VICTIM, sha256(KEY)]])
+      assert.ok(!fs.readFileSync(tombFile(ctx), 'utf-8').includes(KEY), 'only the hash is kept')
+      assert.deepEqual(fs.readdirSync(ctx.home).filter((n) => n.endsWith('.tmp')), [], 'atomic write left no temp file')
+
+      // The takeover: state, events and outbox for the victim's sourceId with another key are refused.
+      assert.equal((await evil(VICTIM)).status, 403)
+      assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: VICTIM, project, seq: 1, messages: [startMsg()] }, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${VICTIM}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', VICTIM)))
+      assert.ok(!(await projects(ctx)).some((p) => p.id === `cloud-${VICTIM}`))
+
+      // Also after a hub restart.
+      const team2 = new TeamService([], { pollMs: 60_000 })
+      const ingest2 = new IngestService({ home: ctx.home, token: INGEST, team: team2, now: () => ctx.clock.t, sweepMs: 0, log: () => {}, maxSources: 2 })
+      ingest2.start()
+      ingest2.attachRelay(new FakeRelay())
+      const srv = await listen(createRequestHandler({ team: team2, remote: null, ingest: ingest2, fallback: (_q, r) => { r.writeHead(404); r.end() } }))
+      try {
+        const put = (key: string) => request(srv.port, {
+          method: 'PUT', path: '/api/ingest/v1/state', headers: { ...JSON_H, ...auth(INGEST, key) },
+          body: JSON.stringify({ sourceId: VICTIM, project, state: null, watcher: null }),
+        })
+        assert.equal((await put(OTHER_KEY)).status, 403, 'still refused after a restart')
+        // The real key: its source is created again. A returning bound sourceId may evict any stale source.
+        ctx.clock.t += 61_000
+        ingest2.sweep()
+        const back = await put(KEY)
+        assert.equal(back.status, 200, back.body)
+        assert.ok(fs.existsSync(path.join(ctx.home, 'remote', VICTIM)))
+        assert.equal(JSON.parse(fs.readFileSync(path.join(ctx.home, 'remote', VICTIM, 'source.json'), 'utf-8')).keyHash, sha256(KEY))
+        // Its tombstone is gone (source.json holds the binding); the evicted one's binding is kept.
+        assert.deepEqual(tombs(ctx).map((t) => t.sourceId), ['evil-1'])
+        assert.equal((await put(OTHER_KEY)).status, 403)
+      } finally {
+        await srv.close()
+        ingest2.dispose()
+        team2.dispose()
+      }
+    } finally { await teardown(ctx) }
+  })
+
+  test('a source removed after 24 hours silent keeps its binding; tombstones expire after 30 days', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await putState(ctx)).status, 200)
+      ctx.clock.t += 25 * 3600_000
+      ctx.ingest!.sweep()
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.equal((await putState(ctx, null, null, SRC)).status, 200, 'the real key is accepted again')
+      ctx.clock.t += 25 * 3600_000
+      ctx.ingest!.sweep()
+      const other = () => send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))
+      ctx.clock.t += 29 * 24 * 3600_000
+      assert.equal((await other()).status, 403, 'still bound 29 days after the eviction')
+      ctx.clock.t += 24 * 3600_000
+      assert.equal((await other()).status, 200, 'expired 30 days after the eviction: unbound again')
+    } finally { await teardown(ctx) }
+  })
+
+  test('tombstone store: capped (oldest dropped), expiry, reload, damaged file ignored', () => {
+    const root = makeTmpDir()
+    try {
+      const file = path.join(root, 'ingest-tombstones.json')
+      const clock = { t: 1_000_000 }
+      const logs: string[] = []
+      const store = new TombstoneStore({ file, now: () => clock.t, log: (m) => logs.push(m), max: 3, ttlMs: 1000 })
+      store.load()
+      for (const id of ['s-1', 's-2', 's-3', 's-4', 's-5']) { store.add(id, sha256(id)); clock.t += 10 }
+      assert.ok(store.flush())
+      assert.equal(store.get('s-1'), null, 'oldest dropped at the cap')
+      assert.equal(store.get('s-2'), null)
+      assert.equal(store.get('s-5'), sha256('s-5'))
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+      const again = new TombstoneStore({ file, now: () => clock.t, log: () => {}, max: 3, ttlMs: 1000 })
+      again.load()
+      assert.deepEqual(['s-3', 's-4', 's-5'].map((id) => again.get(id)), ['s-3', 's-4', 's-5'].map(sha256))
+      clock.t += 1000
+      assert.equal(again.get('s-5'), null, 'expired')
+      fs.writeFileSync(file, '{"tombstones": "nope"}')
+      store.load()
+      assert.equal(store.size(), 0)
+      assert.match(logs.join('\n'), /ignored/)
+      fs.writeFileSync(file, JSON.stringify({ tombstones: [{ sourceId: '../x', keyHash: sha256('a'), evictedAt: new Date(clock.t).toISOString() }, { sourceId: 'ok', keyHash: 'zz', evictedAt: new Date(clock.t).toISOString() }] }))
+      store.load()
+      assert.equal(store.size(), 0, 'bad entries are left out')
+    } finally { removeTmpDir(root) }
+  })
+
+  test('mirrors removed at start keep their binding too', async () => {
+    const root = makeTmpDir()
+    try {
+      const home = path.join(root, 'tm')
+      const now = Date.parse('2026-11-13T12:00:00Z')
+      fs.mkdirSync(path.join(home, 'remote', 'old-box', '.agent-team'), { recursive: true })
+      fs.writeFileSync(path.join(home, 'remote', 'old-box', 'source.json'), JSON.stringify({ sourceId: 'old-box', name: 'X', projectId: 'p', lastSeenAt: new Date(now - 25 * 3600_000).toISOString(), keyHash: sha256(KEY) }))
+      const team = new TeamService([], { pollMs: 60_000 })
+      const ingest = new IngestService({ home, token: INGEST, team, now: () => now, sweepMs: 0, log: () => {} })
+      assert.deepEqual(ingest.start().removed, ['old-box'])
+      assert.equal(ingest.tombstones.get('old-box'), sha256(KEY))
+      ingest.dispose()
+      team.dispose()
+    } finally { removeTmpDir(root) }
+  })
+})
+
+// ─── Refusal log lines are limited (NEW-1) ──────────────────────────────────
+
+describe('refusal log limit', () => {
+  test('a client repeating any refused request writes at most one line per kind and client/source per minute, with the count on the next', async () => {
+    const ctx = await setup({ maxSources: 1, maxOutboxWaiters: 0 })
+    try {
+      assert.equal((await putState(ctx)).status, 200) // SRC bound to KEY
+      const lines = (re: RegExp) => ctx.logs.filter((l) => re.test(l))
+      const start = ctx.logs.length
+      const fwd = (i: number) => ({ 'X-Forwarded-For': `198.51.100.${i}` })
+
+      // The QA repro: wrong source key in a loop.
+      for (let i = 0; i < 200; i++) {
+        assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      }
+      assert.equal(lines(/source key mismatch/).length, 1)
+      // Wrong token from one client (401, then 429).
+      for (let i = 0; i < 100; i++) await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, { ...fwd(1), ...auth('x') })
+      assert.equal(lines(/ingest token/).length, 1)
+      // Wrong token from many clients: bounded per kind (10 per minute).
+      for (let i = 2; i < 102; i++) await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, { ...fwd(i), ...auth('x') })
+      assert.equal(lines(/ingest token/).length, 10)
+      // Capacity: sources (cap 1), sessions, outbox polls.
+      for (let i = 0; i < 50; i++) assert.equal((await putState(ctx, null, null, 'other-box')).status, 503)
+      assert.equal(lines(/source cap/).length, 1)
+      ctx.relay.room = false
+      for (let i = 0; i < 50; i++) assert.equal((await events(ctx, 5)).status, 503)
+      assert.equal(lines(/cloud session cap/).length, 1)
+      ctx.relay.room = true
+      for (let i = 0; i < 50; i++) assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=5`)).status, 503)
+      assert.equal(lines(/outbox long polls/).length, 1)
+      // Bad paths, bad bodies, other refusals: no line at all.
+      for (let i = 0; i < 50; i++) {
+        await send(ctx, 'GET', '/api/ingest/v1/nope')
+        await send(ctx, 'POST', '/api/ingest/v1/events', '{bad json')
+        await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: '../x', project, state: null, watcher: null })
+      }
+      const written = ctx.logs.length - start
+      assert.ok(written <= 14, `${written} lines for ${200 + 200 + 150 + 150} refused requests`)
+
+      // After the minute: the next line carries the count of what was held back.
+      ctx.clock.t += 60_000
+      assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.match(ctx.logs[ctx.logs.length - 1], /source key mismatch for cloud-box-1 .*\(199 more like it suppressed\)$/)
+      for (const l of ctx.logs) assert.ok(!l.includes(INGEST) && !l.includes(OTHER_KEY) && !l.includes(KEY), 'no secret in the log')
     } finally { await teardown(ctx) }
   })
 })
@@ -838,7 +1120,7 @@ describe('limits and epoch', () => {
     const epoch = r.headers[EPOCH_HEADER]
     assert.match(String(epoch), /^[0-9a-f]{8}$/)
     assert.equal(epoch, ctx.ingest!.epoch)
-    assert.equal((await send(ctx, 'GET', '/api/ingest/v9')).headers[EPOCH_HEADER], epoch, 'also on errors')
+    assert.equal((await send(ctx, 'GET', '/api/ingest/v1/events')).headers[EPOCH_HEADER], epoch, 'also on errors (405)')
     assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, {})).headers[EPOCH_HEADER], undefined, 'not without the token')
     const before = ctx.relay.applied.length
     const old = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 100, messages: [eventMsg()] }, { ...auth(), [EPOCH_HEADER]: '00000000' })

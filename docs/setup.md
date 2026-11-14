@@ -49,26 +49,37 @@ sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; 
   The forwarder creates it at its first start (32 random bytes in `<container team home>/cloud/source-key`, 0600,
   never logged). The hub binds the key's sha256 to the `sourceId` on the first accepted request and keeps it in the
   mirror's `source.json`, so it survives a hub restart. A request for that `sourceId` with another or no key gets
-  403 and changes nothing (no event, state, rename or `seq`), and its outbox is not shown. The binding goes away
-  with the mirror (24 hours of silence, or eviction at the source cap); a new container with the same session id
-  is refused until then.
+  403 and changes nothing (no event, state, rename or `seq`), and its outbox is not shown. When the source is
+  removed (24 hours of silence, or eviction at the source cap) the binding is kept in
+  `~/.team-monitor/ingest-tombstones.json` (0600, hashes only, atomic writes) for 30 days after the removal: another
+  key is still refused and the real key re-creates the source. At most 10,000 entries; beyond that the oldest are
+  dropped and those source ids bind to whichever key comes first again. A new container with the same session id
+  is refused until its old binding expires.
 - Routes, matched exactly on the raw request path: `POST /api/ingest/v1/events` (512 KB, 500 messages),
   `PUT /api/ingest/v1/state` (1 MB), `GET /api/ingest/v1/outbox?sourceId=&after=&wait=0-25` (long poll for answers
-  and chat messages). Any other path under `/api/ingest` (dot segments, encoded dots, slashes or backslashes, a
-  trailing slash, other versions) is answered 400 there and never reaches the UI or the team API.
+  and chat messages). With `--ingest`, any other path starting with `/api/ingest` in any letter case (also sibling
+  names such as `/api/ingestX/...`, a trailing slash, other versions), and any path with a dot segment, an encoded
+  dot, slash or backslash or a backslash, is answered 400 before any other handler (token or not) and never
+  reaches the UI or the team API. Without `--ingest` such paths behave as before.
 - Epoch: every authenticated ingest response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). The
   forwarder sends the epoch it knows on each events post; after a hub restart that post gets 409 and nothing is
   applied. When the forwarder sees a new epoch (on any reply) it resends `session-started` for its sessions and
   their buffered history, so running and idle sessions come back with label, prompt and history.
 - Limits: JSON nested deeper than 32 levels: 400. One event larger than 64 KB as JSON: 400 for the batch (the
-  forwarder drops such an event on its own first, with a log line). Buffered events per cloud session 4 MB and per
-  source 16 MB (oldest dropped, like the 5,000-event cap); a new viewer's replay carries at most 32 MB of cloud
-  events (newest sessions and events first). Real events are a few hundred bytes.
+  forwarder drops such an event on its own first, with a log line). Buffered events per cloud session 4 MB, per
+  source 16 MB and for all cloud sessions together 128 MB (oldest dropped, like the 5,000-event cap; over the
+  128 MB first from sessions of stale sources, then from ended sessions, then from the largest live buffers, and a
+  new event is never refused for it); a new viewer's replay carries at most 32 MB of cloud events (newest sessions
+  and events first). Real events are a few hundred bytes.
 - Capacity: 200 cloud sessions and 100 sources. At the cap, ended sessions and sessions of stale sources are
   evicted (stale longest first), and the longest-stale source is removed with its mirror. A live source or an
-  active session of a live source is never evicted: if everything is live the hub answers 503 with `Retry-After`
-  (the forwarder logs it and retries). Messages the hub accepts but ignores are counted in `ignored`; the forwarder
+  active session of a live source is never evicted, and a source id without a binding may evict a source with a
+  bound key only once that has been stale for 10 minutes. If not enough can be evicted the hub answers 503 with
+  `Retry-After: 30` and registers nothing for the request (the forwarder logs it and retries). Messages the hub accepts but ignores are counted in `ignored`; the forwarder
   logs them and `cloud status` shows the count. More than 64 outbox long polls at once: 503 with `Retry-After: 5`.
+- Hub log: refused ingest requests are logged at most once per minute per kind and client or source (the next line
+  says how many were left out), and at most 10 lines per kind per minute in all, so a client in a loop cannot fill
+  `team-monitor.log`.
 - Mirrors: `~/.team-monitor/remote/<sourceId>/.agent-team/`, registered at runtime as project `cloud-<sourceId>`
   (never written to `config.json`). A source silent for 60 s is `stale`; a source silent for 24 hours is removed
   with its mirror (at start and while running).
