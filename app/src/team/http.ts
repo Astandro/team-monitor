@@ -99,6 +99,16 @@ export class TeamService {
     if (i >= 0) this.projects[i] = { ...this.projects[i], name }
   }
 
+  /** Unregister a cloud project (the hub evicted its source): its watcher stops and it leaves the list. */
+  removeCloudProject(id: string): void {
+    if (!this.cloud.has(id)) return
+    this.watchers.get(id)?.dispose()
+    this.watchers.delete(id)
+    this.cloud.delete(id)
+    const i = this.projects.findIndex((p) => p.id === id)
+    if (i >= 0) this.projects.splice(i, 1)
+  }
+
   isCloudProject(id: string): boolean {
     return this.cloud.has(id)
   }
@@ -158,13 +168,15 @@ export interface HandlerOptions {
   log?: (msg: string) => void
   /** Hub intake (`--ingest`); null or absent = every /api/ingest/* route answers 404. */
   ingest?: IngestHandler | null
-  /** Cloud mode in a container (team/index.ts `acceptsAnyHost`): skip the Host check. Never set with `remote`. */
+  /** Cloud mode in a container (team/index.ts `acceptsAnyHost`): any Host for GET/HEAD; state-changing requests
+   *  still need a loopback Host. Never set with `remote`. */
   anyHost?: boolean
 }
 
-/** What the request handler needs from the hub intake (implemented by IngestService in ingest.ts). */
+/** What the request handler needs from the hub intake (implemented by IngestService in ingest.ts). `route` is one of
+ *  INGEST_ROUTES, or null for any other path under /api/ingest (refused). */
 export interface IngestHandler {
-  handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, query: URLSearchParams): Promise<void>
+  handle(req: http.IncomingMessage, res: http.ServerResponse, route: string | null, query: URLSearchParams): Promise<void>
 }
 
 /**
@@ -293,12 +305,44 @@ export function mediaType(req: http.IncomingMessage): string {
 
 // ─── Handler ────────────────────────────────────────────────────────────────
 
-/** Normalized path and query when the request is for `/api/ingest` or below, else null. */
-function ingestPathname(url: string | undefined): { pathname: string; query: URLSearchParams } | null {
-  let u: URL
-  try { u = new URL(url || '/', 'http://localhost') } catch { return null }
-  if (u.pathname !== '/api/ingest' && !u.pathname.startsWith('/api/ingest/')) return null
-  return { pathname: u.pathname, query: u.searchParams }
+/** The three ingest routes, matched exactly on the raw request path. */
+export const INGEST_ROUTES: ReadonlySet<string> = new Set(['/api/ingest/v1/events', '/api/ingest/v1/state', '/api/ingest/v1/outbox'])
+
+/** Path and query of the request target exactly as sent (origin form, or the path of an absolute-form target). */
+function rawTarget(url: string | undefined): { path: string; query: string } {
+  let target = url || '/'
+  const abs = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(.*)$/i.exec(target)
+  if (abs) target = abs[1] || '/'
+  const q = target.indexOf('?')
+  const hash = target.indexOf('#')
+  const pathEnd = q >= 0 ? q : hash >= 0 ? hash : target.length
+  return { path: target.slice(0, pathEnd), query: q >= 0 ? target.slice(q + 1, hash > q ? hash : undefined) : '' }
+}
+
+/** `p` looks like it is about /api/ingest: case-insensitively, also once percent-decoded and with backslashes
+ *  read as slashes (so no spelling of it can reach the UI routing). */
+function looksLikeIngest(p: string): boolean {
+  const under = (s: string) => /^\/api\/ingest($|[/%.;])/.test(s.toLowerCase().replace(/\\/g, '/'))
+  if (under(p)) return true
+  let decoded = p
+  try { decoded = decodeURIComponent(p) } catch { /* malformed escapes: judged on the raw path */ }
+  return under(decoded)
+}
+
+/**
+ * Ingest routing, decided on the raw request path (never on a normalised one, so dot segments or encoded slashes
+ * cannot move a request out of /api/ingest into the UI or team routes). Null: not an ingest request. Otherwise
+ * `route` is one of INGEST_ROUTES, or null for anything else under /api/ingest (refused with 400).
+ */
+export function ingestTarget(url: string | undefined): { route: string | null; query: URLSearchParams } | null {
+  const raw = rawTarget(url)
+  if (!looksLikeIngest(raw.path)) return null
+  return { route: INGEST_ROUTES.has(raw.path) ? raw.path : null, query: new URLSearchParams(raw.query) }
+}
+
+/** Safe read requests: in cloud mode the only ones accepted with a foreign Host (no GET route changes state). */
+function isSafeRead(req: http.IncomingMessage): boolean {
+  return req.method === 'GET' || req.method === 'HEAD'
 }
 
 export function createRequestHandler(opts: HandlerOptions): Handler {
@@ -314,15 +358,18 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
   return (req, res) => {
     // Hub intake (`--ingest`): answered before the Host check and the login, because Funnel traffic carries the
     // public host name. Every ingest request needs the ingest token instead (ingest.ts); without --ingest: 404.
-    const ingestPath = ingestPathname(req.url)
+    // Decided on the raw path: anything under /api/ingest is answered here and never reaches the routes below.
+    const ingestPath = ingestTarget(req.url)
     if (ingestPath !== null) {
       if (!opts.ingest) return sendError(res, 404, 'not found')
-      return void opts.ingest.handle(req, res, ingestPath.pathname, ingestPath.query)
+      return void opts.ingest.handle(req, res, ingestPath.route, ingestPath.query)
     }
 
+    // Cloud mode (preview pane): a foreign Host only for safe reads; every state-changing request still needs a
+    // loopback Host, so the preview is view-only and a DNS-rebound page cannot write.
     const hostOk = remote
       ? isAllowedRemoteHost(req.headers.host, remote.config)
-      : (opts.anyHost === true || isLoopbackHost(req.headers.host))
+      : (isLoopbackHost(req.headers.host) || (opts.anyHost === true && isSafeRead(req)))
     if (!hostOk) {
       res.writeHead(403, { 'Content-Type': 'text/plain' })
       res.end('Forbidden')
@@ -361,6 +408,8 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
       }
     }
 
+    // A path that only normalises into /api/ingest (e.g. `/x/../api/ingest/...`) is not an ingest request either.
+    if (pathname === '/api/ingest' || pathname.startsWith('/api/ingest/')) return sendError(res, 404, 'not found')
     if (pathname.startsWith('/api/team/')) return void handleTeamApi(req, res, pathname, query, team, log)
     fallback(req, res)
   }

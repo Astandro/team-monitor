@@ -124,7 +124,7 @@ test('token: wider permissions are fixed to 0600; a bad token file is refused', 
   }
 })
 
-test('setupTeam prints the token on first creation only, and never on later runs', () => {
+test('setupTeam never prints the token (only the file path on first creation; stdout ends up in the service log)', () => {
   const home = makeTmpDir()
   const env = { TEAM_MONITOR_HOME: path.join(home, 'tm') }
   const run = fakeTailscale('100.101.102.103')
@@ -133,7 +133,8 @@ test('setupTeam prints the token on first creation only, and never on later runs
     const s1 = setupTeam({ projects: [], remote: true, bind: 'loopback', hostAllow: [] }, { env, runTailscale: run, log: (m) => logs1.push(m), warn: quiet })
     s1.dispose()
     const token = fs.readFileSync(path.join(env.TEAM_MONITOR_HOME, 'token'), 'utf-8').trim()
-    assert.ok(logs1.some((l) => l.includes(token)), 'printed on first run')
+    assert.ok(!logs1.some((l) => l.includes(token)), 'not printed on first run either')
+    assert.ok(logs1.some((l) => l.includes(path.join(env.TEAM_MONITOR_HOME, 'token'))), 'the file path is printed on first run')
     assert.equal(fs.statSync(env.TEAM_MONITOR_HOME).mode & 0o777, 0o700, 'home is 0700')
     assert.equal(s1.listenHost, '127.0.0.1')
 

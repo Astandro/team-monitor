@@ -10,6 +10,9 @@
  *   for a new client, marked cloud, and the project in /api/team/projects; no event arrives twice, also after the
  *   forwarder is restarted;
  * - a decision answer and a chat message sent on the hub reach the container: `wait-answer` exits 0 with them;
+ * - a second forwarder with the same sourceId but another source key gets 403 for events, state and outbox: the
+ *   hub's state, project name and events stay as they were, and it does not receive the answer;
+ * - the hub restarts: the idle session reappears with its label, prompt and full history, nothing twice;
  * - `cloud stop` stops both; nothing is left running.
  *
  * Processes run from an esbuild bundle of app/src/app.ts made in the temp dir (as app/build.js does, without the
@@ -257,12 +260,67 @@ test('cloud mode end to end: container monitor + forwarder to a hub on another p
     assert.equal(waitM.code, 0, waitM.err)
     assert.match(waitM.out, /Halo dari hub/)
 
+    // ── A second forwarder for the same sourceId but with another source key (its own home) can neither write the
+    //    source (events, state, name) nor read its outbox (the D1 answer) ──
+    const evilHome = path.join(root, 'evil-home')
+    const evilTm = path.join(root, 'evil-tm')
+    for (const d of [evilHome, evilTm]) fs.mkdirSync(d, { recursive: true, mode: 0o700 })
+    const evilProject = makeProject(path.join(root, 'evil-work'), 'palsu', sampleState({ meta: { title: 'Proyek palsu', status: 'running', updatedAt: '2026-11-14T00:00:00.000Z' } }))
+    const evilLog = path.join(root, 'evil-forwarder.log')
+    const evilFd = fs.openSync(evilLog, 'a', 0o600)
+    const evil = spawn(process.execPath, [APP, 'cloud', 'forward', '--project', evilProject, '--port', String(boxPort)], {
+      env: baseEnv(evilHome, evilTm, {
+        CLAUDE_CODE_REMOTE: 'true', CLAUDE_CODE_REMOTE_SESSION_ID: 'session_E2eTest01',
+        TEAM_MONITOR_HUB_URL: `http://127.0.0.1:${hubPort}`, TEAM_MONITOR_INGEST_TOKEN: token,
+      }),
+      cwd: REPO, stdio: ['ignore', evilFd, evilFd],
+    })
+    fs.closeSync(evilFd)
+    started.push(evil)
+    try {
+      await waitAsync(async () => /HTTP 403/.test(fs.readFileSync(evilLog, 'utf-8')), 20_000, 300)
+      await new Promise((r) => setTimeout(r, 3000)) // events, state and outbox all tried and refused
+      const evilText = fs.readFileSync(evilLog, 'utf-8')
+      assert.match(evilText, /posting events: HTTP 403/)
+      assert.match(evilText, /sending state: HTTP 403/)
+      assert.match(evilText, /reading the outbox: HTTP 403/)
+      assert.equal((await hubState()).state.meta.title, 'Proyek uji', 'state not overwritten')
+      const listed = JSON.parse((await request(hubPort, { path: '/api/team/projects' })).body).projects as Array<{ id: string; name: string }>
+      assert.equal(listed.find((p) => p.id === projectId)?.name, 'cloudproj', 'not renamed')
+      assert.equal(fs.existsSync(path.join(evilProject, '.agent-team', 'answers', 'D1.json')), false, 'the outbox was not read')
+      assert.ok(await same(), 'no events from the second forwarder')
+      assert.ok(!evilText.includes(token), 'token never logged')
+    } finally {
+      evil.kill('SIGTERM')
+      await new Promise((r) => { if (evil.exitCode !== null || evil.signalCode !== null) r(null); else evil.once('exit', r) })
+    }
+
+    // ── Hub restart: the idle session reappears with its label, prompt and history, without a new event ──
+    const beforeRestart = (await hubSession()).session!
+    hub.kill('SIGTERM')
+    await new Promise((r) => { if (hub!.exitCode !== null || hub!.signalCode !== null) r(null); else hub!.once('exit', r) })
+    hub = spawn(process.execPath, [APP, '--ingest', '--no-open', '--port', String(hubPort)], {
+      env: baseEnv(hubHome, hubTm), cwd: REPO, stdio: 'ignore',
+    })
+    started.push(hub)
+    await waitAsync(() => healthy(hubPort), 20_000)
+    await waitAsync(async () => (await hubSession()).session !== undefined, 40_000, 500)
+    await waitAsync(same, 40_000, 500)
+    const afterRestart = (await hubSession()).session!
+    assert.equal(afterRestart.label, beforeRestart.label)
+    assert.equal(afterRestart.prompt, beforeRestart.prompt)
+    assert.ok(typeof afterRestart.prompt === 'string' && afterRestart.prompt.length > 0, 'with its prompt')
+    assert.equal(afterRestart.origin, 'cloud')
+    await new Promise((r) => setTimeout(r, 1500))
+    assert.ok(await same(), 'history complete and nothing twice after the hub restart')
+
     // cloud status reports a successful post
     const status = await run(['cloud', 'status', '--port', String(boxPort)], boxEnv)
     assert.equal(status.code, 0)
     assert.match(status.out, /Monitor: healthy/)
     assert.match(status.out, /Forwarder: running/)
     assert.match(status.out, /Last successful post: \d{4}-/)
+    assert.match(status.out, /Hub restarts seen: 1/)
     assert.ok(!status.out.includes(token) && !fs.readFileSync(path.join(dir, 'forwarder.log'), 'utf-8').includes(token), 'token never printed or logged')
   } catch (e) {
     // Show the children's logs with the failure (they hold no token: see the assertion above).

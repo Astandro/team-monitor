@@ -12,7 +12,8 @@ import { LoginLimiter, SessionStore } from './auth'
 import { buildRegistry } from './config'
 import { funnelEntries, ingestChecks } from './doctor'
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
-import { IngestService, MAX_MESSAGES, mirrorPath, parseEventsBody } from './ingest'
+import * as crypto from 'crypto'
+import { EPOCH_HEADER, IngestService, jsonTooDeep, MAX_EVENT_BYTES, MAX_JSON_DEPTH, MAX_MESSAGES, mirrorPath, parseEventsBody } from './ingest'
 import type { CloudIntake, CloudMessage } from '../../../scripts/relay'
 import { setupTeam } from './index'
 import { parseInstallArgs, programArguments, ServiceSpec } from './service'
@@ -30,6 +31,11 @@ class FakeRelay implements CloudIntake {
   stale: Array<[string, boolean]> = []
   projectsChanged = 0
   owner = new Map<string, string>()
+  /** makeRoom's answer (false: every session live and the cap reached). */
+  room = true
+  forgotten: string[] = []
+  makeRoom(_ids: string[]) { return this.room }
+  forgetSource(sourceId: string) { this.forgotten.push(sourceId) }
   apply(sourceId: string, projectId: string, messages: CloudMessage[]) {
     this.applied.push({ sourceId, projectId, messages })
     for (const m of messages) {
@@ -57,7 +63,7 @@ interface Ctx {
   remote: RemoteAccess | null
 }
 
-async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boolean } = {}): Promise<Ctx> {
+async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boolean; maxSources?: number; maxOutboxWaiters?: number } = {}): Promise<Ctx> {
   const root = makeTmpDir()
   const home = path.join(root, 'tm')
   fs.mkdirSync(home, { mode: 0o700 })
@@ -70,6 +76,7 @@ async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boole
   if (opts.ingest !== false) {
     ingest = new IngestService({
       home, token: INGEST, team, limiter: new LoginLimiter(5), now: () => clock.t, log: (m) => logs.push(m), sweepMs: 0, outboxPollMs: 50,
+      maxSources: opts.maxSources, maxOutboxWaiters: opts.maxOutboxWaiters,
     })
     ingest.start()
     if (!opts.noRelay) ingest.attachRelay(relay)
@@ -97,7 +104,10 @@ async function teardown(ctx: Ctx): Promise<void> {
   removeTmpDir(ctx.root)
 }
 
-const auth = (token = INGEST) => ({ Authorization: `Bearer ${token}` })
+/** The source key of the test source (X-Team-Monitor-Source-Key). */
+const KEY = '5e'.repeat(32)
+const OTHER_KEY = '0f'.repeat(32)
+const auth = (token = INGEST, key = KEY) => ({ Authorization: `Bearer ${token}`, 'X-Team-Monitor-Source-Key': key })
 const JSON_H = { 'Content-Type': 'application/json' }
 
 function send(ctx: Ctx, method: string, p: string, body?: unknown, headers: Record<string, string> = auth()): Promise<Resp> {
@@ -165,6 +175,14 @@ describe('ingest off', () => {
     assert.equal((await send(ctx, 'GET', '/api/ingest/v1/outbox', undefined, { Host: 'public.example.com' })).status, 404)
     assert.ok(!fs.existsSync(path.join(ctx.home, 'remote')))
     assert.ok(!fs.existsSync(path.join(ctx.home, 'ingest-token')))
+  })
+
+  test('a path under /api/ingest that normalises elsewhere still answers 404, never the team API or the UI', async () => {
+    for (const p of ['/api/ingest/%2e%2e/team/projects', '/api/ingest/../team/projects', '/api/ingest/%2E%2E/%2E%2E/', '/api/ingest%2f..%2fteam/projects']) {
+      const r = await send(ctx, 'GET', p)
+      assert.equal(r.status, 404, p)
+      assert.ok(!r.body.includes('projects') && r.body !== 'fallback', p)
+    }
   })
 
   test('setupTeam without --ingest has no intake and creates no ingest token', () => {
@@ -278,14 +296,14 @@ describe('events and state', () => {
     assert.ok(!fs.existsSync(path.join(mirror, '.watcher')))
   })
 
-  test('a renamed project is updated; wrong methods 405, unknown route 404; 503 before the relay runs', async () => {
+  test('a renamed project is updated; wrong methods 405, unknown route 400; 503 before the relay runs', async () => {
     const r = await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project: { id: 'my-repo', name: 'Nama Baru' }, state: null, watcher: null })
     assert.equal(r.status, 200)
     assert.equal((await projects(ctx)).find((p) => p.id === PID)?.name, 'Nama Baru')
     assert.equal((await send(ctx, 'GET', '/api/ingest/v1/events')).status, 405)
     assert.equal((await send(ctx, 'POST', '/api/ingest/v1/state', {})).status, 405)
     assert.equal((await send(ctx, 'POST', '/api/ingest/v1/outbox', {})).status, 405)
-    assert.equal((await send(ctx, 'GET', '/api/ingest/v2/events')).status, 404)
+    assert.equal((await send(ctx, 'GET', '/api/ingest/v2/events')).status, 400)
 
     const early = await setup({ noRelay: true })
     try {
@@ -470,7 +488,7 @@ describe('stale sources', () => {
 // ─── Mirrors at start ───────────────────────────────────────────────────────
 
 describe('mirrors at start', () => {
-  test('a mirror idle for 7 days is removed; younger ones come back as stale projects; others are left alone', async () => {
+  test('a mirror idle for more than 24 hours is removed; younger ones come back as stale projects; others are left alone', async () => {
     const root = makeTmpDir()
     try {
       const home = path.join(root, 'tm')
@@ -481,7 +499,8 @@ describe('mirrors at start', () => {
         if (lastSeenAt) fs.writeFileSync(path.join(remote, id, 'source.json'), JSON.stringify({ sourceId: id, name: `Proj ${id}`, projectId: 'p', lastSeenAt }))
       }
       mk('old-box', new Date(now - 8 * 24 * 3600_000).toISOString())
-      mk('fresh-box', new Date(now - 24 * 3600_000).toISOString())
+      mk('day-old-box', new Date(now - 25 * 3600_000).toISOString()) // kept for 7 days before; now removed after 24 h
+      mk('fresh-box', new Date(now - 23 * 3600_000).toISOString())
       fs.mkdirSync(path.join(remote, 'Not_A_Source'), { recursive: true })
       const outside = path.join(root, 'outside')
       fs.mkdirSync(outside)
@@ -491,8 +510,9 @@ describe('mirrors at start', () => {
       const team = new TeamService([], { pollMs: 60_000 })
       const ingest = new IngestService({ home, token: INGEST, team, now: () => now, sweepMs: 0, log: () => {} })
       const r = ingest.start()
-      assert.deepEqual(r, { removed: ['old-box'], restored: ['fresh-box'] })
+      assert.deepEqual(r, { removed: ['day-old-box', 'old-box'], restored: ['fresh-box'] })
       assert.ok(!fs.existsSync(path.join(remote, 'old-box')))
+      assert.ok(!fs.existsSync(path.join(remote, 'day-old-box')))
       assert.ok(fs.existsSync(path.join(remote, 'Not_A_Source')))
       assert.ok(fs.existsSync(path.join(outside, 'keep.txt')), 'a symlinked mirror is not followed')
       assert.deepEqual(team.list(), [{ id: 'cloud-fresh-box', name: 'Proj fresh-box', hasState: false, origin: 'cloud', sourceId: 'fresh-box', stale: true }])
@@ -521,7 +541,7 @@ describe('flags and setup', () => {
     assert.ok(!programArguments({ ...spec, ingest: undefined }).includes('--ingest'))
   })
 
-  test('setupTeam with --ingest creates a 0600 ingest token once and wires the intake', () => {
+  test('setupTeam with --ingest creates a 0600 ingest token once, prints only its path, and wires the intake', () => {
     const root = makeTmpDir()
     try {
       const logs: string[] = []
@@ -536,7 +556,8 @@ describe('flags and setup', () => {
       const logs2: string[] = []
       const s2 = setupTeam({ projects: [], remote: false, hostAllow: [], ingest: true }, { env: { TEAM_MONITOR_HOME: root }, log: (m) => logs2.push(m), warn: () => {} })
       assert.equal(fs.readFileSync(file, 'utf-8').trim(), token)
-      assert.ok(logs.some((l) => l.includes(token)), 'shown when created')
+      assert.ok(!logs.some((l) => l.includes(token)), 'never printed, also not when created')
+      assert.ok(logs.some((l) => l.includes(file)), 'the file path is printed when created')
       assert.ok(!logs2.some((l) => l.includes(token)), 'never shown again')
       s2.dispose()
     } finally { removeTmpDir(root) }
@@ -580,5 +601,252 @@ describe('flags and setup', () => {
       const failing = ingestChecks(root, 3002, 8443, 'tailscale', () => { throw new Error('not found') })
       assert.equal(failing[1].level, 'fail')
     } finally { removeTmpDir(root) }
+  })
+})
+
+// ─── Source key: a per-source secret, bound on first use ────────────────────
+
+const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex')
+
+describe('source key', () => {
+  let ctx: Ctx
+  before(async () => { ctx = await setup() })
+  after(async () => { await teardown(ctx) })
+
+  test('a request without a (well-formed) source key is refused with 403 and creates nothing', async () => {
+    const noKey = { Authorization: `Bearer ${INGEST}` }
+    assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 1, messages: [startMsg()] }, noKey)).status, 403)
+    assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project, state: null, watcher: null }, noKey)).status, 403)
+    assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, noKey)).status, 403)
+    assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project, state: null, watcher: null }, auth(INGEST, 'not-a-key'))).status, 403)
+    assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+    assert.equal(ctx.relay.applied.length, 0)
+  })
+
+  test('the first accepted key is bound: another key cannot read, write, rename or blackhole the source', async () => {
+    assert.equal((await putState(ctx)).status, 200)
+    assert.equal((await events(ctx, 10)).status, 200)
+    const answer = await request(ctx.port, {
+      method: 'POST', path: '/api/team/answer', headers: { ...JSON_H, 'X-Team-Monitor': '1', Origin: `http://127.0.0.1:${ctx.port}` },
+      body: JSON.stringify({ project: PID, id: 'D1', answer: 'b' }),
+    })
+    assert.equal(answer.status, 200, answer.body)
+    const applied = ctx.relay.applied.length
+    const stateFile = path.join(ctx.home, 'remote', SRC, '.agent-team', 'state.json')
+    const stateBefore = fs.readFileSync(stateFile, 'utf-8')
+
+    const evil = auth(INGEST, OTHER_KEY)
+    const fake = { id: 'evil', name: 'Palsu' }
+    const blackhole = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project: fake, seq: Number.MAX_SAFE_INTEGER, messages: [eventMsg(S1, 'tool_call_start')] }, evil)
+    assert.equal(blackhole.status, 403)
+    const overwrite = await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project: fake, state: sampleState({ meta: { title: 'Palsu' } }), watcher: null }, evil)
+    assert.equal(overwrite.status, 403)
+    const read = await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, evil)
+    assert.equal(read.status, 403)
+    assert.ok(!read.body.includes('answers/'), 'the outbox is not shown')
+
+    assert.equal(ctx.relay.applied.length, applied, 'nothing applied')
+    assert.equal(fs.readFileSync(stateFile, 'utf-8'), stateBefore, 'state not overwritten')
+    assert.equal((await projects(ctx)).find((p) => p.id === PID)?.name, 'My Repo', 'not renamed')
+    // The seq was not used up: the real source's next post is applied, not acknowledged as a duplicate.
+    const next = await events(ctx, 11, [eventMsg(S1, 'tool_call_end')])
+    assert.deepEqual(JSON.parse(next.body), { ok: true, seq: 11, applied: 1, ignored: 0 })
+    const outbox = await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`)
+    assert.equal(outbox.status, 200)
+    assert.ok(outbox.body.includes('answers/D1.json'), 'the real source still reads its answers')
+
+    // Only the key's hash is stored, with the mirror.
+    const rec = JSON.parse(fs.readFileSync(path.join(ctx.home, 'remote', SRC, 'source.json'), 'utf-8'))
+    assert.equal(rec.keyHash, sha256(KEY))
+    assert.ok(!JSON.stringify(rec).includes(KEY))
+  })
+
+  test('the binding survives a hub restart; a mirror from before source keys is bound by its next keyed request', async () => {
+    const legacy = 'legacy-box'
+    const legacyDir = path.join(ctx.home, 'remote', legacy)
+    fs.mkdirSync(path.join(legacyDir, '.agent-team'), { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'source.json'), JSON.stringify({ sourceId: legacy, name: 'Lama', projectId: 'p', lastSeenAt: new Date(ctx.clock.t).toISOString() }))
+
+    const team2 = new TeamService([], { pollMs: 60_000 })
+    const ingest2 = new IngestService({ home: ctx.home, token: INGEST, team: team2, now: () => ctx.clock.t, sweepMs: 0, log: () => {} })
+    ingest2.start()
+    ingest2.attachRelay(new FakeRelay())
+    const srv = await listen(createRequestHandler({ team: team2, remote: null, ingest: ingest2, fallback: (_q, r) => { r.writeHead(404); r.end() } }))
+    try {
+      const post = (sourceId: string, key: string) => request(srv.port, {
+        method: 'POST', path: '/api/ingest/v1/events', headers: { ...JSON_H, ...auth(INGEST, key) },
+        body: JSON.stringify({ sourceId, project, seq: 1, messages: [startMsg()] }),
+      })
+      assert.equal((await post(SRC, OTHER_KEY)).status, 403, 'still bound after the restart')
+      assert.equal((await post(SRC, KEY)).status, 200)
+      assert.equal((await post(legacy, OTHER_KEY)).status, 200, 'an unbound legacy mirror takes the first key')
+      assert.equal((await post(legacy, KEY)).status, 403)
+      assert.equal(JSON.parse(fs.readFileSync(path.join(legacyDir, 'source.json'), 'utf-8')).keyHash, sha256(OTHER_KEY))
+    } finally {
+      await srv.close()
+      ingest2.dispose()
+      team2.dispose()
+    }
+  })
+})
+
+// ─── Routing on the raw path ────────────────────────────────────────────────
+
+describe('ingest routing on the raw path', () => {
+  let ctx: Ctx
+  before(async () => { ctx = await setup() })
+  after(async () => { await teardown(ctx) })
+
+  test('dot segments, encoded dots/slashes/backslashes and any path but the three routes: 400, never the UI or team routes', async () => {
+    const bad = [
+      '/api/ingest/%2e%2e/team/projects', '/api/ingest/%2E%2E/%2E%2E/login', '/api/ingest/..%2fteam/projects', '/api/ingest/v1/../../team/projects',
+      '/api/ingest/./v1/events', '/api/ingest/v1/%65vents', '/api/ingest/v1/events/', '/api/ingest/v1/events%2f', '/api/ingest/v1//events',
+      '/api/ingest/v1\\..\\..\\team\\projects', '/api/ingest%2fv1%2fevents', '/API/ingest/v1/events', '/api/ingest', '/api/ingest/',
+      '/api/ingest/v1/outbox/..%5c..%5cteam',
+    ]
+    for (const [i, p] of bad.entries()) {
+      const r = await send(ctx, 'GET', p)
+      assert.equal(r.status, 400, p)
+      assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"'), p)
+      // Without the token: 401 (a client address per try, so the limiter does not answer 429 first).
+      assert.equal((await send(ctx, 'GET', p, undefined, { 'X-Forwarded-For': `198.51.100.${i + 1}` })).status, 401, `${p} without token`)
+    }
+    // The three routes still work, also with a query.
+    assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=0`)).status, 200)
+    // A path that only normalises into /api/ingest is neither an ingest request nor a UI one.
+    const sneaky = await send(ctx, 'POST', '/x/../api/ingest/v1/events', { sourceId: SRC, project, seq: 1, messages: [] })
+    assert.equal(sneaky.status, 404)
+    assert.equal(ctx.relay.applied.length, 0)
+  })
+})
+
+// ─── Capacity: evict instead of refuse ──────────────────────────────────────
+
+describe('capacity', () => {
+  test('at the source cap the longest-stale source is evicted with its mirror; with every source live: 503 with Retry-After', async () => {
+    const ctx = await setup({ maxSources: 3 })
+    try {
+      for (const id of ['box-a', 'box-b', 'box-c']) {
+        assert.equal((await putState(ctx, null, null, id)).status, 200)
+        ctx.clock.t += 1000
+      }
+      const full = await putState(ctx, null, null, 'box-d')
+      assert.equal(full.status, 503)
+      assert.match(JSON.parse(full.body).error, /capacity/)
+      assert.ok(Number(full.headers['retry-after']) > 0)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-d')))
+
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep() // all three stale
+      assert.equal((await putState(ctx, null, null, 'box-a')).status, 200, 'box-a is live again')
+      const r = await putState(ctx, null, null, 'box-d')
+      assert.equal(r.status, 200, r.body)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-b')), 'the longest-stale source is removed')
+      assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-a')))
+      assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-c')))
+      assert.deepEqual(ctx.relay.forgotten, ['box-b'])
+      const ids = (await projects(ctx)).map((p) => p.id)
+      assert.ok(ids.includes('cloud-box-d') && !ids.includes('cloud-box-b'))
+    } finally { await teardown(ctx) }
+  })
+
+  test('a source silent for more than 24 hours is removed with its mirror while the hub runs', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await putState(ctx)).status, 200)
+      ctx.clock.t += 23 * 3600_000
+      ctx.ingest!.sweep()
+      assert.ok(fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      ctx.clock.t += 2 * 3600_000
+      ctx.ingest!.sweep()
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.ok(!(await projects(ctx)).some((p) => p.id === PID))
+      assert.deepEqual(ctx.relay.forgotten, [SRC])
+    } finally { await teardown(ctx) }
+  })
+
+  test('when every cloud session on the graph is live and the cap is reached: 503 (not 200), and the seq is not used up', async () => {
+    const ctx = await setup()
+    try {
+      ctx.relay.room = false
+      const r = await events(ctx, 7)
+      assert.equal(r.status, 503)
+      assert.match(JSON.parse(r.body).error, /capacity/)
+      assert.ok(Number(r.headers['retry-after']) > 0)
+      assert.equal(ctx.relay.applied.length, 0)
+      ctx.relay.room = true
+      assert.deepEqual(JSON.parse((await events(ctx, 7)).body), { ok: true, seq: 7, applied: 2, ignored: 0 })
+    } finally { await teardown(ctx) }
+  })
+})
+
+// ─── Limits: JSON depth, event size, outbox polls; hub epoch ────────────────
+
+describe('limits and epoch', () => {
+  let ctx: Ctx
+  before(async () => { ctx = await setup({ maxOutboxWaiters: 1 }) })
+  after(async () => { await teardown(ctx) })
+
+  const deep = (n: number) => '{"a":'.repeat(n) + '1' + '}'.repeat(n)
+  // body (1) > messages (2) > message (3) > event (4) > payload (5) > n more levels
+  const deepBody = (n: number, seq: number) => `{"sourceId":"${SRC}","project":{"id":"my-repo","name":"My Repo"},"seq":${seq},"messages":[` +
+    `{"type":"agent-event","event":{"sessionId":"${S1}","type":"tool_call_start","time":1,"payload":{"deep":${deep(n)}}}}]}`
+
+  test('JSON nested deeper than 32 levels is refused with 400 before anything is applied', async () => {
+    const before = ctx.relay.applied.length
+    for (const n of [20000, 40, MAX_JSON_DEPTH - 4]) {
+      const r = await send(ctx, 'POST', '/api/ingest/v1/events', deepBody(n, 1))
+      assert.equal(r.status, 400, `depth ${n}`)
+      assert.match(JSON.parse(r.body).error, /nested deeper than 32/)
+    }
+    const st = await send(ctx, 'PUT', '/api/ingest/v1/state', `{"sourceId":"${SRC}","project":{"id":"p","name":"P"},"state":{"x":${deep(40)}},"watcher":null}`)
+    assert.equal(st.status, 400)
+    assert.equal(ctx.relay.applied.length, before)
+    assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', deepBody(MAX_JSON_DEPTH - 5, 2))).status, 200, 'exactly 32 levels is accepted')
+    assert.equal(jsonTooDeep('{"a":"{{{{[[[["}', 1), false, 'brackets inside strings do not count')
+    assert.equal(jsonTooDeep('{"a":"\\"{{"}', 1), false, 'escaped quotes')
+    assert.equal(jsonTooDeep('[[1]]', 1), true)
+  })
+
+  test('an event larger than 64 KB is refused with a clear 400 (the whole batch, nothing applied)', async () => {
+    const before = ctx.relay.applied.length
+    const big = { time: 1, type: 'tool_call_start', payload: { pad: 'x'.repeat(MAX_EVENT_BYTES) }, sessionId: S1 }
+    const small = { time: 1, type: 'tool_call_end', payload: {}, sessionId: S1 }
+    const r = await events(ctx, 50, [{ type: 'agent-event-batch', events: [small, big] }])
+    assert.equal(r.status, 400)
+    assert.match(JSON.parse(r.body).error, /events\[1\] is larger than 65536 bytes/)
+    assert.equal(ctx.relay.applied.length, before)
+  })
+
+  test('above the long-poll cap an outbox poll gets 503 with Retry-After at once, not an empty 200', async () => {
+    assert.equal((await putState(ctx)).status, 200)
+    const cur = JSON.parse((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`)).body).cursor as string
+    const first = send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&after=${cur}&wait=2`)
+    await new Promise((r) => setTimeout(r, 150))
+    const t0 = Date.now()
+    const second = await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&after=${cur}&wait=2`)
+    assert.equal(second.status, 503)
+    assert.equal(second.headers['retry-after'], '5')
+    assert.ok(Date.now() - t0 < 1000)
+    assert.equal((await first).status, 200)
+    // A poll that does not wait is still answered at once.
+    assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}&wait=0`)).status, 200)
+  })
+
+  test('every authenticated ingest response carries the hub epoch; an events post naming another epoch gets 409 and nothing applied', async () => {
+    const r = await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`)
+    const epoch = r.headers[EPOCH_HEADER]
+    assert.match(String(epoch), /^[0-9a-f]{8}$/)
+    assert.equal(epoch, ctx.ingest!.epoch)
+    assert.equal((await send(ctx, 'GET', '/api/ingest/v9')).headers[EPOCH_HEADER], epoch, 'also on errors')
+    assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`, undefined, {})).headers[EPOCH_HEADER], undefined, 'not without the token')
+    const before = ctx.relay.applied.length
+    const old = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 100, messages: [eventMsg()] }, { ...auth(), [EPOCH_HEADER]: '00000000' })
+    assert.equal(old.status, 409)
+    assert.match(JSON.parse(old.body).error, /restarted/)
+    assert.equal(ctx.relay.applied.length, before)
+    const ok = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 100, messages: [eventMsg()] }, { ...auth(), [EPOCH_HEADER]: String(epoch) })
+    assert.equal(ok.status, 200, ok.body)
+    assert.equal(ctx.relay.applied.length, before + 1)
   })
 })

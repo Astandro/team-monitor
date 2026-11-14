@@ -10,8 +10,8 @@ import { strict as assert } from 'node:assert'
 import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
-import { ACKED_FILE, cloudDir, Forwarder, ForwarderOptions, PLACEHOLDER_TOKEN, STATUS_FILE } from './cloud-forwarder'
-import { IngestError, parseEventsBody, parseStateBody } from './ingest'
+import { ACKED_FILE, cloudDir, Forwarder, ForwarderOptions, PLACEHOLDER_TOKEN, SOURCE_KEY_FILE, STATUS_FILE } from './cloud-forwarder'
+import { EPOCH_HEADER, IngestError, MAX_EVENT_BYTES, parseEventsBody, parseStateBody, SOURCE_KEY_HEADER } from './ingest'
 import { fakeConnectProxy, listen, makeProject, makeTmpDir, removeTmpDir, sampleState, waitFor, writeState } from './test-helpers'
 
 const root = makeTmpDir()
@@ -54,6 +54,14 @@ async function fakeMonitor() {
         send({ type: 'agent-event', event: ev })
       }
     },
+    /** One event with this payload (buffered and sent live like the others). */
+    emitPayload(sid: string, payload: Record<string, unknown>) {
+      const ev = { time: ++t / 10, type: 'tool_call_start', payload: { ...payload, n: t }, sessionId: sid }
+      const b = buffer.get(sid) ?? []
+      b.push(ev)
+      buffer.set(sid, b)
+      send({ type: 'agent-event', event: ev })
+    },
     /** As after a monitor restart: same sessions, history rebuilt with other times. */
     rebuild() {
       for (const [sid, evs] of buffer) buffer.set(sid, evs.map((e) => ({ ...e, time: (e.time as number) + 1000 })))
@@ -66,14 +74,25 @@ async function fakeMonitor() {
 // ─── Fake hub (contract checks from ingest.ts) ─────────────────────────────
 
 type HubMode = 'ok' | 'down503' | 'refuse400' | 'dropAfterApply' | 'unauthorized'
+type OutboxMode = 'wait' | 'emptyAtOnce' | 'busy503'
 
+/**
+ * A hub like ingest.ts: shape checks with its parser, seq per source, an epoch per "start" in EPOCH_HEADER (an events
+ * post naming another epoch gets 409), and restart() (new epoch, everything forgotten).
+ */
 async function fakeHub(token?: string) {
   const events: Array<Record<string, unknown>> = []
   const seqs: number[] = []
   const auths: string[] = []
+  const keys: string[] = []
   const states: Array<{ state: unknown; watcher: unknown }> = []
+  const started: Array<Record<string, unknown>> = []
   let lastSeq = -1
   let mode: HubMode = 'ok'
+  let outboxMode: OutboxMode = 'wait'
+  let outboxPolls = 0
+  let ignoreNext = 0
+  let epoch = 'e0000001'
   let outbox: Array<{ path: string; content: string }> = []
   let lifecycle = 0
   const srv = await listen((req, res) => {
@@ -81,13 +100,19 @@ async function fakeHub(token?: string) {
     req.on('data', (c: Buffer) => chunks.push(c))
     req.on('end', () => {
       auths.push(String(req.headers.authorization))
-      const reply = (status: number, body: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+      keys.push(String(req.headers[SOURCE_KEY_HEADER]))
+      const reply = (status: number, body: unknown, extra: Record<string, string> = {}) => {
+        res.writeHead(status, { 'Content-Type': 'application/json', [EPOCH_HEADER]: epoch, ...extra })
+        res.end(JSON.stringify(body))
+      }
       if (token && req.headers.authorization !== `Bearer ${token}`) return reply(401, { ok: false, error: 'ingest token required' })
       if (mode === 'unauthorized') return reply(401, { ok: false, error: 'ingest token required' })
       if (mode === 'down503') return reply(503, { ok: false, error: 'down' })
       const u = new URL(req.url ?? '/', 'http://x')
       if (u.pathname === '/api/ingest/v1/events') {
         if (mode === 'refuse400') { mode = 'ok'; return reply(400, { ok: false, error: 'messages[0] is bad' }) }
+        const named = req.headers[EPOCH_HEADER]
+        if (typeof named === 'string' && named !== epoch) return reply(409, { ok: false, error: 'the hub restarted' })
         let input
         try { input = parseEventsBody(JSON.parse(Buffer.concat(chunks).toString())) } catch (e) {
           return reply(400, { ok: false, error: e instanceof IngestError ? e.message : 'bad json' })
@@ -98,10 +123,15 @@ async function fakeHub(token?: string) {
         for (const m of input.messages) {
           if (m.type === 'agent-event') events.push({ ...m.event })
           else if (m.type === 'agent-event-batch') events.push(...m.events.map((e) => ({ ...e })))
-          else lifecycle++
+          else {
+            lifecycle++
+            if (m.type === 'session-started') started.push({ ...m.session })
+          }
         }
         if (mode === 'dropAfterApply') { mode = 'ok'; req.socket.destroy(); return }
-        return reply(200, { ok: true, seq: input.seq })
+        const ignored = ignoreNext
+        ignoreNext = 0
+        return reply(200, { ok: true, seq: input.seq, applied: input.messages.length - ignored, ignored })
       }
       if (u.pathname === '/api/ingest/v1/state') {
         const s = parseStateBody(JSON.parse(Buffer.concat(chunks).toString()))
@@ -109,18 +139,35 @@ async function fakeHub(token?: string) {
         return reply(200, { ok: true })
       }
       if (u.pathname === '/api/ingest/v1/outbox') {
+        outboxPolls++
+        if (outboxMode === 'busy503') return reply(503, { ok: false, error: 'too many outbox polls open; retry later' }, { 'Retry-After': '1' })
         const after = Number((u.searchParams.get('after') ?? 'x-0').split('-')[1])
         const files = outbox.slice(after)
-        if (!files.length) { setTimeout(() => reply(200, { cursor: `x-${after}`, files: [] }), 100); return }
+        if (!files.length) {
+          if (outboxMode === 'emptyAtOnce') return reply(200, { cursor: `x-${after}`, files: [] })
+          setTimeout(() => reply(200, { cursor: `x-${after}`, files: [] }), 100)
+          return
+        }
         return reply(200, { cursor: `x-${outbox.length}`, files })
       }
       reply(404, { ok: false, error: 'not found' })
     })
   })
   return {
-    port: srv.port, events, seqs, auths, states,
+    port: srv.port, events, seqs, auths, keys, states, started,
     get lifecycle() { return lifecycle },
+    get outboxPolls() { return outboxPolls },
     set mode(m: HubMode) { mode = m },
+    set outboxMode(m: OutboxMode) { outboxMode = m },
+    /** The next accepted post answers `ignored: n`. */
+    ignore(n: number) { ignoreNext = n },
+    /** As a hub process restart: a new epoch, and the events, sessions and seq it had are gone. */
+    restart() {
+      epoch = `e${String(Number(epoch.slice(1)) + 1).padStart(7, '0')}`
+      events.length = 0
+      started.length = 0
+      lastSeq = -1
+    },
     setOutbox(files: Array<{ path: string; content: string }>) { outbox = files },
     close: srv.close,
   }
@@ -375,5 +422,149 @@ test('with HTTP_PROXY set every hub request goes through the CONNECT proxy; /eve
     assert.ok(proxy.targets.every((t) => t === `127.0.0.1:${hub.port}`), 'only the hub is tunnelled, not the monitor')
   } finally {
     await f.stop(); await proxy.close(); await mon.close(); await hub.close()
+  }
+})
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+test('every hub request carries the source key: 64 hex made once at the first start (0600), the same after a restart, never logged', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make, logs, home } = setup(mon.port, hub.port)
+  mon.startSession(S1)
+  mon.emit(S1, 2)
+  let f = make()
+  f.start()
+  try {
+    await waitFor(() => hub.events.length === 2 && hub.states.length >= 1 && hub.outboxPolls >= 1)
+    const keyFile = path.join(cloudDir(home), SOURCE_KEY_FILE)
+    const key = fs.readFileSync(keyFile, 'utf-8').trim()
+    assert.match(key, /^[0-9a-f]{64}$/)
+    assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600)
+    assert.ok(hub.keys.length >= 3 && hub.keys.every((k) => k === key), 'events, state and outbox all carry it')
+    await f.stop()
+    f = make()
+    f.start()
+    mon.emit(S1, 1)
+    await waitFor(() => hub.events.length === 3)
+    assert.ok(hub.keys.every((k) => k === key), 'the same key after a restart')
+    assert.ok(!logs.join('\n').includes(key), 'never logged')
+    assert.ok(!fs.readFileSync(path.join(cloudDir(home), STATUS_FILE), 'utf-8').includes(key))
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
+  }
+})
+
+test('a hub restart (new epoch): the session list and the whole history are sent again, once, without any new event', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make, logs } = setup(mon.port, hub.port)
+  mon.startSession(S1)
+  mon.emit(S1, 4)
+  mon.startSession(S2)
+  mon.emit(S2, 2)
+  const f = make()
+  f.start()
+  try {
+    await waitFor(() => hub.events.length === 6)
+    hub.restart() // the container stays idle: the next outbox / state reply shows the new epoch
+    await waitFor(() => hub.events.length === 6 && hub.started.some((s) => s.id === S1) && hub.started.some((s) => s.id === S2), 5000)
+    await sleep(400)
+    assert.deepEqual(ids(hub.events), [1, 2, 3, 4, 5, 6], 'the history, in order, once')
+    assert.equal(hub.started.find((s) => s.id === S1)?.label, 'proj', 'with its label')
+    assert.equal(f.status().hubRestarts, 1)
+    assert.ok(logs.some((l) => l.includes('the hub restarted')))
+    mon.emit(S1, 1)
+    await waitFor(() => hub.events.length === 7)
+    await sleep(300)
+    assert.deepEqual(ids(hub.events), [1, 2, 3, 4, 5, 6, 7])
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
+  }
+})
+
+test('live events right after a hub restart (a post with the old epoch gets 409): nothing applied out of order or twice', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make } = setup(mon.port, hub.port)
+  mon.startSession(S1)
+  mon.emit(S1, 3)
+  const f = make()
+  f.start()
+  try {
+    await waitFor(() => hub.events.length === 3)
+    hub.restart()
+    mon.emit(S1, 2) // live events go out with the old epoch: 409, then the replay goes in order
+    await waitFor(() => hub.events.length === 5, 5000)
+    await sleep(400)
+    assert.deepEqual(ids(hub.events), [1, 2, 3, 4, 5])
+    assert.ok(hub.started.some((s) => s.id === S1))
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
+  }
+})
+
+test('messages the hub accepted but ignored are logged and counted in the status file', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make, logs, home } = setup(mon.port, hub.port)
+  hub.ignore(2)
+  mon.startSession(S1)
+  mon.emit(S1, 1)
+  const f = make()
+  f.start()
+  try {
+    await waitFor(() => logs.some((l) => l.includes('the hub ignored 2 message(s)')))
+    await waitFor(() => {
+      try { return JSON.parse(fs.readFileSync(path.join(cloudDir(home), STATUS_FILE), 'utf-8')).ignoredByHub === 2 } catch { return false }
+    })
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
+  }
+})
+
+test('an event larger than the hub takes, or nested too deeply, is dropped on its own; the rest of the batch arrives', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make, logs } = setup(mon.port, hub.port)
+  mon.startSession(S1)
+  mon.emit(S1, 1)
+  mon.emitPayload(S1, { pad: 'x'.repeat(MAX_EVENT_BYTES) })
+  let nested: Record<string, unknown> = {}
+  for (let i = 0; i < 40; i++) nested = { a: nested }
+  mon.emitPayload(S1, { nested })
+  mon.emit(S1, 1)
+  const f = make()
+  f.start()
+  try {
+    await waitFor(() => hub.events.length === 2, 5000)
+    await sleep(300)
+    assert.deepEqual(ids(hub.events), [1, 4])
+    assert.equal(logs.filter((l) => l.includes('dropped one tool_call_start event')).length, 2)
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
+  }
+})
+
+test('outbox: an empty reply that did not wait is never followed by an immediate poll; 503 with Retry-After is honoured', async () => {
+  const mon = await fakeMonitor()
+  const hub = await fakeHub()
+  const { make, logs } = setup(mon.port, hub.port)
+  hub.outboxMode = 'emptyAtOnce'
+  let f = make({ backoffMinMs: 250 })
+  f.start()
+  try {
+    await sleep(1000)
+    assert.ok(hub.outboxPolls <= 6, `${hub.outboxPolls} polls in 1 s`)
+    await f.stop()
+    hub.outboxMode = 'busy503'
+    const base = hub.outboxPolls
+    f = make({ backoffMinMs: 40, backoffMaxMs: 5000 })
+    f.start()
+    await sleep(1500)
+    assert.ok(hub.outboxPolls - base <= 3, `${hub.outboxPolls - base} polls in 1.5 s with Retry-After: 1`)
+    assert.ok(logs.some((l) => l.includes('HTTP 503 (too many outbox polls open; retry later)')))
+  } finally {
+    await f.stop(); await mon.close(); await hub.close()
   }
 })

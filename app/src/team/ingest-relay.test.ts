@@ -100,7 +100,7 @@ test('cloud sessions on /events: replay for late clients, seq dedupe, stale on e
 
   const post = (seq: number, messages: unknown[], sourceId = SRC) => request(port, {
     method: 'POST', path: '/api/ingest/v1/events',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${TOKEN}`, 'X-Team-Monitor-Source-Key': sourceId === SRC ? 'a1'.repeat(32) : 'b2'.repeat(32), 'Content-Type': 'application/json' },
     body: JSON.stringify({ sourceId, project: { id: 'repo', name: 'Repo' }, seq, messages }),
   })
   const ev = (type: string, payload: Record<string, unknown>, sessionId = S) => ({ time: 1, type, payload, sessionId })

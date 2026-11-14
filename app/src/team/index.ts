@@ -18,8 +18,9 @@ export interface TeamCliOptions {
   tailscaleBin?: string
   /** Hub intake for cloud sources (`--ingest`); off by default. */
   ingest?: boolean
-  /** Started by `cloud start` (`--cloud`): with CLAUDE_CODE_REMOTE=true any Host header is accepted (still loopback
-   *  only), so the cloud app's preview pane can load the UI. Never with --remote or --ingest. */
+  /** Started by `cloud start` (`--cloud`): with CLAUDE_CODE_REMOTE=true any Host header is accepted for GET/HEAD
+   *  (still loopback only), so the cloud app's preview pane can show the UI; state-changing requests still need a
+   *  loopback Host (the preview is view-only). Never with --remote or --ingest. */
   cloud?: boolean
 }
 
@@ -62,7 +63,7 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
   const home = teamHome(env)
   ensureHome(home)
   const anyHost = acceptsAnyHost(opts, env)
-  if (anyHost) log('Cloud mode: any Host header accepted (listening on loopback only).')
+  if (anyHost) log('Cloud mode: any Host header accepted for reads (GET/HEAD); state-changing requests need a loopback Host (listening on loopback only).')
 
   let remote: RemoteAccess | null = null
   let listenHost = '127.0.0.1'
@@ -71,9 +72,9 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
     const run = deps.runTailscale ?? makeTailscaleRunner(opts.tailscaleBin || defaultTailscaleBin(env))
     const config = resolveRemoteConfig({ bind: opts.bind, hostAllow: opts.hostAllow, run, warn })
     const tok = loadOrCreateToken(home)
+    // Never printed: under the service stdout goes into the log file. The file is the only place it is kept.
     if (tok.created) {
-      log(`Remote access token (shown only this once, saved in ${tok.file}):\n\n  ${tok.token}\n`)
-      log('Open /login on your phone and paste it. To see it again later, read that file on this machine.\n')
+      log(`Remote access token created in ${tok.file} (0600). Read it from that file on this machine, open /login on your phone and paste it.\n`)
     }
     const sessions = new SessionStore(home, tok.token)
     if (sessions.droppedForNewToken > 0) {
@@ -95,13 +96,13 @@ export function setupTeam(opts: TeamCliOptions, deps: SetupDeps = {}): TeamSetup
   let ingest: IngestService | null = null
   if (opts.ingest) {
     const tok = loadOrCreateToken(home, INGEST_TOKEN_FILE)
+    // Never printed: only where it is.
     if (tok.created) {
-      log(`Ingest token for cloud sources (shown only this once, saved in ${tok.file}):\n\n  ${tok.token}\n`)
-      log('Save it as the network secret of the cloud environment. To see it again later, read that file on this machine.\n')
+      log(`Ingest token for cloud sources created in ${tok.file} (0600). Save its content as the network secret of the cloud environment.\n`)
     }
     const service = new IngestService({ home, token: tok.token, team, log: warn })
     const { removed, restored } = service.start()
-    if (removed.length) log(`Removed ${removed.length} cloud mirror(s) idle for more than 7 days: ${removed.join(', ')}`)
+    if (removed.length) log(`Removed ${removed.length} cloud mirror(s) idle for more than 24 hours (or beyond the source cap): ${removed.join(', ')}`)
     if (restored.length) log(`Cloud sources (stale until they report): ${restored.join(', ')}`)
     log('Hub intake on: /api/ingest/v1/* (ingest token required).')
     team.onDispose(() => service.dispose())
@@ -129,6 +130,6 @@ export function listenErrorMessage(err: NodeJS.ErrnoException, host: string, por
   else if (err.code === 'EADDRNOTAVAIL') msg = `Cannot start: address ${host} is not on this machine. Is Tailscale up?`
   else if (err.code === 'EACCES') msg = `Cannot start: no permission to listen on ${host}:${port}.`
   else msg = `Cannot start: cannot listen on ${host}:${port} (${err.code ?? err.message}).`
-  if (tokenFile) msg += `\nThe new access token is kept in ${tokenFile}; it is not printed again.`
+  if (tokenFile) msg += `\nThe new access token is kept in ${tokenFile} (it is never printed).`
   return msg
 }

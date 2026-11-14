@@ -64,8 +64,27 @@ function log(...args: unknown[]) {
 
 const sseClients = new Set<http.ServerResponse>()
 
+/** JSON text of `data`, or null when it cannot be serialised (cycle, BigInt, nesting too deep): never thrown. */
+function serialize(data: unknown): string | null {
+  try {
+    const text = JSON.stringify(data)
+    return typeof text === 'string' ? text : null
+  } catch (e) {
+    log('[relay] message not serialisable, left out:', (e as Error)?.message)
+    return null
+  }
+}
+
+/** Send one message to one client. A message that cannot be serialised is skipped; only a failed write drops the
+ *  client. */
 function sendSSE(res: http.ServerResponse, data: unknown) {
-  try { res.write(`data: ${JSON.stringify(data)}\n\n`) } catch {
+  const text = serialize(data)
+  if (text === null) return
+  writeSSE(res, text)
+}
+
+function writeSSE(res: http.ServerResponse, text: string) {
+  try { res.write(`data: ${text}\n\n`) } catch {
     sseClients.delete(res)
   }
 }
@@ -114,22 +133,42 @@ function broadcastEvent(event: AgentEvent) {
   // replay has them too.
   if (finishedAt !== undefined) event = graphAgents.annotateCompletion(event, finishedAt, autoOffboardMs)
 
-  if (event.sessionId) {
-    let buf = eventBuffer.get(event.sessionId) || []
-    buf.push(event)
-    if (buf.length > MAX_EVENT_BUFFER) {
-      buf = buf.slice(buf.length - MAX_EVENT_BUFFER)
-    }
-    eventBuffer.set(event.sessionId, buf)
-  }
+  // Serialised before it is buffered: an event that cannot be serialised never enters a buffer (a buffered one
+  // would break the replay of every later client).
+  const data = serialize({ type: 'agent-event', event })
+  if (data === null) return
+
+  if (event.sessionId) bufferEvent(event.sessionId, event, Buffer.byteLength(data))
 
   const { send, hide } = graphAgents.admit(event, offboardLookup, now, finishedAt)
-  if (send) broadcast(JSON.stringify({ type: 'agent-event', event }))
+  if (send) broadcast(data)
   if (hide.length && event.sessionId) announceOffboarded(event.sessionId, hide)
   if ((event.type === 'agent_spawn' || event.type === 'agent_complete') && event.payload?.isMain !== true
     && event.payload?.name !== ORCHESTRATOR_NAME) {
     for (const fn of [...agentsChangedListeners]) { try { fn() } catch (e) { log('[relay] agents listener failed:', e) } }
   }
+}
+
+/**
+ * Buffer one event for the replay. Every buffer keeps at most MAX_EVENT_BUFFER events; a cloud session's buffer is
+ * also capped in bytes, per session and per source (oldest events dropped first).
+ */
+function bufferEvent(sessionId: string, event: AgentEvent, bytes: number) {
+  let buf = eventBuffer.get(sessionId) || []
+  buf.push(event)
+  const cloud = cloudSessions.get(sessionId)
+  const sized = cloud ? cloudBufferOf(sessionId) : null
+  if (sized) {
+    sized.sizes.push({ bytes, n: ++cloudBufferSeq })
+    sized.total += bytes
+  }
+  if (buf.length > MAX_EVENT_BUFFER) {
+    const cut = buf.length - MAX_EVENT_BUFFER
+    buf = buf.slice(cut)
+    if (sized) for (const s of sized.sizes.splice(0, cut)) sized.total -= s.bytes
+  }
+  eventBuffer.set(sessionId, buf)
+  if (cloud) trimCloudBuffers(cloud)
 }
 
 /** Auto offboarding (spec ui-cleanup item 6): the interval, and who hears about sub-agent spawns and completions. */
@@ -451,11 +490,113 @@ export type CloudMessage =
   | { type: 'agent-event'; event: AgentEvent & { sessionId: string } }
   | { type: 'agent-event-batch'; events: Array<AgentEvent & { sessionId: string }> }
 
-/** Upper bound on cloud sessions kept in memory (each keeps up to MAX_EVENT_BUFFER events). */
+/** Upper bound on cloud sessions kept in memory (each keeps up to MAX_EVENT_BUFFER events). At the cap, ended
+ *  sessions and sessions of stale sources are evicted to make room (makeCloudRoom). */
 export const MAX_CLOUD_SESSIONS = 200
+/** Bytes of buffered events (as sent on /events) kept per cloud session and per source; oldest dropped first. */
+export const MAX_CLOUD_SESSION_BUFFER_BYTES = 4 * 1024 * 1024
+export const MAX_CLOUD_SOURCE_BUFFER_BYTES = 16 * 1024 * 1024
+/** Bytes of cloud events one new /events client gets in its replay (the newest first, per session). */
+export const MAX_CLOUD_REPLAY_BYTES = 32 * 1024 * 1024
+
+export interface CloudLimits {
+  maxSessions: number
+  sessionBufferBytes: number
+  sourceBufferBytes: number
+  replayBytes: number
+}
+
+const DEFAULT_CLOUD_LIMITS: CloudLimits = {
+  maxSessions: MAX_CLOUD_SESSIONS,
+  sessionBufferBytes: MAX_CLOUD_SESSION_BUFFER_BYTES,
+  sourceBufferBytes: MAX_CLOUD_SOURCE_BUFFER_BYTES,
+  replayBytes: MAX_CLOUD_REPLAY_BYTES,
+}
+let cloudLimits: CloudLimits = { ...DEFAULT_CLOUD_LIMITS }
 
 const cloudSessions = new Map<string, CloudSession>()
 const staleSources = new Set<string>()
+/** When each stale source became stale (eviction order: stale longest first). */
+const staleSince = new Map<string, number>()
+
+/** Sizes of a cloud session's buffered events (parallel to eventBuffer), with a global arrival number each. */
+interface CloudBuffer { sizes: Array<{ bytes: number; n: number }>; total: number }
+const cloudBuffers = new Map<string, CloudBuffer>()
+let cloudBufferSeq = 0
+
+function cloudBufferOf(sessionId: string): CloudBuffer {
+  let b = cloudBuffers.get(sessionId)
+  if (!b) { b = { sizes: [], total: 0 }; cloudBuffers.set(sessionId, b) }
+  return b
+}
+
+/** Drop the oldest buffered event of a cloud session. */
+function dropOldestCloudEvent(sessionId: string): void {
+  const buf = eventBuffer.get(sessionId)
+  const sized = cloudBuffers.get(sessionId)
+  if (!buf || !sized || !sized.sizes.length) return
+  buf.shift()
+  sized.total -= sized.sizes.shift()!.bytes
+}
+
+/** Keep a cloud session's buffer, and its source's buffers together, under their byte caps (oldest first). */
+function trimCloudBuffers(s: CloudSession): void {
+  const own = cloudBuffers.get(s.id)
+  while (own && own.total > cloudLimits.sessionBufferBytes && own.sizes.length) dropOldestCloudEvent(s.id)
+  const ids = [...cloudSessions.values()].filter((c) => c.sourceId === s.sourceId).map((c) => c.id)
+  let total = 0
+  for (const id of ids) total += cloudBuffers.get(id)?.total ?? 0
+  while (total > cloudLimits.sourceBufferBytes) {
+    let oldest: string | null = null
+    let oldestN = Infinity
+    for (const id of ids) {
+      const head = cloudBuffers.get(id)?.sizes[0]
+      if (head && head.n < oldestN) { oldestN = head.n; oldest = id }
+    }
+    if (oldest === null) break
+    const bytes = cloudBuffers.get(oldest)!.sizes[0].bytes
+    dropOldestCloudEvent(oldest)
+    total -= bytes
+  }
+}
+
+/** Remove a cloud session with its buffer and agents. Viewers are told it ended if it was still active. */
+function evictCloudSession(s: CloudSession): void {
+  cloudSessions.delete(s.id)
+  eventBuffer.delete(s.id)
+  cloudBuffers.delete(s.id)
+  graphAgents.forget(s.id)
+  if (s.status === 'active') broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
+  log(`[cloud] evicted session ${s.id.slice(0, SESSION_ID_DISPLAY)} of ${s.sourceId}`)
+}
+
+/**
+ * Room for the new cloud sessions among `sessionIds` (ids not known yet). At the cap, sessions are evicted in this
+ * order: ended sessions of stale sources, other sessions of stale sources (stale longest first), then ended sessions
+ * of live sources (least recently active first). An active session of a live source is never evicted. False when
+ * there is not enough room even so (nothing is evicted then).
+ */
+function makeCloudRoom(sessionIds: string[]): boolean {
+  const fresh = new Set(sessionIds.filter((id) => !sessions.has(id) && !cloudSessions.has(id)))
+  const need = cloudSessions.size + fresh.size - cloudLimits.maxSessions
+  if (need <= 0) return true
+  const rank = (s: CloudSession) => (staleSources.has(s.sourceId) ? (s.status === 'completed' ? 0 : 1) : 2)
+  const candidates = [...cloudSessions.values()]
+    .filter((s) => s.status === 'completed' || staleSources.has(s.sourceId))
+    .sort((a, b) => rank(a) - rank(b)
+      || (staleSince.get(a.sourceId) ?? 0) - (staleSince.get(b.sourceId) ?? 0)
+      || a.lastActivityTime - b.lastActivityTime)
+  if (candidates.length < need) return false
+  for (const s of candidates.slice(0, need)) evictCloudSession(s)
+  return true
+}
+
+/** Forget every session of a source (the hub removed the source). */
+function forgetCloudSource(sourceId: string): void {
+  for (const s of [...cloudSessions.values()]) if (s.sourceId === sourceId) evictCloudSession(s)
+  staleSources.delete(sourceId)
+  staleSince.delete(sourceId)
+}
 
 function cloudView(s: CloudSession): SessionInfo {
   return {
@@ -480,7 +621,7 @@ function claimCloudSession(sessionId: string, sourceId: string, projectId: strin
   if (sessions.has(sessionId)) return null
   const existing = cloudSessions.get(sessionId)
   if (existing) return existing.sourceId === sourceId ? existing : null
-  if (cloudSessions.size >= MAX_CLOUD_SESSIONS) return null
+  if (cloudSessions.size >= cloudLimits.maxSessions) return null
   const s: CloudSession = {
     id: sessionId, sourceId, projectId, label: `Session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`,
     status: 'active', startTime: now, lastActivityTime: now,
@@ -542,8 +683,8 @@ function applyCloudMessages(sourceId: string, projectId: string, messages: Cloud
 
 function setCloudSourceStale(sourceId: string, stale: boolean): void {
   if (staleSources.has(sourceId) === stale) return
-  if (stale) staleSources.add(sourceId)
-  else staleSources.delete(sourceId)
+  if (stale) { staleSources.add(sourceId); staleSince.set(sourceId, Date.now()) }
+  else { staleSources.delete(sourceId); staleSince.delete(sourceId) }
   for (const s of cloudSessions.values()) if (s.sourceId === sourceId) broadcastCloudUpdated(s)
 }
 
@@ -595,6 +736,11 @@ export interface CloudIntake {
   setStale(sourceId: string, stale: boolean): void
   /** The source a cloud session came from, or null (local or unknown session). */
   sourceOf(sessionId: string): string | null
+  /** Make room for the sessions among `sessionIds` that are new (evicting ended or stale ones at the cap). False
+   *  when every session is live and there is no room: the caller refuses the request. */
+  makeRoom(sessionIds: string[]): boolean
+  /** Forget every session (and buffer) of a source the hub removed. */
+  forgetSource(sourceId: string): void
   /** Tell open graph streams that GET /api/team/projects changed (`projects-changed`). */
   announceProjectsChanged(): void
 }
@@ -617,6 +763,8 @@ export interface RelayOptions {
   /** Auto offboard interval (spec ui-cleanup item 6): a sub-agent's `agent_complete` then carries `autoOffboardAt`.
    *  The offboarding itself is done by the app's AutoOffboarder through `graph`. */
   autoOffboardMinutes?: number
+  /** Hub intake limits (defaults: MAX_CLOUD_* above); smaller values for tests. */
+  cloudLimits?: Partial<CloudLimits>
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -638,6 +786,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   offboardLookup = options.offboarded ?? NO_OFFBOARDING
   autoOffboardMs = typeof options.autoOffboardMinutes === 'number' && options.autoOffboardMinutes > 0
     ? options.autoOffboardMinutes * 60_000 : undefined
+  cloudLimits = { ...DEFAULT_CLOUD_LIMITS, ...options.cloudLimits }
 
   const mode = resolveRuntimeMode(options.runtime)
   const wantClaude = mode === 'claude' || mode === 'auto'
@@ -656,7 +805,9 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
     hookServer.onEvent((event: AgentEvent) => {
       // Hook events are not buffered or observed; they are only dropped when they are about a hidden agent.
-      if (graphAgents.isVisible(event, offboardLookup)) broadcast(JSON.stringify({ type: 'agent-event', event }))
+      if (!graphAgents.isVisible(event, offboardLookup)) return
+      const data = serialize({ type: 'agent-event', event })
+      if (data !== null) broadcast(data)
     })
 
     writeDiscoveryFile(hookPort, workspace)
@@ -757,12 +908,32 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         if (aActive !== bActive) return aActive - bActive
         return a.lastActivityTime - b.lastActivityTime
       })
-      for (const s of sorted) {
+      // Each event is serialised on its own: one that cannot be serialised is left out, the client stays. Cloud
+      // sessions share a byte budget per client, given to the most recent sessions first (newest events of each).
+      const texts = new Map<string, string[]>()
+      let cloudBudget = cloudLimits.replayBytes
+      for (const s of [...sorted].reverse()) {
         const buffered = eventBuffer.get(s.id)
-        if (buffered) {
-          // Offboarded agents that are not running are left out, so a reload or restart does not bring them back.
-          sendSSE(res, { type: 'agent-event-batch', events: graphAgents.visibleEvents(buffered, offboardLookup) })
+        if (!buffered) continue
+        // Offboarded agents that are not running are left out, so a reload or restart does not bring them back.
+        const visible = graphAgents.visibleEvents(buffered, offboardLookup)
+        const out: string[] = []
+        const isCloud = cloudSessions.has(s.id)
+        for (let i = visible.length - 1; i >= 0; i--) {
+          const text = serialize(visible[i])
+          if (text === null) continue
+          if (isCloud) {
+            const bytes = Buffer.byteLength(text) + 1
+            if (bytes > cloudBudget) break
+            cloudBudget -= bytes
+          }
+          out.push(text)
         }
+        texts.set(s.id, out.reverse())
+      }
+      for (const s of sorted) {
+        const out = texts.get(s.id)
+        if (out) writeSSE(res, `{"type":"agent-event-batch","events":[${out.join(',')}]}`)
       }
     },
 
@@ -781,6 +952,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       apply: applyCloudMessages,
       setStale: setCloudSourceStale,
       sourceOf: (sessionId) => cloudSessions.get(sessionId)?.sourceId ?? null,
+      makeRoom: makeCloudRoom,
+      forgetSource: forgetCloudSource,
       announceProjectsChanged: () => broadcast(JSON.stringify({ type: 'projects-changed' })),
     },
 
