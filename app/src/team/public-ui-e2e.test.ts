@@ -334,7 +334,7 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
     await waitFor(() => streamClosedAt > 0, 3000, 20)
     assert.ok(streamClosedAt - loDone < 1500, `stream closed ${streamClosedAt - loDone} ms after logout-all`)
     // P-01: the health route answers without a session (fixed body), also through Funnel.
-    for (const h of [{ Host: `127.0.0.1:${port}` }, { Host: DNS, 'X-Forwarded-For': '203.0.113.1' }]) {
+    for (const h of [{ Host: `127.0.0.1:${port}` }, { Host: DNS, 'X-Forwarded-For': '203.0.113.1' }] as Array<Record<string, string>>) {
       const hr = await request(port, { path: '/healthz', headers: h })
       assert.deepEqual([hr.status, hr.body], [200, '{"ok":true}'])
     }
