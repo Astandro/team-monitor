@@ -732,7 +732,8 @@ describe('ingest routing on the raw path', () => {
       ]
       for (const c of [ctx, remoteCtx]) {
         for (const p of bad) {
-          for (const headers of [{}, auth(), { Host: 'public.example.ts.net' }, { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' }]) {
+          const variants: Array<Record<string, string>> = [{}, auth(), { Host: 'public.example.ts.net' }, { Host: 'box.example.ts.net', 'X-Forwarded-For': '100.64.0.9' }]
+          for (const headers of variants) {
             const r = await send(c, 'GET', p, undefined, headers)
             assert.equal(r.status, 400, `${p} ${JSON.stringify(headers)}`)
             assert.ok(r.body !== 'fallback' && !r.body.includes('"projects"') && !r.body.includes('<form'), p)
