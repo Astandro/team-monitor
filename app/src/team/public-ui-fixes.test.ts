@@ -477,9 +477,8 @@ describe('P-06: app shell and static assets', () => {
       assert.match(h['Content-Security-Policy'], /(^|; )frame-ancestors 'none'(;|$)/, url)
       assert.match(h['Content-Security-Policy'], /^default-src 'none'; script-src 'self'; /, url)
       assert.equal(h['X-Content-Type-Options'], 'nosniff', url)
-      assert.ok(['no-referrer', 'same-origin'].includes(h['Referrer-Policy']), url)
+      assert.equal(h['Referrer-Policy'], 'no-referrer', url)
     }
-    assert.equal(capture('/index.js').headers['Referrer-Policy'], 'no-referrer')
   })
 
   test('the CSP allows exactly the shell style by hash; no unsafe-inline, no unsafe-eval; the shell has no inline style attribute or script', () => {

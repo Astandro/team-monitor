@@ -61,16 +61,16 @@ export function appCsp(frameable: boolean): string {
  * Protective headers of the app shell and every static asset. `frameable` (cloud mode only: the app's preview pane
  * embeds the page in a frame) drops X-Frame-Options and frame-ancestors and keeps the rest.
  *
- * Referrer-Policy is `same-origin` on the shell, not `no-referrer`: with `no-referrer` on the document, browsers send
- * `Origin: null` on the app's own POSTs (answers, chat, offboarding), which the same-origin check refuses (same reason
- * as on the login page). It still sends no referrer to any other origin. Assets get `no-referrer`.
+ * `Referrer-Policy: no-referrer` also on the shell: the app writes only with fetch() (mode "cors"), which keeps the
+ * real `Origin` header under no-referrer (only a form POST navigation, as on the login page, would send
+ * `Origin: null`; the app has none). Checked in Chromium.
  */
-export function staticHeaders(opts: { frameable?: boolean; document?: boolean } = {}): Record<string, string> {
+export function staticHeaders(opts: { frameable?: boolean } = {}): Record<string, string> {
   return {
     'Content-Security-Policy': appCsp(opts.frameable === true),
     ...(opts.frameable ? {} : { 'X-Frame-Options': 'DENY' }),
     'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': opts.document ? 'same-origin' : 'no-referrer',
+    'Referrer-Policy': 'no-referrer',
   }
 }
 
@@ -94,7 +94,7 @@ export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse,
 
   if (url === '/' || url === '/index.html') {
     // no-cache: the bundle has a fixed name, so browsers must revalidate after every rebuild (phones kept old code).
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...staticHeaders({ frameable: opts.frameable, document: true }) })
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...plain })
     res.end(HTML_SHELL)
     return
   }
