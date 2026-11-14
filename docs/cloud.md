@@ -43,10 +43,13 @@ collected by the hub; the forwarder fetches them (long poll) and writes them int
 5. **Check.** `tm doctor` (with the service installed with `--ingest`) or `tm doctor --ingest [--port <n>]`. It
    checks the token file (0600) and the Funnel mapping. It fails if Funnel makes any other path of the monitor
    public ("the monitor is reachable from the internet", with the host:port, the paths and the command that turns
-   that mapping off), or if the Funnel port also serves other paths. With `--public-ui` (on the service, or
+   that mapping off), or if the Funnel port also serves other paths. It sees background and foreground Funnels
+   (a foreground one: stop its `tailscale funnel` command). A TCP Funnel to the monitor port (`--tcp`,
+   `--tls-terminated-tcp`) always fails: never use one for the monitor. With `--public-ui` (on the service, or
    `tm doctor --ingest --public-ui`) it expects the one mapping of the whole app instead and does not fail because
    the UI is public. Exit 0 = all good. (Doctor looks at Funnel without `--ingest` too: there no path of the
-   monitor may be on Funnel; see `docs/setup.md` step 6.)
+   monitor may be on Funnel; see `docs/setup.md` step 6. How a foreground and a TCP Funnel appear in the status
+   was not verified against a real Tailscale.)
 
 The Funnel host name is `<machine>.<tailnet>.ts.net` (with `:<port>` if you did not use 443). You need it below.
 
@@ -189,8 +192,9 @@ loopback Host. Answer and chat in the hub.
   many were left out). End all sessions with `tm logout-all` (open live views close within about a second); rotate
   the token by deleting the file and restarting (`docs/setup.md`).
 - **Funnel without `--public-ui`.** `tm doctor` fails, in every mode, when any path of the monitor is on a Funnel
-  port it is not set up for (with `--ingest`: anything but `/api/ingest`), and the monitor prints a warning at
-  start. A monitor without `--remote` refuses every request with a forwarding header (403), except the ingest
+  port it is not set up for (with `--ingest`: anything but `/api/ingest`), background or foreground, and the
+  monitor prints a warning at start. A TCP Funnel to the monitor port fails in every mode, `--public-ui` included
+  (raw TCP has no forwarded headers, so internet requests look local). A monitor without `--remote` refuses every request with a forwarding header (403), except the ingest
   routes.
 - **Page headers.** The app page and its files carry a CSP that allows only the app's own script, stylesheet,
   same-origin API and streams, and `data:` images, plus `X-Frame-Options: DENY`, `frame-ancestors 'none'`,

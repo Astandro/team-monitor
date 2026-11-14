@@ -39,12 +39,20 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
      the monitor is not set up for, doctor FAILS with "the monitor is reachable from the internet", the host:port,
      the paths, and the exact command to turn that mapping off (`tailscale funnel --https=<port> off`, or with
      `--set-path <path>` for a sub-path). Set up for means: with `--public-ui` the whole-app mapping is expected;
-     with `--ingest` only, exactly `/api/ingest`; otherwise nothing. A Funnel mapping is never reported as the
-     "tailscale serve maps ..." line; that line is for tailnet-only mappings. No `tailscale` CLI: no Funnel line;
-     status unreadable: a warning (or the serve failure in remote mode).
+     with `--ingest` only, exactly `/api/ingest`; otherwise nothing. This covers background Funnels (`--bg`) and
+     foreground ones (`tailscale funnel <port>` running in a terminal): for a foreground Funnel the fix is to stop
+     that `tailscale funnel` command. A TCP Funnel to the monitor port (`--tcp`, `--tls-terminated-tcp`) fails in
+     every mode, `--public-ui` and `--ingest` included, with the command that removes it: raw TCP carries no
+     forwarded headers, so requests from the internet look like requests made on this machine. A Funnel mapping
+     in any form is never reported as the "tailscale serve maps ..." line; that line is for tailnet-only https
+     mappings (a foreground one says so). No `tailscale` CLI: no Funnel line; status unreadable: a warning (or the
+     serve failure in remote mode).
+   - Not verified against a real Tailscale: how `tailscale serve status --json` shows a foreground Funnel and a
+     TCP Funnel. Doctor reads the whole status defensively and, when unsure, treats a mapping as public.
+   - Never use a TCP Funnel (`--tcp`, `--tls-terminated-tcp`) for the monitor.
    - The monitor itself does the same check once at start (best effort, 3 s, never stops the start): started
-     without `--public-ui` on a port Funnel exposes, it prints a `WARNING: this monitor is REACHABLE FROM THE
-     INTERNET` block with the off command in its output and log.
+     without `--public-ui` on a port Funnel exposes, or behind a TCP Funnel in any mode, it prints a `WARNING: this
+     monitor is REACHABLE FROM THE INTERNET` block with the fix in its output and log.
 
 ## Who can reach the monitor
 
@@ -153,7 +161,8 @@ not start and says so in one line).
 - **Check.** `tm doctor` (or `tm doctor --public-ui [--port <n>]` without a service) passes when Funnel maps `/` to
   the monitor and prints the exact command when not. Without `--public-ui`, any path of the monitor on Funnel is a
   doctor failure in every mode (with `--ingest`, all but `/api/ingest`), with the command to turn it off, and the
-  monitor prints a warning at start.
+  monitor prints a warning at start. A TCP Funnel to the monitor port fails also with `--public-ui`; never use
+  `--tcp` or `--tls-terminated-tcp` for the monitor.
 - **Limits and log.** 5 wrong tokens in 15 minutes from one address, then 429 for that address only (the address
   is the last `X-Forwarded-For` entry, which Funnel's or serve's proxy appends; an IPv6 client counts by its /64).
   A login with no `X-Forwarded-For`, or whose last entry is not an IP address, is refused with 400 before the token
