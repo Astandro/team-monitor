@@ -27,6 +27,8 @@ Options:
 
 On first start the app configures Claude Code hooks (see below). To do it by hand: `npx -y pnpm@10 run setup` (add `-- --force` to reconfigure).
 
+More: `docs/setup.md` (service and phone access), `docs/coordinator.md` (team state, decisions, chat), `docs/cloud.md` (Claude Code cloud sessions in your local monitor).
+
 ## How it works
 
 - Claude Code hooks: a small hook script at `~/.claude/agent-flow/hook.js` forwards each hook event to the running server over loopback HTTP. Discovery files in `~/.claude/agent-flow/` tell the script which instance to talk to; it handles dead instances.
