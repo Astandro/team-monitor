@@ -9,13 +9,21 @@
  * - Every request needs `Authorization: Bearer <ingest token>` (`<team home>/ingest-token`, 64 hex, 0600), also
  *   from loopback: Funnel traffic arrives over loopback. A wrong or missing token is 401 and counts against a
  *   per-client limiter (429 once it is exceeded). The login token and the session cookie do not open these routes.
+ * - Every request also carries the source's own key (`X-Team-Monitor-Source-Key`, 64 hex, made by the forwarder at
+ *   its first start). The first accepted request binds the key's sha256 to the sourceId (kept in the mirror's
+ *   source.json, so it survives a restart); a later request for that sourceId with another or no key is 403 and
+ *   changes nothing. So holding the shared token is not enough to read or write another source.
+ * - Every authenticated response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). An events post that
+ *   names an older epoch in the same header is refused with 409: the forwarder then resends its sessions and history.
+ * - Limits: JSON nesting 32 levels, one event 64 KB, buffered events 4 MB per cloud session and 16 MB per source
+ *   (scripts/relay.ts), 200 cloud sessions and 100 sources (ended / stale ones evicted, 503 when all are live).
  * - Events go into the relay as cloud sessions (scripts/relay.ts): same buffer, replay, offboarding and auto
  *   offboarding as local sessions; session list entries and lifecycle messages carry origin/sourceId/stale.
  * - State is mirrored to `<team home>/remote/<sourceId>/.agent-team/` (atomic writes) and that folder is registered
  *   at runtime as project `cloud-<sourceId>`. Answers and chat messages written there by the existing endpoints are
  *   what the outbox returns.
  * - A source with no request for 60 s is stale; the next request makes it live again. At start, mirrors with no
- *   request for 7 days are removed and the others come back as stale projects.
+ *   request for 24 hours are removed (also while running) and the others come back as stale projects.
  * - Everything received is untrusted data: size-capped while reading, shape-checked, and never used in a path
  *   except the validated sourceId (the answer and inbox names the outbox lists come from this machine's disk and
  *   are matched against their patterns).
@@ -44,12 +52,28 @@ export const MAX_MESSAGES = 500
 export const MAX_BATCH_EVENTS = 5000
 export const MAX_STATE_BODY_BYTES = 1024 * 1024
 export const STALE_AFTER_MS = 60_000
-export const MIRROR_MAX_IDLE_MS = 7 * 24 * 60 * 60 * 1000
+/** A source silent this long is removed with its mirror (at start and by the stale sweep). */
+export const MIRROR_MAX_IDLE_MS = 24 * 60 * 60 * 1000
 export const MAX_OUTBOX_WAIT_S = 25
+/** Sources kept; at the cap the longest-stale source is evicted, and 503 when every source is live. */
 export const MAX_SOURCES = 100
 /** Files per outbox response; the cursor moves on by what was returned. */
 export const MAX_OUTBOX_FILES = 200
-const MAX_WAITERS = 64
+/** Long polls held open at once; above it an outbox poll that would wait gets 503 with Retry-After. */
+export const MAX_OUTBOX_WAITERS = 64
+export const OUTBOX_BUSY_RETRY_S = 5
+/** Nesting of any ingest JSON body (objects and arrays); deeper is refused with 400 before it is parsed. */
+export const MAX_JSON_DEPTH = 32
+/** One event as JSON; a batch with a larger event is refused with 400. */
+export const MAX_EVENT_BYTES = 64 * 1024
+/** Header with the source's own secret (64 hex), bound to its sourceId on the first accepted request. */
+export const SOURCE_KEY_HEADER = 'x-team-monitor-source-key'
+/** Response header on every authenticated ingest response: random per hub start. On an events post, the forwarder
+ *  sends the epoch it knows in the same header; another epoch is refused with 409 (nothing applied). */
+export const EPOCH_HEADER = 'x-team-monitor-hub-epoch'
+const SOURCE_KEY_RE = /^[0-9a-f]{64}$/
+const KEY_HASH_RE = /^[0-9a-f]{64}$/
+const CAPACITY_RETRY_S = 30
 const SOURCE_FILE = 'source.json'
 const MAX_SOURCE_FILE_BYTES = 4096
 const SOURCE_TOUCH_MS = 60_000
@@ -64,9 +88,30 @@ const END_REASONS: ReadonlySet<string> = new Set(['message', 'answer', 'timeout'
 
 export class IngestError extends Error {
   /** `message` goes to the client (no paths); `detail` is for the server log only. */
-  constructor(readonly status: 400 | 404 | 405 | 409 | 413 | 500 | 503, message: string, readonly detail?: string) {
+  constructor(readonly status: 400 | 403 | 404 | 405 | 409 | 413 | 500 | 503, message: string, readonly detail?: string, readonly retryAfterS?: number) {
     super(message)
   }
+}
+
+/**
+ * True when `text` (JSON) nests objects/arrays deeper than `max`. A plain scan of the text (strings skipped), so it
+ * runs before JSON.parse and costs no recursion.
+ */
+export function jsonTooDeep(text: string, max: number = MAX_JSON_DEPTH): boolean {
+  let depth = 0
+  let inString = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (inString) {
+      if (c === 0x5c) i++ // backslash: skip the escaped character
+      else if (c === 0x22) inString = false
+      continue
+    }
+    if (c === 0x22) inString = true
+    else if (c === 0x7b || c === 0x5b) { if (++depth > max) return true }
+    else if (c === 0x7d || c === 0x5d) depth--
+  }
+  return false
 }
 
 // ─── Body parsing (untrusted) ───────────────────────────────────────────────
@@ -127,7 +172,11 @@ export function parseEvent(v: unknown, what: string): AgentEvent & { sessionId: 
   if (typeof e.time !== 'number' || !Number.isFinite(e.time)) throw new IngestError(400, `${what}.time must be a number`)
   const payload = obj(e.payload, `${what}.payload`)
   // Any well-formed type is passed on (an unknown one is ignored by viewers), so it is not narrowed further here.
-  return { time: e.time, type: e.type as AgentEvent['type'], payload, sessionId: sessionId(e.sessionId, `${what}.sessionId`) }
+  const event = { time: e.time, type: e.type as AgentEvent['type'], payload, sessionId: sessionId(e.sessionId, `${what}.sessionId`) }
+  let bytes = Infinity
+  try { bytes = Buffer.byteLength(JSON.stringify(event)) } catch { /* not serialisable: refused below */ }
+  if (bytes > MAX_EVENT_BYTES) throw new IngestError(400, `${what} is larger than ${MAX_EVENT_BYTES} bytes as JSON`)
+  return event
 }
 
 /** What the events route applies: the relay's messages, plus `agents-offboarded` (handled by the offboard store). */
@@ -294,7 +343,18 @@ function readSmall(file: string, cap: number): string | null {
   }
 }
 
-interface SourceFile { sourceId: string; name: string; projectId: string; lastSeenAt: string }
+/** `source.json` of a mirror. `keyHash`: sha256 (hex) of the source key bound to this sourceId (never the key). */
+interface SourceFile { sourceId: string; name: string; projectId: string; lastSeenAt: string; keyHash?: string }
+
+function hashKey(key: string): string {
+  return crypto.createHash('sha256').update(key).digest('hex')
+}
+
+function sameHash(a: string, b: string): boolean {
+  const x = Buffer.from(a, 'hex')
+  const y = Buffer.from(b, 'hex')
+  return x.length === y.length && crypto.timingSafeEqual(x, y)
+}
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -310,6 +370,8 @@ interface Source {
   lastSeq: number
   lastSeen: number
   stale: boolean
+  /** sha256 of the source key bound to this sourceId; null until the first request with a key (old mirrors). */
+  keyHash: string | null
   lastTouch: number
   /** The last `.watcher` record received, to tell a new heartbeat from a repeated one. */
   lastWatcherKey: string | null
@@ -335,6 +397,9 @@ export interface IngestOptions {
   mirrorMaxIdleMs?: number
   /** Long poll re-check interval (default 500 ms; the project watcher also wakes it). */
   outboxPollMs?: number
+  /** Defaults MAX_SOURCES and MAX_OUTBOX_WAITERS; smaller values for tests. */
+  maxSources?: number
+  maxOutboxWaiters?: number
 }
 
 export class IngestService implements IngestHandler {
@@ -348,8 +413,11 @@ export class IngestService implements IngestHandler {
   private readonly sweepMs: number
   private readonly mirrorMaxIdleMs: number
   private readonly outboxPollMs: number
-  /** Changes at every start, so a cursor from before a restart reads as "from the beginning". */
-  private readonly epoch = crypto.randomBytes(4).toString('hex')
+  private readonly maxSources: number
+  private readonly maxWaiters: number
+  /** Changes at every start: a cursor from before a restart reads as "from the beginning", and a forwarder that sees
+   *  a new epoch (EPOCH_HEADER) sends its sessions and their history again. */
+  readonly epoch = crypto.randomBytes(4).toString('hex')
   private relay: CloudIntake | null = null
   private sources = new Map<string, Source>()
   private sweepTimer: NodeJS.Timeout | null = null
@@ -367,6 +435,8 @@ export class IngestService implements IngestHandler {
     this.sweepMs = opts.sweepMs ?? 5000
     this.mirrorMaxIdleMs = opts.mirrorMaxIdleMs ?? MIRROR_MAX_IDLE_MS
     this.outboxPollMs = opts.outboxPollMs ?? 500
+    this.maxSources = opts.maxSources ?? MAX_SOURCES
+    this.maxWaiters = opts.maxOutboxWaiters ?? MAX_OUTBOX_WAITERS
     this.team.cloudStale = (sourceId) => this.sources.get(sourceId)?.stale ?? true
   }
 
@@ -377,8 +447,9 @@ export class IngestService implements IngestHandler {
   }
 
   /**
-   * Remove mirrors with no request for 7 days, register the others as stale cloud projects, and start the stale
-   * sweep. Returns the source ids removed and restored.
+   * Remove mirrors with no request for 24 hours (and the oldest beyond the source cap), register the others as stale
+   * cloud projects with their bound source key, and start the stale sweep. Returns the source ids removed and
+   * restored (restored in name order).
    */
   start(): { removed: string[]; restored: string[] } {
     const removed: string[] = []
@@ -386,6 +457,7 @@ export class IngestService implements IngestHandler {
     let names: string[] = []
     try { names = fs.readdirSync(this.remoteDir) } catch { /* no mirrors yet */ }
     const now = this.now()
+    const found: Array<{ name: string; dir: string; rec: SourceFile | null; lastSeen: number }> = []
     for (const name of names.sort()) {
       if (!SOURCE_ID_RE.test(name)) continue
       const dir = mirrorPath(this.remoteDir, name)
@@ -395,21 +467,25 @@ export class IngestService implements IngestHandler {
       const rec = this.readSourceFile(dir)
       const lastSeen = rec ? Date.parse(rec.lastSeenAt) : st.mtimeMs
       if (!Number.isFinite(lastSeen) || now - lastSeen > this.mirrorMaxIdleMs) {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true })
-          removed.push(name)
-        } catch (e) {
-          this.log(`[ingest] cannot remove the idle mirror ${dir}: ${(e as Error).message}`)
-        }
+        if (this.removeMirror(dir)) removed.push(name)
         continue
       }
+      found.push({ name, dir, rec, lastSeen })
+    }
+    // The most recently seen first, up to the cap; older ones beyond it are removed.
+    const keep = [...found].sort((a, b) => b.lastSeen - a.lastSeen)
+    for (const f of keep.slice(this.maxSources)) if (this.removeMirror(f.dir)) removed.push(f.name)
+    const kept = new Set(keep.slice(0, this.maxSources).map((f) => f.name))
+    for (const f of found) {
+      if (!kept.has(f.name)) continue
       try {
-        this.register(name, { id: rec?.projectId ?? name, name: rec?.name ?? name }, true, lastSeen)
-        restored.push(name)
+        this.register(f.name, { id: f.rec?.projectId ?? f.name, name: f.rec?.name ?? f.name }, true, f.lastSeen, f.rec?.keyHash ?? null)
+        restored.push(f.name)
       } catch (e) {
-        this.log(`[ingest] mirror ${name} not restored: ${(e as Error).message}`)
+        this.log(`[ingest] mirror ${f.name} not restored: ${(e as Error).message}`)
       }
     }
+    removed.sort()
     if (!this.sweepTimer && this.sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), this.sweepMs)
       this.sweepTimer.unref?.()
@@ -424,11 +500,17 @@ export class IngestService implements IngestHandler {
     for (const finish of [...this.waiters]) finish()
   }
 
-  /** Mark sources with no request for `staleMs` as stale and tell the relay and the open streams. */
+  /** Mark sources with no request for `staleMs` as stale and tell the relay and the open streams; remove sources
+   *  silent for longer than the mirror idle limit (24 hours) with their mirror. */
   sweep(): void {
     const now = this.now()
     let changed = false
-    for (const s of this.sources.values()) {
+    for (const s of [...this.sources.values()]) {
+      if (now - s.lastSeen > this.mirrorMaxIdleMs) {
+        this.evictSource(s, 'idle')
+        changed = true
+        continue
+      }
       const stale = now - s.lastSeen > this.staleMs
       if (stale === s.stale) continue
       s.stale = stale
@@ -445,7 +527,7 @@ export class IngestService implements IngestHandler {
 
   // ─── HTTP ────────────────────────────────────────────────────────────────
 
-  async handle(req: http.IncomingMessage, res: http.ServerResponse, pathname: string, query: URLSearchParams): Promise<void> {
+  async handle(req: http.IncomingMessage, res: http.ServerResponse, route: string | null, query: URLSearchParams): Promise<void> {
     // Token first, on every route (also loopback): nothing about the routes is told without it.
     const client = clientKey(req)
     const given = bearer(req.headers.authorization)
@@ -456,28 +538,30 @@ export class IngestService implements IngestHandler {
       this.limiter.fail(client)
       return sendError(res, 401, 'ingest token required', { 'WWW-Authenticate': 'Bearer' })
     }
+    res.setHeader(EPOCH_HEADER, this.epoch)
 
-    const route = pathname.slice('/api/ingest'.length)
     try {
-      if (route === '/v1/events') {
+      // Only the three exact routes (raw path, http.ts): dot segments, encoded characters or anything else: 400.
+      if (route === null) { closeAfter(res); return sendError(res, 400, 'not an ingest route') }
+      if (route === '/api/ingest/v1/events') {
         if (req.method !== 'POST') return sendError(res, 405, 'method not allowed', { Allow: 'POST' })
         return await this.handleEvents(req, res)
       }
-      if (route === '/v1/state') {
+      if (route === '/api/ingest/v1/state') {
         if (req.method !== 'PUT') return sendError(res, 405, 'method not allowed', { Allow: 'PUT' })
         return await this.handleState(req, res)
       }
-      if (route === '/v1/outbox') {
+      if (route === '/api/ingest/v1/outbox') {
         if (req.method !== 'GET') return sendError(res, 405, 'method not allowed', { Allow: 'GET' })
-        return await this.handleOutbox(res, query)
+        return await this.handleOutbox(req, res, query)
       }
-      sendError(res, 404, 'not found')
+      sendError(res, 400, 'not an ingest route')
     } catch (e) {
       if (res.headersSent) return
       if (e instanceof IngestError) {
         if (e.detail) this.log(`[ingest] refused (${e.status}): ${e.detail}`)
-        if (e.status === 400 || e.status === 413) closeAfter(res)
-        return sendError(res, e.status, e.message)
+        if (e.status === 400 || e.status === 413 || e.status === 403) closeAfter(res)
+        return sendError(res, e.status, e.message, e.retryAfterS ? { 'Retry-After': String(e.retryAfterS) } : {})
       }
       this.log(`[ingest] failed: ${(e as Error)?.stack ?? String(e)}`)
       sendError(res, 500, 'internal error')
@@ -493,15 +577,57 @@ export class IngestService implements IngestHandler {
       if (e instanceof BodyError) throw new IngestError(413, `body larger than ${limit} bytes`)
       throw new IngestError(400, 'body could not be read')
     }
+    // Refused before parsing, so nothing nested deeper than MAX_JSON_DEPTH is ever parsed, buffered or serialised.
+    if (jsonTooDeep(text)) throw new IngestError(400, `JSON nested deeper than ${MAX_JSON_DEPTH} levels`)
     try { return JSON.parse(text) } catch { throw new IngestError(400, 'body is not valid JSON') }
+  }
+
+  /**
+   * The source key of a request for `sourceId`: 403 when it is missing or malformed, or when the sourceId is bound to
+   * another key. Checks only (nothing is changed); returns the key's hash, bound by touch() on the first accepted
+   * request.
+   */
+  private checkSourceKey(req: http.IncomingMessage, sourceId: string): string {
+    const raw = req.headers[SOURCE_KEY_HEADER]
+    const key = typeof raw === 'string' ? raw.trim() : ''
+    if (!SOURCE_KEY_RE.test(key)) throw new IngestError(403, 'source key required (X-Team-Monitor-Source-Key: 64 hex)')
+    const hash = hashKey(key)
+    const bound = this.sources.get(sourceId)?.keyHash
+    if (bound && !sameHash(bound, hash)) {
+      throw new IngestError(403, 'this sourceId belongs to another source key', `source key mismatch for ${sourceId}`)
+    }
+    return hash
+  }
+
+  /** Session ids a request would create on the graph (for the capacity check). */
+  private static sessionIdsOf(messages: IngestMessage[]): string[] {
+    const ids: string[] = []
+    for (const m of messages) {
+      if (m.type === 'session-started') ids.push(m.session.id)
+      else if (m.type === 'session-updated') ids.push(m.sessionId)
+      else if (m.type === 'agent-event') ids.push(m.event.sessionId)
+      else if (m.type === 'agent-event-batch') for (const e of m.events) ids.push(e.sessionId)
+    }
+    return ids
   }
 
   private async handleEvents(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const input = parseEventsBody(await this.readJson(req, MAX_EVENTS_BODY_BYTES), this.now())
+    const keyHash = this.checkSourceKey(req, input.sourceId)
     const relay = this.relay
     if (!relay) throw new IngestError(503, 'the graph is not running yet')
-    const src = this.touch(input.sourceId, input.project)
+    // A forwarder that knew an earlier hub epoch must resend its sessions and history first (nothing applied).
+    const known = req.headers[EPOCH_HEADER]
+    if (typeof known === 'string' && known !== '' && known !== this.epoch) {
+      throw new IngestError(409, 'the hub restarted: send the sessions and their history again')
+    }
+    const src = this.touch(input.sourceId, input.project, keyHash)
     if (input.seq <= src.lastSeq) return sendJSON(res, 200, { ok: true, seq: src.lastSeq, duplicate: true })
+    // Room for new sessions (ended or stale ones are evicted); when everything is live, refused before seq moves on,
+    // so the forwarder retries the same body later.
+    if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages))) {
+      throw new IngestError(503, 'hub at capacity: every cloud session on it is live; retry later', undefined, CAPACITY_RETRY_S)
+    }
     src.lastSeq = input.seq
     let applied = 0
     let ignored = 0
@@ -532,7 +658,8 @@ export class IngestService implements IngestHandler {
 
   private async handleState(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const input = parseStateBody(await this.readJson(req, MAX_STATE_BODY_BYTES))
-    const src = this.touch(input.sourceId, input.project)
+    const keyHash = this.checkSourceKey(req, input.sourceId)
+    const src = this.touch(input.sourceId, input.project, keyHash)
     const stateFile = path.join(src.teamDir, 'state.json')
     if (input.state === null) {
       unlinkFile(stateFile)
@@ -569,8 +696,10 @@ export class IngestService implements IngestHandler {
     writeHeartbeat(src.teamDir, out)
   }
 
-  private async handleOutbox(res: http.ServerResponse, query: URLSearchParams): Promise<void> {
+  private async handleOutbox(req: http.IncomingMessage, res: http.ServerResponse, query: URLSearchParams): Promise<void> {
     const sourceId = parseSourceId(query.get('sourceId') ?? '')
+    // Only the source that owns the sourceId reads its answers and chat (an unknown source gets an empty list).
+    this.checkSourceKey(req, sourceId)
     const after = query.get('after') ?? ''
     let index = 0
     if (after !== '') {
@@ -585,7 +714,11 @@ export class IngestService implements IngestHandler {
     const known = this.sources.get(sourceId)
     if (known) this.seen(known)
     let result = this.outboxFrom(sourceId, index)
-    if (result.files.length === 0 && waitMs > 0 && this.waiters.size < MAX_WAITERS && !this.disposed) {
+    if (result.files.length === 0 && waitMs > 0 && !this.disposed) {
+      // Too many polls held: say so (the forwarder backs off) instead of an empty reply it would repeat at once.
+      if (this.waiters.size >= this.maxWaiters) {
+        throw new IngestError(503, 'too many outbox polls open; retry later', undefined, OUTBOX_BUSY_RETRY_S)
+      }
       result = await this.waitOutbox(res, sourceId, index, waitMs)
       const after = this.sources.get(sourceId)
       if (after) this.seen(after)
@@ -658,14 +791,21 @@ export class IngestService implements IngestHandler {
 
   // ─── Sources ─────────────────────────────────────────────────────────────
 
-  /** The source of a request, registered on first sight; marks it live. */
-  private touch(sourceId: string, project: IngestProject): Source {
+  /**
+   * The source of a request whose key passed checkSourceKey, registered on first sight (its key bound then, or on
+   * its first keyed request for a mirror from before keys); marks it live.
+   */
+  private touch(sourceId: string, project: IngestProject, keyHash: string): Source {
     let src = this.sources.get(sourceId)
     let changed = false
     if (!src) {
-      src = this.register(sourceId, project, false, this.now())
+      src = this.register(sourceId, project, false, this.now(), keyHash)
       changed = true
-    } else if (src.name !== project.name || src.remoteProjectId !== project.id) {
+    } else if (src.keyHash === null) {
+      src.keyHash = keyHash
+      src.lastTouch = 0 // write source.json (with the bound key's hash) now
+    }
+    if (src.name !== project.name || src.remoteProjectId !== project.id) {
       src.name = project.name
       src.remoteProjectId = project.id
       this.team.renameCloudProject(src.projectId, project.name)
@@ -689,11 +829,39 @@ export class IngestService implements IngestHandler {
     return true
   }
 
-  private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number): Source {
-    if (this.sources.size >= MAX_SOURCES) throw new IngestError(503, `more than ${MAX_SOURCES} sources`)
+  /** Remove a mirror folder (a plain directory under remoteDir only). True when it is gone. */
+  private removeMirror(dir: string): boolean {
+    try {
+      const st = fs.lstatSync(dir)
+      if (st.isSymbolicLink() || !st.isDirectory()) return false
+      fs.rmSync(dir, { recursive: true, force: true })
+      return true
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return true
+      this.log(`[ingest] cannot remove the mirror ${dir}: ${(e as Error).message}`)
+      return false
+    }
+  }
+
+  /** Forget a source: its sessions and buffers, its project, its mirror folder (with its bound key). */
+  private evictSource(src: Source, why: 'idle' | 'capacity'): void {
+    this.sources.delete(src.id)
+    this.relay?.forgetSource(src.id)
+    this.team.removeCloudProject(src.projectId)
+    this.removeMirror(src.root)
+    this.log(`[ingest] removed source ${src.id} (${why === 'idle' ? 'silent for more than 24 hours' : 'longest stale, room for a new source'})`)
+  }
+
+  private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number, keyHash: string | null): Source {
     const projectId = `cloud-${sourceId}`
     if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
       throw new IngestError(409, `a local project already has the id ${projectId}`)
+    }
+    if (this.sources.size >= this.maxSources) {
+      // Evict the source that has been stale longest; never a live one.
+      const victim = [...this.sources.values()].filter((s) => s.stale).sort((a, b) => a.lastSeen - b.lastSeen)[0]
+      if (!victim) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources, all live; retry later`, undefined, CAPACITY_RETRY_S)
+      this.evictSource(victim, 'capacity')
     }
     ensurePlainDir(this.remoteDir)
     const root = mirrorPath(this.remoteDir, sourceId)
@@ -702,7 +870,7 @@ export class IngestService implements IngestHandler {
     ensurePlainDir(teamDir)
     const src: Source = {
       id: sourceId, projectId, remoteProjectId: project.id, name: project.name, root, teamDir,
-      lastSeq: -1, lastSeen, stale, lastTouch: stale ? lastSeen : 0, lastWatcherKey: null, outbox: [], outboxSeen: new Set(),
+      lastSeq: -1, lastSeen, stale, keyHash, lastTouch: stale ? lastSeen : 0, lastWatcherKey: null, outbox: [], outboxSeen: new Set(),
     }
     this.sources.set(sourceId, src)
     this.team.addCloudProject({ id: projectId, name: project.name, path: root }, sourceId)
@@ -711,7 +879,10 @@ export class IngestService implements IngestHandler {
   }
 
   private writeSourceFile(src: Source): void {
-    const rec: SourceFile = { sourceId: src.id, name: src.name, projectId: src.remoteProjectId, lastSeenAt: new Date(src.lastSeen).toISOString() }
+    const rec: SourceFile = {
+      sourceId: src.id, name: src.name, projectId: src.remoteProjectId, lastSeenAt: new Date(src.lastSeen).toISOString(),
+      ...(src.keyHash ? { keyHash: src.keyHash } : {}),
+    }
     try {
       writeFileAtomic(path.join(src.root, SOURCE_FILE), JSON.stringify(rec) + '\n', 0o600)
       src.lastTouch = src.lastSeen
@@ -728,7 +899,8 @@ export class IngestService implements IngestHandler {
       if (typeof r.lastSeenAt !== 'string' || !Number.isFinite(Date.parse(r.lastSeenAt))) return null
       const name = typeof r.name === 'string' ? line(r.name, 'name', MAX_NAME_CHARS) : ''
       const projectId = typeof r.projectId === 'string' && PROJECT_ID_RE.test(r.projectId) ? r.projectId : path.basename(dir)
-      return { sourceId: path.basename(dir), name: name || path.basename(dir), projectId, lastSeenAt: r.lastSeenAt }
+      const keyHash = typeof r.keyHash === 'string' && KEY_HASH_RE.test(r.keyHash) ? r.keyHash : undefined
+      return { sourceId: path.basename(dir), name: name || path.basename(dir), projectId, lastSeenAt: r.lastSeenAt, ...(keyHash ? { keyHash } : {}) }
     } catch {
       return null
     }

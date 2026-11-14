@@ -90,6 +90,11 @@ export class GraphAgents {
     return this.bySession.has(sessionId)
   }
 
+  /** Forget a session's agents (a cloud session evicted from the hub). */
+  forget(sessionId: string): void {
+    this.bySession.delete(sessionId)
+  }
+
   agent(sessionId: string, name: string): GraphAgent | undefined {
     const a = this.bySession.get(sessionId)?.get(name)
     return a ? { ...a } : undefined

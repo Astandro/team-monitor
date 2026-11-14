@@ -40,13 +40,38 @@ Off by default. With `--ingest` (also `tm service install ... --ingest`, which w
 monitor accepts relay messages and team state from cloud containers on `/api/ingest/v1/*` and shows them as cloud
 sessions and projects (`origin: "cloud"`). Full setup lives in `docs/cloud.md`; the hub side in short:
 
-- Token: `~/.team-monitor/ingest-token` (64 hex, 0600), created at the first start with `--ingest` and printed only
-  then. Every ingest request needs `Authorization: Bearer <it>`, also from loopback. The login token and the
-  session cookie do not open ingest routes; the ingest token opens nothing else. Wrong tokens: 401, then 429.
-- Routes: `POST /api/ingest/v1/events` (512 KB, 500 messages), `PUT /api/ingest/v1/state` (1 MB),
-  `GET /api/ingest/v1/outbox?sourceId=&after=&wait=0-25` (long poll for answers and chat messages).
+- Token: `~/.team-monitor/ingest-token` (64 hex, 0600), created at the first start with `--ingest`. It is never
+  printed (the start prints only the file path; read the file to set the network secret). Every ingest request
+  needs `Authorization: Bearer <it>`, also from loopback. The login token and the session cookie do not open
+  ingest routes; the ingest token opens nothing else. Wrong tokens: 401, then 429. (The remote-mode login token in
+  `~/.team-monitor/token` is not printed either.)
+- Source key: every ingest request also needs `X-Team-Monitor-Source-Key: <64 hex>`, the container's own secret.
+  The forwarder creates it at its first start (32 random bytes in `<container team home>/cloud/source-key`, 0600,
+  never logged). The hub binds the key's sha256 to the `sourceId` on the first accepted request and keeps it in the
+  mirror's `source.json`, so it survives a hub restart. A request for that `sourceId` with another or no key gets
+  403 and changes nothing (no event, state, rename or `seq`), and its outbox is not shown. The binding goes away
+  with the mirror (24 hours of silence, or eviction at the source cap); a new container with the same session id
+  is refused until then.
+- Routes, matched exactly on the raw request path: `POST /api/ingest/v1/events` (512 KB, 500 messages),
+  `PUT /api/ingest/v1/state` (1 MB), `GET /api/ingest/v1/outbox?sourceId=&after=&wait=0-25` (long poll for answers
+  and chat messages). Any other path under `/api/ingest` (dot segments, encoded dots, slashes or backslashes, a
+  trailing slash, other versions) is answered 400 there and never reaches the UI or the team API.
+- Epoch: every authenticated ingest response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). The
+  forwarder sends the epoch it knows on each events post; after a hub restart that post gets 409 and nothing is
+  applied. When the forwarder sees a new epoch (on any reply) it resends `session-started` for its sessions and
+  their buffered history, so running and idle sessions come back with label, prompt and history.
+- Limits: JSON nested deeper than 32 levels: 400. One event larger than 64 KB as JSON: 400 for the batch (the
+  forwarder drops such an event on its own first, with a log line). Buffered events per cloud session 4 MB and per
+  source 16 MB (oldest dropped, like the 5,000-event cap); a new viewer's replay carries at most 32 MB of cloud
+  events (newest sessions and events first). Real events are a few hundred bytes.
+- Capacity: 200 cloud sessions and 100 sources. At the cap, ended sessions and sessions of stale sources are
+  evicted (stale longest first), and the longest-stale source is removed with its mirror. A live source or an
+  active session of a live source is never evicted: if everything is live the hub answers 503 with `Retry-After`
+  (the forwarder logs it and retries). Messages the hub accepts but ignores are counted in `ignored`; the forwarder
+  logs them and `cloud status` shows the count. More than 64 outbox long polls at once: 503 with `Retry-After: 5`.
 - Mirrors: `~/.team-monitor/remote/<sourceId>/.agent-team/`, registered at runtime as project `cloud-<sourceId>`
-  (never written to `config.json`). A source silent for 60 s is `stale`; mirrors idle for 7 days are removed at start.
+  (never written to `config.json`). A source silent for 60 s is `stale`; a source silent for 24 hours is removed
+  with its mirror (at start and while running).
 - Funnel: expose only `/api/ingest`, on a port the UI does not use:
   `tailscale funnel --bg --https=443 --set-path /api/ingest http://127.0.0.1:3002/api/ingest`. The UI and login
   stay on `tailscale serve` (8443, tailnet only). `tm doctor` (or `tm doctor --ingest` without a service) checks the

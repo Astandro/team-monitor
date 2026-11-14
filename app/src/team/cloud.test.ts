@@ -38,6 +38,43 @@ test('criterion 8: in cloud mode a foreign Host gets 200; outside cloud mode it 
   assert.deepEqual(await hostCheck({ cloud: true }, { CLAUDE_CODE_REMOTE: '1' }), { foreign: 403, loopback: 200 })
 })
 
+test('cloud mode: a foreign Host is for safe reads only; every state-changing request needs a loopback Host', async () => {
+  const home = path.join(root, `h${++n}`)
+  const project = path.join(root, 'cloudproj')
+  fs.mkdirSync(path.join(project, '.agent-team'), { recursive: true })
+  const setup = setupTeam({ projects: [project], remote: false, hostAllow: [], cloud: true }, {
+    env: { CLAUDE_CODE_REMOTE: 'true', TEAM_MONITOR_HOME: home }, log: () => {}, warn: () => {},
+  })
+  const srv = await listen(setup.createHandler((_req, res) => { res.writeHead(200); res.end('ui') }))
+  try {
+    const evil = 'evil.example'
+    // Reads with the preview's (any) Host: UI, /events-like fallback, read-only API, HEAD.
+    assert.equal((await request(srv.port, { path: '/', headers: { Host: evil } })).status, 200)
+    assert.equal((await request(srv.port, { method: 'HEAD', path: '/', headers: { Host: evil } })).status, 200)
+    assert.equal((await request(srv.port, { path: '/api/team/projects', headers: { Host: evil } })).status, 200)
+    // Writes with a foreign Host, even with matching Origin and X-Team-Monitor (the QA repro): 403, nothing written.
+    const write = (p: string, body: unknown, host: string) => request(srv.port, {
+      method: 'POST', path: p, body: JSON.stringify(body),
+      headers: { Host: host, Origin: `http://${host}`, 'X-Team-Monitor': '1', 'Content-Type': 'application/json' },
+    })
+    const id = path.basename(project)
+    for (const [p, body] of [
+      ['/api/team/message', { project: id, text: 'dari halaman asing' }], ['/api/team/answer', { project: id, id: 'D1', answer: 'b' }],
+      ['/api/team/offboard', { session: '5a6b7c8d-0000-4000-8000-000000000001', agent: 'x' }], ['/api/team/offboard-all', { session: '5a6b7c8d-0000-4000-8000-000000000001' }],
+    ] as const) {
+      assert.equal((await write(p, body, evil)).status, 403, p)
+    }
+    assert.equal((await request(srv.port, { method: 'PUT', path: '/', headers: { Host: evil } })).status, 403)
+    assert.ok(!fs.existsSync(path.join(project, '.agent-team', 'inbox')), 'no chat message written')
+    // The container's own tools (loopback Host) still write.
+    const local = await write('/api/team/message', { project: id, text: 'dari kontainer' }, `127.0.0.1:${srv.port}`)
+    assert.equal(local.status, 200, local.body)
+  } finally {
+    setup.dispose()
+    await srv.close()
+  }
+})
+
 test('cloud mode still listens on loopback only, and is refused with --remote or --ingest', () => {
   const home = path.join(root, 'refuse')
   const env = { TEAM_MONITOR_HOME: home, CLAUDE_CODE_REMOTE: 'true' }

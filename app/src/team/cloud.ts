@@ -381,6 +381,8 @@ export async function cloudStatus(argv: string[], deps: CloudDeps = {}): Promise
   if (st.sourceId) ctx.out(`Source: ${st.sourceId}`)
   ctx.out(`Last successful post: ${st.lastPostAt ?? 'never'}`)
   if (typeof st.queued === 'number') ctx.out(`Unsent: ${st.queued}${st.dropped ? `, dropped so far: ${st.dropped}` : ''}`)
+  if (st.ignoredByHub || st.refused) ctx.out(`Ignored by the hub: ${st.ignoredByHub ?? 0}; refused (too large or refused by the hub): ${st.refused ?? 0}`)
+  if (st.hubRestarts) ctx.out(`Hub restarts seen: ${st.hubRestarts} (sessions and history sent again)`)
   if (st.lastError) ctx.out(`Last error: ${st.lastError}`)
   return healthy ? 0 : 1
 }

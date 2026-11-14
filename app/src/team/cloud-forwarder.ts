@@ -24,17 +24,26 @@
  *   hub keeps its earlier copy; events of that session between the last acknowledged post and the monitor restart
  *   may be missing on the hub). Replays of sessions the hub has not seen are sent in full.
  *
+ * Hub restart: every hub response carries the hub's epoch (random per hub start); events posts name the epoch the
+ * forwarder knows. When the hub's epoch changes (a 409 on a post, or any response with another epoch), the
+ * forwarder forgets what that hub acknowledged, drops its queue and reconnects to `/events`: the session list and the
+ * replay are then sent again, so running and idle sessions reappear on the hub with label, prompt and history.
+ *
  * The token: `Authorization: Bearer <TEAM_MONITOR_INGEST_TOKEN>`, or a placeholder that the cloud platform's proxy
- * replaces with the environment's network secret for the hub host. Never logged.
+ * replaces with the environment's network secret for the hub host. The source key (`<home>/cloud/source-key`,
+ * 32 random bytes as hex, 0600, made at the first start) goes in `X-Team-Monitor-Source-Key` on every request: the
+ * hub binds it to this sourceId, so another holder of the token cannot read or write this source. Neither is logged.
  */
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
+import { loadOrCreateToken } from './auth'
 import { INBOX_FILE_RE, MAX_INBOX_FILE_BYTES } from './chat'
 import { agentTeamDir } from './config'
 import { HEARTBEAT_FILE } from './heartbeat'
 import { hubRequest, HubResponse } from './hub-client'
+import { EPOCH_HEADER, jsonTooDeep, MAX_EVENT_BYTES, MAX_JSON_DEPTH, SOURCE_KEY_HEADER } from './ingest'
 import { SESSION_ID_RE } from './offboard'
 import { writeFileAtomic } from './service'
 import { ANSWER_FILE_RE, MAX_ANSWER_FILE_BYTES, MAX_STATE_BYTES } from './state-watcher'
@@ -44,7 +53,9 @@ export const PLACEHOLDER_TOKEN = 'team-monitor-network-secret'
 export const ACKED_FILE = 'forwarder-acked.json'
 export const STATUS_FILE = 'forwarder-status.json'
 export const MONITOR_FILE = 'monitor.json'
+export const SOURCE_KEY_FILE = 'source-key'
 export const CLOUD_DIR = 'cloud'
+const EPOCH_RE = /^[0-9a-f]{1,64}$/
 /** Hashes kept per session: more than the monitor's replay buffer (5000 events). */
 export const MAX_HASHES_PER_SESSION = 6000
 export const MAX_ACKED_SESSIONS = 20
@@ -54,6 +65,9 @@ const MAX_BODY_BYTES = 448 * 1024
 const MAX_REQUEST_MESSAGES = 400
 const MAX_REQUEST_EVENTS = 4000
 const LIFECYCLE = new Set(['session-started', 'session-updated', 'session-ended', 'agents-offboarded'])
+/** In an events body an event is nested in 4 levels (body, messages, batch message, events); the whole body must stay
+ *  within the hub's MAX_JSON_DEPTH. */
+const MAX_EVENT_DEPTH = MAX_JSON_DEPTH - 4
 
 export function cloudDir(home: string): string {
   return path.join(home, CLOUD_DIR)
@@ -86,14 +100,17 @@ interface AckedSession { at: number; h: string[] }
 export class AckStore {
   lastSeq = 0
   instance: string | null = null
+  /** The hub epoch the acknowledged hashes belong to (null: not known yet). */
+  hubEpoch: string | null = null
   private sessions = new Map<string, AckedSession>()
   private counts = new Map<string, Map<string, number>>()
 
   constructor(private readonly file: string) {
     try {
-      const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { lastSeq?: unknown; instance?: unknown; sessions?: unknown }
+      const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { lastSeq?: unknown; instance?: unknown; hubEpoch?: unknown; sessions?: unknown }
       if (typeof raw.lastSeq === 'number' && Number.isSafeInteger(raw.lastSeq) && raw.lastSeq >= 0) this.lastSeq = raw.lastSeq
       if (typeof raw.instance === 'string') this.instance = raw.instance
+      if (typeof raw.hubEpoch === 'string' && EPOCH_RE.test(raw.hubEpoch)) this.hubEpoch = raw.hubEpoch
       if (raw.sessions && typeof raw.sessions === 'object') {
         for (const [sid, v] of Object.entries(raw.sessions as Record<string, unknown>)) {
           const s = v as { at?: unknown; h?: unknown }
@@ -135,10 +152,16 @@ export class AckStore {
     this.counts.delete(sid)
   }
 
+  /** The hub lost what it had (it restarted): nothing counts as acknowledged any more. */
+  clearSessions(): void {
+    this.sessions.clear()
+    this.counts.clear()
+  }
+
   save(): void {
     const sessions: Record<string, AckedSession> = {}
     for (const [k, v] of this.sessions) sessions[k] = v
-    writeFileAtomic(this.file, JSON.stringify({ version: 1, lastSeq: this.lastSeq, instance: this.instance, sessions }), 0o600)
+    writeFileAtomic(this.file, JSON.stringify({ version: 1, lastSeq: this.lastSeq, instance: this.instance, hubEpoch: this.hubEpoch, sessions }), 0o600)
   }
 }
 
@@ -173,6 +196,13 @@ export interface ForwarderOptions {
   /** Extra CA for the hub (tests). */
   ca?: string | Buffer
   monitorInstance?: () => string
+  /** The source key (tests); default: `<home>/cloud/source-key`, created at the first start. */
+  sourceKey?: string
+}
+
+/** This source's key: `<home>/cloud/source-key` (64 hex, 0600), created with 32 random bytes when missing. */
+export function loadSourceKey(home: string): string {
+  return loadOrCreateToken(ensureCloudDir(home), SOURCE_KEY_FILE).token
 }
 
 export interface ForwarderStatus {
@@ -186,6 +216,11 @@ export interface ForwarderStatus {
   lastError: string | null
   queued: number
   dropped: number
+  /** Messages the hub accepted but ignored (`ignored` in its replies), and events refused locally as too large. */
+  ignoredByHub: number
+  refused: number
+  /** The hub restarted this many times while this forwarder ran (sessions and history were sent again). */
+  hubRestarts: number
   updatedAt: string
 }
 
@@ -206,8 +241,12 @@ export class Forwarder {
   private readonly statusFile: string
   private readonly teamDir: string
   private readonly monitorInstance: () => string
+  private readonly sourceKey: string
 
   private stopped = true
+  /** Bumped when the hub restarted: results of requests and `/events` messages from before are discarded. */
+  private syncGen = 0
+  private lastIgnoredLog = 0
   private queue: Item[] = []
   private inFlight: InFlight | null = null
   /** Events queued or in flight, per session and hash (so a second replay does not queue them again). */
@@ -231,7 +270,7 @@ export class Forwarder {
   private lastDropLog = 0
   private statusDirty = true
 
-  readonly stats = { posted: 0, postedEvents: 0, skippedReplay: 0, dropped: 0, refused: 0, filesWritten: 0, statePuts: 0 }
+  readonly stats = { posted: 0, postedEvents: 0, skippedReplay: 0, dropped: 0, refused: 0, filesWritten: 0, statePuts: 0, ignoredByHub: 0, hubRestarts: 0, outboxPolls: 0 }
   lastPostAt: number | null = null
   lastStateAt: number | null = null
   lastOutboxAt: number | null = null
@@ -257,6 +296,7 @@ export class Forwarder {
     this.statusFile = path.join(dir, STATUS_FILE)
     this.teamDir = agentTeamDir(opts.projectPath)
     this.monitorInstance = opts.monitorInstance ?? (() => readMonitorInstance(opts.home))
+    this.sourceKey = opts.sourceKey ?? loadSourceKey(opts.home)
   }
 
   start(): void {
@@ -287,14 +327,59 @@ export class Forwarder {
 
   private headers(json: boolean): Record<string, string> {
     const token = this.env.TEAM_MONITOR_INGEST_TOKEN?.trim() || PLACEHOLDER_TOKEN
-    return { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(json ? { 'Content-Type': 'application/json' } : {}) }
+    return {
+      Authorization: `Bearer ${token}`, [SOURCE_KEY_HEADER]: this.sourceKey, Accept: 'application/json',
+      ...(json ? { 'Content-Type': 'application/json' } : {}),
+    }
   }
 
-  private request(method: string, route: string, body?: string, timeoutMs = 30_000, signal?: AbortSignal): Promise<HubResponse> {
+  private request(method: string, route: string, body?: string, timeoutMs = 30_000, signal?: AbortSignal, extra: Record<string, string> = {}): Promise<HubResponse> {
     return hubRequest({
-      method, url: `${this.hubBase}/api/ingest${route}`, headers: this.headers(body !== undefined), body, timeoutMs,
+      method, url: `${this.hubBase}/api/ingest${route}`, headers: { ...this.headers(body !== undefined), ...extra }, body, timeoutMs,
       env: this.env, ca: this.opts.ca, signal,
     })
+  }
+
+  /**
+   * Read the hub's epoch from a response. The first one is remembered; another one means the hub restarted and lost
+   * its sessions: resync. True when this response came from a restarted hub (its result is then not used).
+   */
+  private noteEpoch(res: HubResponse): boolean {
+    const raw = res.headers[EPOCH_HEADER]
+    const epoch = typeof raw === 'string' ? raw.trim() : ''
+    if (!EPOCH_RE.test(epoch)) return false
+    if (this.acked.hubEpoch === epoch) return false
+    if (this.acked.hubEpoch === null) {
+      this.acked.hubEpoch = epoch
+      this.saveAcked()
+      return false
+    }
+    this.resync(epoch)
+    return true
+  }
+
+  /**
+   * The hub restarted: forget what the old hub acknowledged, drop the queue and what is in flight, and reconnect to
+   * the monitor's `/events`: its session list and replay (all buffered history) then go to the hub again, in order.
+   * The state is sent again as well.
+   */
+  private resync(epoch: string): void {
+    this.syncGen++
+    this.stats.hubRestarts++
+    this.log(`[forwarder] the hub restarted: sending the sessions and their history again`)
+    this.acked.hubEpoch = epoch
+    this.acked.clearSessions()
+    this.saveAcked()
+    this.queue = []
+    this.inFlight = null
+    this.pending.clear()
+    this.retryAt = 0
+    this.backoff = this.backoffMin
+    this.lastStateKey = null
+    this.stateRetryAt = 0
+    this.statusDirty = true
+    // The 'close' handler of the current connection reconnects (after reconnectMs) and gets a fresh replay.
+    this.sse?.destroy()
   }
 
   /** One log line per distinct problem of each loop (events, state, outbox); cleared by that loop's next success. */
@@ -339,9 +424,11 @@ export class Forwarder {
       if (res.statusCode !== 200) { res.resume(); again(); return }
       this.sseRetry = 0
       const replay = this.beginReplay()
+      const gen = this.syncGen
       let buf = ''
       res.setEncoding('utf-8')
       res.on('data', (chunk: string) => {
+        if (gen !== this.syncGen) return // a resync dropped this connection; the next one replays everything
         buf += chunk
         let i: number
         while ((i = buf.search(/\r?\n\r?\n/)) >= 0) {
@@ -383,7 +470,7 @@ export class Forwarder {
       const sid = type === 'session-started' ? (m.session as { id?: unknown } | undefined)?.id : m.sessionId
       if (validSid(sid)) this.enqueueMsg(m)
     } else if (type === 'agent-event') {
-      const ev = validEvent(m.event)
+      const ev = this.sendable(m.event)
       if (ev) this.enqueueEvent(ev, eventHash(ev))
     } else if (type === 'agent-event-batch') {
       if (!Array.isArray(m.events)) return
@@ -396,7 +483,7 @@ export class Forwarder {
     const avail = new Map<string, Map<string, number>>()
     const skipWhole = new Map<string, string[]>()
     for (const raw of events) {
-      const ev = validEvent(raw)
+      const ev = this.sendable(raw)
       if (!ev) continue
       const sid = ev.sessionId as string
       const h = eventHash(ev)
@@ -423,6 +510,24 @@ export class Forwarder {
       for (const [sid, hashes] of skipWhole) this.acked.add(sid, hashes, now)
       this.saveAcked()
     }
+  }
+
+  /**
+   * An event the hub accepts, or null: wrong shape, or larger / more deeply nested than the hub's limits (dropped here
+   * with a log line, so one such event never costs the rest of its batch).
+   */
+  private sendable(v: unknown): Record<string, unknown> | null {
+    const ev = validEvent(v)
+    if (!ev) return null
+    let text: string | null = null
+    try { text = JSON.stringify(ev) } catch { /* not serialisable */ }
+    if (text === null || Buffer.byteLength(text) > MAX_EVENT_BYTES || jsonTooDeep(text, MAX_EVENT_DEPTH)) {
+      this.stats.refused++
+      this.statusDirty = true
+      this.log(`[forwarder] dropped one ${String(ev.type)} event: larger than ${MAX_EVENT_BYTES} bytes or nested too deeply for the hub`)
+      return null
+    }
+    return ev
   }
 
   private enqueueMsg(msg: Record<string, unknown>): void {
@@ -532,13 +637,19 @@ export class Forwarder {
     if (!this.inFlight) this.inFlight = this.build()
     const f = this.inFlight
     if (!f) return
+    const gen = this.syncGen
     let res: HubResponse
     try {
-      res = await this.request('POST', '/v1/events', f.body)
+      // The epoch we know: a restarted hub refuses the post (409) instead of applying it out of order.
+      const extra: Record<string, string> = this.acked.hubEpoch ? { [EPOCH_HEADER]: this.acked.hubEpoch } : {}
+      res = await this.request('POST', '/v1/events', f.body, 30_000, undefined, extra)
     } catch (e) {
+      if (gen !== this.syncGen) return
       this.fail('posting events', (e as Error).message, null)
       return
     }
+    if (gen !== this.syncGen) return // a resync dropped this request meanwhile
+    if (this.noteEpoch(res)) return // the hub restarted: everything goes again from the replay
     if (res.status === 200) {
       this.settle(f)
       this.lastPostAt = this.now()
@@ -547,6 +658,7 @@ export class Forwarder {
       this.backoff = this.backoffMin
       this.retryAt = 0
       this.noteOk('posting events')
+      this.noteIgnored(res)
     } else if (res.status === 400 || res.status === 413) {
       // The hub will refuse this body every time: drop it (and do not send it again from a replay).
       this.settle(f)
@@ -575,10 +687,25 @@ export class Forwarder {
     this.statusDirty = true
   }
 
+  /** The hub accepted the post but ignored some messages (sessions it does not let this source write): counted in
+   *  the status file and logged (at most once a minute). */
+  private noteIgnored(res: HubResponse): void {
+    let ignored = 0
+    try { ignored = Number((JSON.parse(res.body) as { ignored?: unknown }).ignored) || 0 } catch { /* no body */ }
+    if (ignored <= 0) return
+    this.stats.ignoredByHub += ignored
+    this.statusDirty = true
+    const now = this.now()
+    if (now - this.lastIgnoredLog >= 60_000) {
+      this.lastIgnoredLog = now
+      this.log(`[forwarder] the hub ignored ${ignored} message(s) (${this.stats.ignoredByHub} so far): sessions it does not take from this source`)
+    }
+  }
+
   private fail(where: string, msg: string, res: HubResponse | null): void {
     let wait = this.backoff
     const retryAfter = Number(res?.headers['retry-after'])
-    if (res?.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) wait = Math.max(wait, Math.min(retryAfter * 1000, this.backoffMax))
+    if ((res?.status === 429 || res?.status === 503) && Number.isFinite(retryAfter) && retryAfter > 0) wait = Math.max(wait, Math.min(retryAfter * 1000, this.backoffMax))
     this.retryAt = this.now() + wait
     this.backoff = Math.min(this.backoff * 2, this.backoffMax)
     this.noteError(where, msg)
@@ -609,6 +736,7 @@ export class Forwarder {
     this.stateBusy = (async () => {
       try {
         const res = await this.request('PUT', '/v1/state', body)
+        if (this.noteEpoch(res)) return // resync: the state goes again on the next tick
         if (res.status === 200) {
           this.lastStateKey = key
           this.lastStateAt = this.now()
@@ -621,7 +749,7 @@ export class Forwarder {
         } else {
           this.stateRetryAt = this.now() + this.stateBackoff
           this.stateBackoff = Math.min(this.stateBackoff * 2, this.backoffMax)
-          this.noteError('sending state', `HTTP ${res.status}`)
+          this.noteError('sending state', `HTTP ${res.status}${hubError(res) ? ` (${hubError(res)})` : ''}`)
         }
       } catch (e) {
         this.stateRetryAt = this.now() + this.stateBackoff
@@ -641,29 +769,43 @@ export class Forwarder {
       const ac = new AbortController()
       this.outboxAbort = ac
       let ok = false
+      let quickEmpty = false
+      let retryAfterMs = 0
+      const t0 = Date.now()
       try {
         const q = new URLSearchParams({ sourceId: this.opts.sourceId, wait: String(this.outboxWaitS) })
         if (this.cursor) q.set('after', this.cursor)
+        this.stats.outboxPolls++
         const res = await this.request('GET', `/v1/outbox?${q}`, undefined, (this.outboxWaitS + 15) * 1000, ac.signal)
+        this.noteEpoch(res) // a restarted hub: resync (the outbox itself is read as usual; cursors restart there)
         if (res.status === 200) {
           const body = JSON.parse(res.body) as { cursor?: unknown; files?: unknown }
-          if (Array.isArray(body.files)) for (const f of body.files) this.writeOutboxFile(f)
+          const files = Array.isArray(body.files) ? body.files : []
+          for (const f of files) this.writeOutboxFile(f)
           if (typeof body.cursor === 'string') this.cursor = body.cursor
           this.lastOutboxAt = this.now()
           ok = true
+          // An empty reply that did not wait is never followed by an immediate new poll.
+          quickEmpty = files.length === 0 && this.outboxWaitS > 0 && Date.now() - t0 < 1000
           this.noteOk('reading the outbox')
         } else if (res.status === 400 && this.cursor) {
           this.cursor = null // a cursor the hub no longer takes: start over (files are written only when changed)
           ok = true
         } else {
-          this.noteError('reading the outbox', `HTTP ${res.status}`)
+          const ra = Number(res.headers['retry-after'])
+          if ((res.status === 503 || res.status === 429) && Number.isFinite(ra) && ra > 0) retryAfterMs = Math.min(ra * 1000, this.backoffMax)
+          this.noteError('reading the outbox', `HTTP ${res.status}${hubError(res) ? ` (${hubError(res)})` : ''}`)
         }
       } catch (e) {
         if (this.stopped) break
         this.noteError('reading the outbox', (e as Error).message)
       }
-      if (ok) { backoff = this.backoffMin; continue }
-      await this.sleep(backoff)
+      if (ok) {
+        backoff = this.backoffMin
+        if (quickEmpty) await this.sleep(this.backoffMin)
+        continue
+      }
+      await this.sleep(Math.max(backoff, retryAfterMs))
       backoff = Math.min(backoff * 2, this.backoffMax)
     }
   }
@@ -710,7 +852,9 @@ export class Forwarder {
     return {
       pid: process.pid, hub: hubOrigin(this.opts.hubUrl), sourceId: this.opts.sourceId, projectId: this.opts.project.id,
       lastPostAt: iso(this.lastPostAt), lastStateAt: iso(this.lastStateAt), lastOutboxAt: iso(this.lastOutboxAt),
-      lastError: this.lastError, queued: this.queued, dropped: this.stats.dropped, updatedAt: new Date(this.now()).toISOString(),
+      lastError: this.lastError, queued: this.queued, dropped: this.stats.dropped,
+      ignoredByHub: this.stats.ignoredByHub, refused: this.stats.refused, hubRestarts: this.stats.hubRestarts,
+      updatedAt: new Date(this.now()).toISOString(),
     }
   }
 
