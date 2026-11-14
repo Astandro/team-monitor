@@ -18,7 +18,7 @@ describe('tool card for a shell command', () => {
     assert.ok(!c.main.includes('cd /Users'))
   })
   it('a long action is shortened in the middle: start and end both readable, card never wider than the max', () => {
-    const cmd = 'cd /Users/a/projects/team-monitor-wt/haze-commands && npx -y pnpm@10 --dir web exec tsc --noEmit'
+    const cmd = 'cd /Users/a/projects/my-app-wt/feature-x && npx -y pnpm@10 --dir web exec tsc --noEmit'
     const c = toolCardText({ toolName: 'Bash', args: '', inputData: { command: cmd }, state: 'running' }, MAX, main, top)
     assert.ok(c.main.startsWith('npx -y pnpm@10'), c.main)
     assert.ok(c.main.endsWith('--noEmit'), c.main)
@@ -59,7 +59,7 @@ describe('tool card for a shell command', () => {
 
 describe('tool card for other tools', () => {
   it('one line, label whole, a long path shortened in the middle so the file name stays', () => {
-    const c = toolCardText({ toolName: 'Read', args: '/Users/example-developer-account/projects/team-monitor-wt/haze-commands/web/lib/sky.ts', state: 'running' }, MAX, main, top)
+    const c = toolCardText({ toolName: 'Read', args: '/Users/example-developer-account/projects/my-app-wt/feature-x/web/lib/sky.ts', state: 'running' }, MAX, main, top)
     assert.equal(c.top, null)
     assert.ok(c.main.startsWith('Baca file: '), c.main)
     assert.ok(c.main.endsWith('sky.ts'), c.main)

@@ -73,7 +73,7 @@ test('a member working on a task key shows the task title, never the key (O2)', 
   const vm = buildTeamVM(fixture(), { now: NOW })
   const yuki = vm.members.find((m) => m.nick === 'Yuki')
   assert.ok(yuki)
-  assert.ok(yuki.task.startsWith('Merombak seluruh halaman Explore'))
+  assert.ok(yuki.task.startsWith('Menata ulang seluruh halaman daftar resep'))
   assert.notEqual(yuki.task, 'tm03')
 })
 
