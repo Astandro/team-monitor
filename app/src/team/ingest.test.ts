@@ -19,6 +19,7 @@ import { setupTeam } from './index'
 import { parseInstallArgs, programArguments, ServiceSpec } from './service'
 import { waitForAnswer } from './wait-answer'
 import { listen, makeProject, makeTmpDir, removeTmpDir, request, Resp, sampleState } from './test-helpers'
+import { TombstoneStore } from './ingest-tombstones'
 
 const INGEST = 'cd'.repeat(32)
 const LOGIN = 'ab'.repeat(32)
@@ -739,6 +740,14 @@ describe('capacity', () => {
       ctx.clock.t += 61_000
       ctx.ingest!.sweep() // all three stale
       assert.equal((await putState(ctx, null, null, 'box-a')).status, 200, 'box-a is live again')
+      // box-d is not bound yet: it may evict a source with a bound key only once that has been stale for 10 minutes.
+      const early = await putState(ctx, null, null, 'box-d')
+      assert.equal(early.status, 503, early.body)
+      assert.match(JSON.parse(early.body).error, /none can be removed for a new one now \(a live source never is, a source with a bound key only after 10 minutes stale\)/)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-d')))
+      ctx.clock.t += 10 * 60_000
+      ctx.ingest!.sweep()
+      assert.equal((await putState(ctx, null, null, 'box-a')).status, 200, 'box-a is live again')
       const r = await putState(ctx, null, null, 'box-d')
       assert.equal(r.status, 200, r.body)
       assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-b')), 'the longest-stale source is removed')
@@ -771,12 +780,162 @@ describe('capacity', () => {
       ctx.relay.room = false
       const r = await events(ctx, 7)
       assert.equal(r.status, 503)
-      assert.match(JSON.parse(r.body).error, /capacity/)
+      assert.equal(JSON.parse(r.body).error, 'hub at capacity: the cloud session limit is reached and not enough ended or stale sessions can be evicted; retry later')
       assert.ok(Number(r.headers['retry-after']) > 0)
       assert.equal(ctx.relay.applied.length, 0)
+      // The refused request of a new source registered nothing: no project, no mirror, no key binding.
+      assert.ok(!(await projects(ctx)).some((p) => p.id === PID))
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.deepEqual(ctx.ingest!.sourceStates(), [])
       ctx.relay.room = true
-      assert.deepEqual(JSON.parse((await events(ctx, 7)).body), { ok: true, seq: 7, applied: 2, ignored: 0 })
+      const other = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 7, messages: [startMsg(), eventMsg()] }, auth(INGEST, OTHER_KEY))
+      assert.deepEqual(JSON.parse(other.body), { ok: true, seq: 7, applied: 2, ignored: 0 }, 'the refused key was not bound')
     } finally { await teardown(ctx) }
+  })
+
+  test('a refused new source at the source cap leaves nothing behind', async () => {
+    const ctx = await setup({ maxSources: 1 })
+    try {
+      assert.equal((await putState(ctx, null, null, 'box-a')).status, 200)
+      const r = await events(ctx, 1, [startMsg(), eventMsg()], 'box-b')
+      assert.equal(r.status, 503)
+      assert.equal(r.headers['retry-after'], '30')
+      assert.deepEqual(ctx.ingest!.sourceStates().map((s) => s.sourceId), ['box-a'])
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-b')))
+      assert.ok(!(await projects(ctx)).some((p) => p.id === 'cloud-box-b'))
+      assert.equal(ctx.relay.applied.length, 0)
+    } finally { await teardown(ctx) }
+  })
+})
+
+// ─── Key bindings survive eviction (NEW-2) ──────────────────────────────────
+
+describe('key bindings after eviction', () => {
+  const tombFile = (ctx: Ctx) => path.join(ctx.home, 'ingest-tombstones.json')
+  const tombs = (ctx: Ctx) => (JSON.parse(fs.readFileSync(tombFile(ctx), 'utf-8')) as { tombstones: Array<{ sourceId: string; keyHash: string; evictedAt: string }> }).tombstones
+  const VICTIM = 'box-victim'
+
+  test('QA repro: a token holder fills the cap so a stale victim is evicted, then claims its sourceId: 403; the real key works again', async () => {
+    const ctx = await setup({ maxSources: 2 })
+    try {
+      assert.equal((await putState(ctx, sampleState(), null, VICTIM)).status, 200) // bound to KEY
+      ctx.clock.t += 1000
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: 'evil-1', project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep() // both stale (61 s)
+
+      // A new, unbound sourceId cannot evict the bound victim yet: 503, and nothing of it is registered.
+      const evil = (sourceId: string) => send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId, project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))
+      assert.equal((await evil('evil-2')).status, 503)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'evil-2')))
+      assert.ok(!fs.existsSync(tombFile(ctx)), 'nothing evicted')
+      // After 10 minutes stale it can be (the victim is the longest stale).
+      ctx.clock.t += 10 * 60_000
+      assert.equal((await evil('evil-2')).status, 200)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', VICTIM)), 'victim evicted with its mirror')
+      assert.equal(fs.statSync(tombFile(ctx)).mode & 0o777, 0o600)
+      assert.deepEqual(tombs(ctx).map((t) => [t.sourceId, t.keyHash]), [[VICTIM, sha256(KEY)]])
+      assert.ok(!fs.readFileSync(tombFile(ctx), 'utf-8').includes(KEY), 'only the hash is kept')
+      assert.deepEqual(fs.readdirSync(ctx.home).filter((n) => n.endsWith('.tmp')), [], 'atomic write left no temp file')
+
+      // The takeover: state, events and outbox for the victim's sourceId with another key are refused.
+      assert.equal((await evil(VICTIM)).status, 403)
+      assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: VICTIM, project, seq: 1, messages: [startMsg()] }, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${VICTIM}`, undefined, auth(INGEST, OTHER_KEY))).status, 403)
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', VICTIM)))
+      assert.ok(!(await projects(ctx)).some((p) => p.id === `cloud-${VICTIM}`))
+
+      // Also after a hub restart.
+      const team2 = new TeamService([], { pollMs: 60_000 })
+      const ingest2 = new IngestService({ home: ctx.home, token: INGEST, team: team2, now: () => ctx.clock.t, sweepMs: 0, log: () => {}, maxSources: 2 })
+      ingest2.start()
+      ingest2.attachRelay(new FakeRelay())
+      const srv = await listen(createRequestHandler({ team: team2, remote: null, ingest: ingest2, fallback: (_q, r) => { r.writeHead(404); r.end() } }))
+      try {
+        const put = (key: string) => request(srv.port, {
+          method: 'PUT', path: '/api/ingest/v1/state', headers: { ...JSON_H, ...auth(INGEST, key) },
+          body: JSON.stringify({ sourceId: VICTIM, project, state: null, watcher: null }),
+        })
+        assert.equal((await put(OTHER_KEY)).status, 403, 'still refused after a restart')
+        // The real key: its source is created again. A returning bound sourceId may evict any stale source.
+        ctx.clock.t += 61_000
+        ingest2.sweep()
+        const back = await put(KEY)
+        assert.equal(back.status, 200, back.body)
+        assert.ok(fs.existsSync(path.join(ctx.home, 'remote', VICTIM)))
+        assert.equal(JSON.parse(fs.readFileSync(path.join(ctx.home, 'remote', VICTIM, 'source.json'), 'utf-8')).keyHash, sha256(KEY))
+        // Its tombstone is gone (source.json holds the binding); the evicted one's binding is kept.
+        assert.deepEqual(tombs(ctx).map((t) => t.sourceId), ['evil-1'])
+        assert.equal((await put(OTHER_KEY)).status, 403)
+      } finally {
+        await srv.close()
+        ingest2.dispose()
+        team2.dispose()
+      }
+    } finally { await teardown(ctx) }
+  })
+
+  test('a source removed after 24 hours silent keeps its binding; tombstones expire after 30 days', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await putState(ctx)).status, 200)
+      ctx.clock.t += 25 * 3600_000
+      ctx.ingest!.sweep()
+      assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.equal((await putState(ctx, null, null, SRC)).status, 200, 'the real key is accepted again')
+      ctx.clock.t += 25 * 3600_000
+      ctx.ingest!.sweep()
+      const other = () => send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))
+      ctx.clock.t += 29 * 24 * 3600_000
+      assert.equal((await other()).status, 403, 'still bound 29 days after the eviction')
+      ctx.clock.t += 24 * 3600_000
+      assert.equal((await other()).status, 200, 'expired 30 days after the eviction: unbound again')
+    } finally { await teardown(ctx) }
+  })
+
+  test('tombstone store: capped (oldest dropped), expiry, reload, damaged file ignored', () => {
+    const root = makeTmpDir()
+    try {
+      const file = path.join(root, 'ingest-tombstones.json')
+      const clock = { t: 1_000_000 }
+      const logs: string[] = []
+      const store = new TombstoneStore({ file, now: () => clock.t, log: (m) => logs.push(m), max: 3, ttlMs: 1000 })
+      store.load()
+      for (const id of ['s-1', 's-2', 's-3', 's-4', 's-5']) { store.add(id, sha256(id)); clock.t += 10 }
+      assert.ok(store.flush())
+      assert.equal(store.get('s-1'), null, 'oldest dropped at the cap')
+      assert.equal(store.get('s-2'), null)
+      assert.equal(store.get('s-5'), sha256('s-5'))
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+      const again = new TombstoneStore({ file, now: () => clock.t, log: () => {}, max: 3, ttlMs: 1000 })
+      again.load()
+      assert.deepEqual(['s-3', 's-4', 's-5'].map((id) => again.get(id)), ['s-3', 's-4', 's-5'].map(sha256))
+      clock.t += 1000
+      assert.equal(again.get('s-5'), null, 'expired')
+      fs.writeFileSync(file, '{"tombstones": "nope"}')
+      store.load()
+      assert.equal(store.size(), 0)
+      assert.match(logs.join('\n'), /ignored/)
+      fs.writeFileSync(file, JSON.stringify({ tombstones: [{ sourceId: '../x', keyHash: sha256('a'), evictedAt: new Date(clock.t).toISOString() }, { sourceId: 'ok', keyHash: 'zz', evictedAt: new Date(clock.t).toISOString() }] }))
+      store.load()
+      assert.equal(store.size(), 0, 'bad entries are left out')
+    } finally { removeTmpDir(root) }
+  })
+
+  test('mirrors removed at start keep their binding too', async () => {
+    const root = makeTmpDir()
+    try {
+      const home = path.join(root, 'tm')
+      const now = Date.parse('2026-11-13T12:00:00Z')
+      fs.mkdirSync(path.join(home, 'remote', 'old-box', '.agent-team'), { recursive: true })
+      fs.writeFileSync(path.join(home, 'remote', 'old-box', 'source.json'), JSON.stringify({ sourceId: 'old-box', name: 'X', projectId: 'p', lastSeenAt: new Date(now - 25 * 3600_000).toISOString(), keyHash: sha256(KEY) }))
+      const team = new TeamService([], { pollMs: 60_000 })
+      const ingest = new IngestService({ home, token: INGEST, team, now: () => now, sweepMs: 0, log: () => {} })
+      assert.deepEqual(ingest.start().removed, ['old-box'])
+      assert.equal(ingest.tombstones.get('old-box'), sha256(KEY))
+      ingest.dispose()
+      team.dispose()
+    } finally { removeTmpDir(root) }
   })
 })
 

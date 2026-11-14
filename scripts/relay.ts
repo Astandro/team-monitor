@@ -649,13 +649,16 @@ function evictCloudSession(s: CloudSession): void {
  * of live sources (least recently active first). An active session of a live source is never evicted. False when
  * there is not enough room even so (nothing is evicted then).
  */
-function makeCloudRoom(sessionIds: string[]): boolean {
+function makeCloudRoom(sessionIds: string[], leaving?: string): boolean {
   const fresh = new Set(sessionIds.filter((id) => !sessions.has(id) && !cloudSessions.has(id)))
-  const need = cloudSessions.size + fresh.size - cloudLimits.maxSessions
+  // The sessions of a source about to be removed for this request (`leaving`) are room already.
+  let goingAway = 0
+  if (leaving !== undefined) for (const s of cloudSessions.values()) if (s.sourceId === leaving) goingAway++
+  const need = cloudSessions.size - goingAway + fresh.size - cloudLimits.maxSessions
   if (need <= 0) return true
   const rank = (s: CloudSession) => (staleSources.has(s.sourceId) ? (s.status === 'completed' ? 0 : 1) : 2)
   const candidates = [...cloudSessions.values()]
-    .filter((s) => s.status === 'completed' || staleSources.has(s.sourceId))
+    .filter((s) => s.sourceId !== leaving && (s.status === 'completed' || staleSources.has(s.sourceId)))
     .sort((a, b) => rank(a) - rank(b)
       || (staleSince.get(a.sourceId) ?? 0) - (staleSince.get(b.sourceId) ?? 0)
       || a.lastActivityTime - b.lastActivityTime)
@@ -812,8 +815,9 @@ export interface CloudIntake {
   /** The source a cloud session came from, or null (local or unknown session). */
   sourceOf(sessionId: string): string | null
   /** Make room for the sessions among `sessionIds` that are new (evicting ended or stale ones at the cap). False
-   *  when every session is live and there is no room: the caller refuses the request. */
-  makeRoom(sessionIds: string[]): boolean
+   *  when not enough sessions can be evicted (nothing is evicted then): the caller refuses the request. `leaving`:
+   *  a source the caller removes right after, whose sessions count as room. */
+  makeRoom(sessionIds: string[], leaving?: string): boolean
   /** Forget every session (and buffer) of a source the hub removed. */
   forgetSource(sourceId: string): void
   /** Tell open graph streams that GET /api/team/projects changed (`projects-changed`). */

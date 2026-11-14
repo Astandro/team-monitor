@@ -12,7 +12,8 @@
  * - Every request also carries the source's own key (`X-Team-Monitor-Source-Key`, 64 hex, made by the forwarder at
  *   its first start). The first accepted request binds the key's sha256 to the sourceId (kept in the mirror's
  *   source.json, so it survives a restart); a later request for that sourceId with another or no key is 403 and
- *   changes nothing. So holding the shared token is not enough to read or write another source.
+ *   changes nothing. So holding the shared token is not enough to read or write another source. When a source is
+ *   removed, its binding is kept 30 days as a tombstone (ingest-tombstones.ts).
  * - Every authenticated response carries `X-Team-Monitor-Hub-Epoch` (random per hub start). An events post that
  *   names an older epoch in the same header is refused with 409: the forwarder then resends its sessions and history.
  * - Limits: JSON nesting 32 levels, one event 64 KB, buffered events 4 MB per cloud session, 16 MB per source and
@@ -38,6 +39,7 @@ import type { CloudIntake, CloudMessage } from '../../../scripts/relay'
 import { coordinatorFromState } from '../../../scripts/session-projects'
 import { LogLimiter } from '../../../scripts/log-limit'
 import { LoginLimiter, tokenMatches } from './auth'
+import { TOMBSTONE_FILE, TombstoneStore } from './ingest-tombstones'
 import { INBOX_FILE_RE, MAX_INBOX_FILE_BYTES } from './chat'
 import { HEARTBEAT_FILE, EndReason, HeartbeatRecord, writeHeartbeat } from './heartbeat'
 import { BodyError, clientKey, closeAfter, IngestHandler, mediaType, readBody, sendError, sendJSON, TeamService } from './http'
@@ -59,6 +61,9 @@ export const MIRROR_MAX_IDLE_MS = 24 * 60 * 60 * 1000
 export const MAX_OUTBOX_WAIT_S = 25
 /** Sources kept; at the cap the longest-stale source is evicted, and 503 when every source is live. */
 export const MAX_SOURCES = 100
+/** At the source cap, a request for a sourceId not bound yet evicts a source with a bound key only once that source
+ *  has been stale this long (and an unbound one, or any for a returning bound sourceId, as soon as it is stale). */
+export const UNBOUND_EVICT_MS = 10 * 60_000
 /** Files per outbox response; the cursor moves on by what was returned. */
 export const MAX_OUTBOX_FILES = 200
 /** Long polls held open at once; above it an outbox poll that would wait gets 503 with Retry-After. */
@@ -412,6 +417,11 @@ export interface IngestOptions {
   maxOutboxWaiters?: number
   /** Log limit interval (default one minute). */
   logIntervalMs?: number
+  /** Tombstones of evicted sources' key bindings (defaults 30 days, 10,000); smaller values for tests. */
+  tombstoneTtlMs?: number
+  maxTombstones?: number
+  /** Default UNBOUND_EVICT_MS. */
+  unboundEvictMs?: number
 }
 
 export class IngestService implements IngestHandler {
@@ -427,6 +437,7 @@ export class IngestService implements IngestHandler {
   private readonly outboxPollMs: number
   private readonly maxSources: number
   private readonly maxWaiters: number
+  private readonly unboundEvictMs: number
   /** Changes at every start: a cursor from before a restart reads as "from the beginning", and a forwarder that sees
    *  a new epoch (EPOCH_HEADER) sends its sessions and their history again. */
   readonly epoch = crypto.randomBytes(4).toString('hex')
@@ -437,6 +448,8 @@ export class IngestService implements IngestHandler {
   private disposed = false
   /** Every log line a request can cause goes through here: one per kind and client/source per minute (NEW-1). */
   private readonly limitedLog: LogLimiter
+  /** Key bindings of evicted sources (ingest-tombstones.ts). */
+  readonly tombstones: TombstoneStore
 
   constructor(opts: IngestOptions) {
     this.remoteDir = path.join(opts.home, 'remote')
@@ -446,12 +459,17 @@ export class IngestService implements IngestHandler {
     this.now = opts.now ?? Date.now
     this.log = opts.log ?? console.warn
     this.limitedLog = new LogLimiter(this.log, { now: this.now, intervalMs: opts.logIntervalMs })
+    this.tombstones = new TombstoneStore({
+      file: path.join(opts.home, TOMBSTONE_FILE), now: this.now, log: (m) => this.limitedLog.line('tombstones', '', m),
+      ttlMs: opts.tombstoneTtlMs, max: opts.maxTombstones,
+    })
     this.staleMs = opts.staleMs ?? STALE_AFTER_MS
     this.sweepMs = opts.sweepMs ?? 5000
     this.mirrorMaxIdleMs = opts.mirrorMaxIdleMs ?? MIRROR_MAX_IDLE_MS
     this.outboxPollMs = opts.outboxPollMs ?? 500
     this.maxSources = opts.maxSources ?? MAX_SOURCES
     this.maxWaiters = opts.maxOutboxWaiters ?? MAX_OUTBOX_WAITERS
+    this.unboundEvictMs = opts.unboundEvictMs ?? UNBOUND_EVICT_MS
     this.team.cloudStale = (sourceId) => this.sources.get(sourceId)?.stale ?? true
   }
 
@@ -469,10 +487,17 @@ export class IngestService implements IngestHandler {
   start(): { removed: string[]; restored: string[] } {
     const removed: string[] = []
     const restored: string[] = []
+    this.tombstones.load()
     let names: string[] = []
     try { names = fs.readdirSync(this.remoteDir) } catch { /* no mirrors yet */ }
     const now = this.now()
     const found: Array<{ name: string; dir: string; rec: SourceFile | null; lastSeen: number }> = []
+    // A removed mirror's key binding is kept as a tombstone (a later request with another key is still refused).
+    const remove = (name: string, dir: string, rec: SourceFile | null) => {
+      if (!this.removeMirror(dir)) return
+      removed.push(name)
+      if (rec?.keyHash) this.tombstones.add(name, rec.keyHash)
+    }
     for (const name of names.sort()) {
       if (!SOURCE_ID_RE.test(name)) continue
       const dir = mirrorPath(this.remoteDir, name)
@@ -482,24 +507,25 @@ export class IngestService implements IngestHandler {
       const rec = this.readSourceFile(dir)
       const lastSeen = rec ? Date.parse(rec.lastSeenAt) : st.mtimeMs
       if (!Number.isFinite(lastSeen) || now - lastSeen > this.mirrorMaxIdleMs) {
-        if (this.removeMirror(dir)) removed.push(name)
+        remove(name, dir, rec)
         continue
       }
       found.push({ name, dir, rec, lastSeen })
     }
     // The most recently seen first, up to the cap; older ones beyond it are removed.
     const keep = [...found].sort((a, b) => b.lastSeen - a.lastSeen)
-    for (const f of keep.slice(this.maxSources)) if (this.removeMirror(f.dir)) removed.push(f.name)
+    for (const f of keep.slice(this.maxSources)) remove(f.name, f.dir, f.rec)
     const kept = new Set(keep.slice(0, this.maxSources).map((f) => f.name))
     for (const f of found) {
       if (!kept.has(f.name)) continue
       try {
-        this.register(f.name, { id: f.rec?.projectId ?? f.name, name: f.rec?.name ?? f.name }, true, f.lastSeen, f.rec?.keyHash ?? null)
+        this.register(f.name, { id: f.rec?.projectId ?? f.name, name: f.rec?.name ?? f.name }, true, f.lastSeen, f.rec?.keyHash ?? null, null)
         restored.push(f.name)
       } catch (e) {
         this.log(`[ingest] mirror ${f.name} not restored: ${(e as Error).message}`)
       }
     }
+    this.tombstones.flush()
     removed.sort()
     if (!this.sweepTimer && this.sweepMs > 0) {
       this.sweepTimer = setInterval(() => this.sweep(), this.sweepMs)
@@ -532,6 +558,7 @@ export class IngestService implements IngestHandler {
       this.relay?.setStale(s.id, stale)
       changed = true
     }
+    this.tombstones.flush()
     if (changed) this.relay?.announceProjectsChanged()
   }
 
@@ -611,7 +638,8 @@ export class IngestService implements IngestHandler {
     const key = typeof raw === 'string' ? raw.trim() : ''
     if (!SOURCE_KEY_RE.test(key)) throw new IngestError(403, 'source key required (X-Team-Monitor-Source-Key: 64 hex)')
     const hash = hashKey(key)
-    const bound = this.sources.get(sourceId)?.keyHash
+    // A source the hub evicted keeps its binding as a tombstone (30 days).
+    const bound = this.sources.get(sourceId)?.keyHash ?? this.tombstones.get(sourceId)
     if (bound && !sameHash(bound, hash)) {
       const err = new IngestError(403, 'this sourceId belongs to another source key', `source key mismatch for ${sourceId}`, undefined, 'key-mismatch')
       err.source = sourceId
@@ -642,12 +670,20 @@ export class IngestService implements IngestHandler {
     if (typeof known === 'string' && known !== '' && known !== this.epoch) {
       throw new IngestError(409, 'the hub restarted: send the sessions and their history again')
     }
-    const src = this.touch(input.sourceId, input.project, keyHash)
-    if (input.seq <= src.lastSeq) return sendJSON(res, 200, { ok: true, seq: src.lastSeq, duplicate: true })
-    // Room for new sessions (ended or stale ones are evicted); when everything is live, refused before seq moves on,
-    // so the forwarder retries the same body later.
-    if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages))) {
-      throw new IngestError(503, 'hub at capacity: every cloud session on it is live; retry later', `cloud session cap reached, events of ${src.id} not applied`, CAPACITY_RETRY_S, 'capacity-sessions')
+    // Room for new sessions (ended or stale ones are evicted); when not enough can be, refused before seq moves on,
+    // so the forwarder retries the same body later. A new source is checked against the source cap first and
+    // registered only once both have room: a request refused for capacity leaves no project and no key binding.
+    const sessionCap = () => new IngestError(503, 'hub at capacity: the cloud session limit is reached and not enough ended or stale sessions can be evicted; retry later',
+      `cloud session cap reached, events of ${input.sourceId} not applied`, CAPACITY_RETRY_S, 'capacity-sessions')
+    let src = this.sources.get(input.sourceId)
+    if (!src) {
+      const victim = this.roomForSource(input.sourceId)
+      if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages), victim?.id)) throw sessionCap()
+      src = this.touch(input.sourceId, input.project, keyHash, victim)
+    } else {
+      src = this.touch(input.sourceId, input.project, keyHash)
+      if (input.seq <= src.lastSeq) return sendJSON(res, 200, { ok: true, seq: src.lastSeq, duplicate: true })
+      if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages))) throw sessionCap()
     }
     src.lastSeq = input.seq
     let applied = 0
@@ -816,11 +852,17 @@ export class IngestService implements IngestHandler {
    * The source of a request whose key passed checkSourceKey, registered on first sight (its key bound then, or on
    * its first keyed request for a mirror from before keys); marks it live.
    */
-  private touch(sourceId: string, project: IngestProject, keyHash: string): Source {
+  private touch(sourceId: string, project: IngestProject, keyHash: string, victim?: Source | null): Source {
     let src = this.sources.get(sourceId)
     let changed = false
     if (!src) {
-      src = this.register(sourceId, project, false, this.now(), keyHash)
+      try {
+        src = this.register(sourceId, project, false, this.now(), keyHash, victim === undefined ? this.roomForSource(sourceId) : victim)
+        // Its source.json holds the binding again; the tombstone goes once that is written.
+        if (src.lastTouch === src.lastSeen) this.tombstones.remove(sourceId)
+      } finally {
+        this.tombstones.flush() // also the victim's binding
+      }
       changed = true
     } else if (src.keyHash === null) {
       src.keyHash = keyHash
@@ -864,26 +906,55 @@ export class IngestService implements IngestHandler {
     }
   }
 
-  /** Forget a source: its sessions and buffers, its project, its mirror folder (with its bound key). */
+  /**
+   * Forget a source: its sessions and buffers, its project, its mirror folder. Its key binding is kept as a
+   * tombstone (saved by the caller's tombstones.flush()), so its sourceId stays bound to its key.
+   */
   private evictSource(src: Source, why: 'idle' | 'capacity'): void {
     this.sources.delete(src.id)
+    if (src.keyHash) this.tombstones.add(src.id, src.keyHash)
     this.relay?.forgetSource(src.id)
     this.team.removeCloudProject(src.projectId)
     this.removeMirror(src.root)
     this.limitedLog.line(`evict-${why}`, '', `[ingest] removed source ${src.id} (${why === 'idle' ? 'silent for more than 24 hours' : 'longest stale, room for a new source'})`)
   }
 
-  private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number, keyHash: string | null): Source {
+  /**
+   * Checks before a new source is registered, changing nothing: its project id is free, and there is room under the
+   * source cap. Returns the source to evict for it (null: room without eviction). At the cap the source stale
+   * longest is chosen; never a live one. A request for a sourceId that is not bound yet (no tombstone) may evict a
+   * source with a bound key only once that source has been stale for UNBOUND_EVICT_MS (10 minutes); an unbound
+   * (pre-key) mirror, or any stale source for a returning bound sourceId, as soon as it is stale. 503 otherwise.
+   */
+  private roomForSource(sourceId: string): Source | null {
     const projectId = `cloud-${sourceId}`
     if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
       throw new IngestError(409, `a local project already has the id ${projectId}`)
     }
-    if (this.sources.size >= this.maxSources) {
-      // Evict the source that has been stale longest; never a live one.
-      const victim = [...this.sources.values()].filter((s) => s.stale).sort((a, b) => a.lastSeen - b.lastSeen)[0]
-      if (!victim) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources, all live; retry later`, `source cap reached, ${sourceId} not registered`, CAPACITY_RETRY_S, 'capacity-sources')
-      this.evictSource(victim, 'capacity')
+    if (this.sources.size < this.maxSources) return null
+    const now = this.now()
+    const returning = this.tombstones.get(sourceId) !== null
+    const victim = [...this.sources.values()]
+      .filter((s) => s.stale && (returning || s.keyHash === null || now - s.lastSeen >= this.staleMs + this.unboundEvictMs))
+      .sort((a, b) => a.lastSeen - b.lastSeen)[0]
+    if (!victim) {
+      const rule = returning
+        ? 'a live source never is'
+        : `a live source never is, a source with a bound key only after ${Math.round(this.unboundEvictMs / 60_000)} minutes stale`
+      throw new IngestError(503, `hub at capacity: ${this.maxSources} sources and none can be removed for a new one now (${rule}); retry later`,
+        `source cap reached, ${sourceId} not registered`, CAPACITY_RETRY_S, 'capacity-sources')
     }
+    return victim
+  }
+
+  /** Register a source; `victim` (from roomForSource) is evicted first. */
+  private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number, keyHash: string | null, victim: Source | null): Source {
+    const projectId = `cloud-${sourceId}`
+    if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
+      throw new IngestError(409, `a local project already has the id ${projectId}`)
+    }
+    if (victim) this.evictSource(victim, 'capacity')
+    if (this.sources.size >= this.maxSources) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources; retry later`, undefined, CAPACITY_RETRY_S)
     ensurePlainDir(this.remoteDir)
     const root = mirrorPath(this.remoteDir, sourceId)
     ensurePlainDir(root)

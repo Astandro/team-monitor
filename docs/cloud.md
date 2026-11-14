@@ -130,7 +130,11 @@ loopback Host. Answer and chat in the hub.
 - **Source key.** Each container makes its own 32-byte key (`~/.team-monitor/cloud/source-key`, 0600) and sends it
   in `X-Team-Monitor-Source-Key`. The hub binds the key's hash to the source id (derived from the cloud session id)
   on the first accepted request and keeps it across hub restarts. Any request for that source with another key
-  gets 403, changes nothing, and its outbox is not shown.
+  gets 403, changes nothing, and its outbox is not shown. When the hub removes a source (source cap, or 24 hours
+  silent), the binding stays in `~/.team-monitor/ingest-tombstones.json` (0600, hashes only) for 30 days: another
+  key is still refused, and the real key is accepted again (the source is created anew). At most 10,000 such
+  entries are kept; beyond that the oldest are dropped, and those source ids are free again for whichever key
+  comes first, like a source id never seen.
 - **A token holder** (any process in a cloud session of the environment, because the proxy adds the token to every
   request to the hub host) can: add up to 100 sources of its own, show fake sessions and team state under them
   (content is size-capped and shape-checked, shown escaped), and claim a source id that no container has used yet,
@@ -149,14 +153,16 @@ loopback Host. Answer and chat in the hub.
   never refused for it. A new viewer's replay carries at most 32 MB of cloud events. At most 200 cloud sessions and 100
   sources. At the cap the hub evicts ended sessions and sessions of stale sources (stale longest first) and then
   the longest-stale source with its mirror; a live source or an active session of a live source is never evicted.
-  If everything is live, the post gets 503 with `Retry-After: 30` and the forwarder retries. At most 64 outbox long
-  polls at once (503, `Retry-After: 5`).
+  A source id the hub has no binding for may only evict a source with a bound key once that source has been stale
+  for 10 minutes (a source id coming back with its own key may evict any stale source). If nothing can be evicted,
+  the post gets 503 with `Retry-After: 30`, registers nothing (no project, no key binding), and the forwarder
+  retries. At most 64 outbox long polls at once (503, `Retry-After: 5`).
 - **Hub log.** A refused ingest request (wrong token or source key, capacity, too many polls, a failed write) is
   logged at most once per minute per kind of refusal and client or source, with the number of lines left out on
   the next one; at most 10 such lines per kind per minute in all. Bad paths and bad bodies are not logged.
 - **Mirrors.** The hub writes a source's state to `~/.team-monitor/remote/<sourceId>/.agent-team/` and registers
   it at runtime as project `cloud-<sourceId>` (not in `config.json`). A source silent for 60 s is stale; a source
-  silent for 24 hours is removed with its mirror, which also frees its source id for a new key.
+  silent for 24 hours is removed with its mirror; its key binding is kept for 30 days more (see Source key).
 - **Host in cloud mode.** The container's monitor binds 127.0.0.1 only. When started by `cloud start` with
   `CLAUDE_CODE_REMOTE=true` it accepts any Host header for read requests (GET, HEAD), so the preview pane can load
   it. Every changing request still needs a loopback Host. `--cloud` cannot be combined with `--remote` or
@@ -170,8 +176,9 @@ loopback Host. Answer and chat in the hub.
   on the hub.
 - Events written while the container's monitor was down (for example between its stop and restart) can be missing
   on the hub.
-- A new container that reuses a session id gets a new source key and is refused (403) until the hub drops the old
-  source, 24 hours after its last request. There is no command to forget a source.
+- A new container that reuses a session id gets a new source key and is refused (403) until the hub forgets the
+  old binding: 30 days after it removed the source (which happens 24 hours after the source's last request, or
+  earlier at the source cap). There is no command to forget a source.
 - A cloud source can claim a session id before a local session with that id exists; the list then shows it twice.
 - `cloud stop` sends SIGKILL after 3 s, which can cut a post in flight (see the first point).
 - A hub restart loses the events it held in memory. The forwarder notices the new hub (epoch), and sends the
@@ -207,10 +214,10 @@ Run `cloud status` in the container first. The forwarder log is `~/.team-monitor
 | `Last error: ... proxy refused the tunnel (HTTP 403)` | The hub host is not in the environment's allowed hosts. |
 | `Last error: ... HTTP 401 (ingest token required)` | Wrong or missing token: the network secret is not set for the exact hub host, is not `Authorization: Bearer`, or the token file was replaced. Save the current token file content as the secret. |
 | HTTP 429 `too many failed attempts` | Five wrong tokens in 15 minutes from one client. Fix the secret; the correct token works at once. |
-| HTTP 403 `... source key ...` | The hub has this source id bound to another container's key (a new container with the same session id). Wait until the hub drops the source (24 h of silence). |
+| HTTP 403 `... source key ...` | The hub has this source id bound to another container's key (a new container with the same session id). The binding lasts until 30 days after the hub removed the old source (section 6). |
 | HTTP 409 `the hub restarted` | The forwarder handles it: it sends its sessions and history again. Only in the log (`the hub restarted: ...`). |
 | HTTP 413, or `hub refused N message(s) ... dropped` | A body was over a limit (section 5). The forwarder drops that batch and counts it under `refused` in `cloud status`; it does not retry it. |
-| HTTP 503 with `Retry-After` | The hub is at capacity (every cloud session live) or has too many open polls. The forwarder waits (`Retry-After`) and retries. |
+| HTTP 503 with `Retry-After` | The hub is at capacity (not enough ended or stale sessions or sources to evict) or has too many open polls. The forwarder waits (`Retry-After`) and retries. |
 | HTTP 404 | The hub was not started with `--ingest`, or the Funnel mapping points to the wrong path. Run `tm doctor --ingest`. |
 | HTTP 400 `not an ingest route` | The hub URL has a path. Use only `https://<host>`. |
 | `TLS to the hub failed` or `proxy connection failed` | The container cannot reach the hub. Run `tm doctor` on the hub: it shows whether the Funnel mapping and the monitor are in place. |
