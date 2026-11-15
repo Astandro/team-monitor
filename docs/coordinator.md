@@ -47,6 +47,9 @@ A decision is answerable only while `approvals.<Dn>.status` is `"open"` and no `
 - Coordinator: put `"coordinator": {"name": "Sora", "role": "Orchestrator"}` in `meta` (name required, at most 60
   characters; role optional, default "Orchestrator"). The graph's main node shows it; a change is picked up within
   about a second. Every session of the project shows the same coordinator, since it comes from the project's file.
+  The monitor also accepts what coordinators often write instead: `meta.coordinator` as a plain string, fields under
+  `meta.run` (the artifact monitor's `meta/run` document; a field set directly on `meta` wins), or no coordinator at
+  all but an agent with `"desk": "coordinator"` (its `nick` is the name). The documented shape stays the preferred one.
 - Sub-agents: start the Agent `description` with `<Name> (<role>): <task>`, e.g.
   `Hiro (Frontend Engineer): offboard button`. Name = one word starting with a capital letter (at most 40
   characters), role = the full standard role without parentheses (at most 60), then a colon. Anything else is shown

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { encodeProjectPath, matchProjectDir, projectSessionLabel, titleFromState, watchTargets, type WatchedProject } from './session-projects'
+import { coordinatorFromState, encodeProjectPath, matchProjectDir, normalizeTeamState, projectSessionLabel, titleFromState, watchTargets, type WatchedProject } from './session-projects'
 
 const P = (id: string, p: string, extra: Partial<WatchedProject> = {}): WatchedProject => ({ id, name: path.basename(p), path: p, ...extra })
 
@@ -64,4 +64,28 @@ test('registered projects replace the start folder; without any, the start folde
   const hub = P('hub', '/Users/a/projects/my-app')
   assert.deepEqual(watchTargets([hub], '/Users/a'), [hub])
   assert.deepEqual(watchTargets([], '/Users/a/projects/my-app'), [{ id: '', name: 'my-app', path: '/Users/a/projects/my-app' }])
+})
+
+test('normalizeTeamState: meta.run fields count as meta, a string coordinator is a name, else the coordinator agent', () => {
+  // the shape Denev wrote (15 Nov 2026): everything under meta.run, the coordinator as a string
+  const denev = { meta: { run: { title: 'Denev phase 3', status: 'running', coordinator: 'Wulan' } }, agents: {} }
+  const n = normalizeTeamState(denev) as { meta: Record<string, unknown> }
+  assert.equal(n.meta.title, 'Denev phase 3')
+  assert.equal(n.meta.status, 'running')
+  assert.deepEqual(n.meta.coordinator, { name: 'Wulan' })
+  assert.equal(titleFromState(denev), 'Denev phase 3')
+  assert.deepEqual(coordinatorFromState(denev), { name: 'Wulan', role: 'Orchestrator' })
+  assert.deepEqual(denev.meta, { run: { title: 'Denev phase 3', status: 'running', coordinator: 'Wulan' } }, 'input unchanged')
+  // a field set on meta itself wins over meta.run
+  const both = normalizeTeamState({ meta: { title: 'Top', run: { title: 'Run' } } }) as { meta: Record<string, unknown> }
+  assert.equal(both.meta.title, 'Top')
+  // only the agents list says who coordinates
+  const byAgent = { meta: {}, agents: { w: { nick: 'Wulan', name: 'Software Architect', desk: 'coordinator' }, t: { nick: 'Thorvald', desk: 'reviewer' } } }
+  assert.deepEqual(coordinatorFromState(byAgent), { name: 'Wulan', role: 'Software Architect' })
+  // the documented shape is kept as it is
+  assert.deepEqual(coordinatorFromState({ meta: { coordinator: { name: 'Sora', role: 'Orchestrator' } } }), { name: 'Sora', role: 'Orchestrator' })
+  // nothing to go on: no coordinator, and odd input passes through
+  assert.equal(coordinatorFromState({ meta: { title: 'x' } }), undefined)
+  assert.equal(normalizeTeamState(null), null)
+  assert.deepEqual(normalizeTeamState([1]), [1])
 })

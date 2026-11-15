@@ -66,12 +66,33 @@ export function chatStatusLabel(status: unknown, coordinatorName: string): strin
   return ''
 }
 
-/** Name used in the chat for the coordinator: state.json meta.coordinator.name, else "Sora". */
-export function coordinatorName(meta: { coordinator?: unknown } | undefined | null): string {
-  const c = meta?.coordinator
-  if (c && typeof c === 'object') {
-    const name = (c as Record<string, unknown>).name
-    if (typeof name === 'string' && name.trim()) return name.trim()
+/**
+ * Name used in the chat for the coordinator. The documented place is state.json `meta.coordinator.name`
+ * (docs/coordinator.md); coordinators also write `meta.coordinator` as a plain string, `meta.run.coordinator`
+ * (string or object), or only list themselves as the agent with `desk: "coordinator"`. All of those count, in that
+ * order; "Sora" only when none is there.
+ */
+export function coordinatorName(
+  meta: { coordinator?: unknown; run?: unknown } | undefined | null,
+  agents?: unknown,
+): string {
+  const fromValue = (c: unknown): string => {
+    if (typeof c === 'string') return c.trim()
+    if (c && typeof c === 'object') {
+      const name = (c as Record<string, unknown>).name
+      if (typeof name === 'string') return name.trim()
+    }
+    return ''
+  }
+  const run = meta?.run && typeof meta.run === 'object' ? (meta.run as Record<string, unknown>) : null
+  const direct = fromValue(meta?.coordinator) || fromValue(run?.coordinator)
+  if (direct) return direct.slice(0, 60)
+  if (agents && typeof agents === 'object') {
+    for (const a of Object.values(agents as Record<string, unknown>)) {
+      if (!a || typeof a !== 'object') continue
+      const r = a as Record<string, unknown>
+      if (r.desk === 'coordinator' && typeof r.nick === 'string' && r.nick.trim()) return r.nick.trim().slice(0, 60)
+    }
   }
   return DEFAULT_COORDINATOR_NAME
 }
