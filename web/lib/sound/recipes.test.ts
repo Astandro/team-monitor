@@ -7,8 +7,8 @@ const ALL = Object.keys(RECIPES) as SoundCue[]
 
 /** Length of each sound in seconds (end of its last voice), as the spec v2 asks. */
 const DURATION_RANGE: Record<SoundCue, [number, number]> = {
-  tool_start: [0.01, 0.06], // very short tick
-  tool_complete: [0.01, 0.06], // very short blip
+  tool_start: [0.15, 0.35], // short meteor streak (owner request 15 Nov 2026)
+  tool_complete: [0.15, 0.35], // short meteor touchdown
   handoff: [0.1, 0.3],
   agent_spawn: [0.25, 0.6],
   agent_complete: [0.6, 1.4], // soft tail
@@ -44,9 +44,9 @@ test('every cue lasts as long as the spec says', () => {
 test('only the rare events get the big, long sounds', () => {
   const long = ALL.filter((c) => recipeDuration(RECIPES[c]) > 1.6).sort()
   assert.deepEqual(long, [...RARE_EPIC].sort())
-  // and the tool blips are the shortest of all
+  // and the tool meteors are shorter than every sound that is not a frequent one
   const blip = Math.max(recipeDuration(RECIPES.tool_start), recipeDuration(RECIPES.tool_complete))
-  for (const c of ALL) if (c !== 'tool_start' && c !== 'tool_complete') assert.ok(recipeDuration(RECIPES[c]) > blip, c)
+  for (const c of ALL) if (!FREQUENT.includes(c)) assert.ok(recipeDuration(RECIPES[c]) > blip, c)
 })
 
 test('peak caps: no voice and no moment is louder than the caps', () => {

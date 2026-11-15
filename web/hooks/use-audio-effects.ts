@@ -4,9 +4,13 @@ import type { SessionInfo } from '@/lib/bridge-types'
 import { detectStateChanges } from '@/components/agent-visualizer/canvas/detect-state-changes'
 import { cueForGraphTransition, isHandoffParticle, type SoundCue } from '@/lib/sound/cues'
 import { SoundGate, startedSessions } from '@/lib/sound/gate'
-import { playCues } from '@/lib/sound/sound-client'
+import { ambienceFor } from '@/lib/sound/ambience'
+import { playCues, setAmbience } from '@/lib/sound/sound-client'
 import { OFFBOARDED_EVENT } from '@/lib/team/offboard'
 import { useSoundSettings } from './use-sound-settings'
+
+/** How often the background loops are re-checked without a graph change. */
+const AMBIENCE_RECHECK_MS = 3000
 
 interface AudioEffectsInput {
   agents: Map<string, Agent>
@@ -78,6 +82,23 @@ export function useAudioEffects({ agents, toolCalls, particles, isReviewing, ses
     if (seekingRef.current || isReviewing) return
     if (cues.length > 0) playCues(gateRef.current!.admit(cues, performance.now()))
   }, [agents, toolCalls, particles, isReviewing])
+
+  // Background loops while a state lasts (waiting for permission, thinking, disintegrating). Live mode only. Checked
+  // on every graph change and every few seconds (a disintegration ends by the clock, not by a graph change).
+  const agentsRef = useRef(agents)
+  agentsRef.current = agents
+  const reviewingRef = useRef(isReviewing)
+  reviewingRef.current = isReviewing
+  useEffect(() => {
+    const update = () => {
+      const off = seekingRef.current || reviewingRef.current
+      setAmbience(off ? [] : ambienceFor(agentsRef.current.values(), Date.now()))
+    }
+    update()
+    const id = window.setInterval(update, AMBIENCE_RECHECK_MS)
+    return () => window.clearInterval(id)
+  }, [agents, isReviewing])
+  useEffect(() => () => setAmbience([]), [])
 
   return { isMuted: sound.muted, seekingRef, handleToggleMute: sound.toggle }
 }

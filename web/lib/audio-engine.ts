@@ -10,9 +10,11 @@
  * so a muted page never touches audio, never downloads the files, and the browser never warns about autoplay.
  */
 
+import { AmbiencePlayer, type AmbienceKind } from '@/lib/sound/ambience'
 import type { SoundCue } from '@/lib/sound/cues'
 import { RECIPES } from '@/lib/sound/recipes'
 import type { SampleBank } from '@/lib/sound/sample-bank'
+import { SYNTH_ONLY_CUES } from '@/lib/sound/samples'
 import { DEFAULT_VOLUME } from '@/lib/sound/settings'
 import { createMasterBus, scheduleCue, scheduleSample, type MasterBus } from '@/lib/sound/synth'
 
@@ -31,6 +33,9 @@ export class AudioEngine {
   private unlocked = false
   private readonly samples: SampleBank | null
   private readonly createContext: () => AudioContext
+  /** Background loops (lib/sound/ambience.ts): what the graph asks for, and the player once audio runs. */
+  private wantedAmbience = new Set<AmbienceKind>()
+  private ambience: AmbiencePlayer | null = null
 
   constructor(options: AudioEngineOptions = {}) {
     this.samples = options.samples ?? null
@@ -43,12 +48,28 @@ export class AudioEngine {
   unlock() {
     this.unlocked = true
     if (!this._muted) this.ensureContext()
+    this.applyAmbience()
   }
 
   setMuted(muted: boolean) {
     this._muted = muted
     if (!muted && this.unlocked) this.ensureContext()
     this.applyGain()
+    this.applyAmbience()
+  }
+
+  /**
+   * The background loops that should play now (waiting, thinking, disintegrating). Kept while muted or locked and
+   * started once sound runs; muting fades them out and stops their scheduling.
+   */
+  setAmbience(kinds: Iterable<AmbienceKind>) {
+    this.wantedAmbience = new Set(kinds)
+    this.applyAmbience()
+  }
+
+  /** The loops now playing (tests, QA). */
+  ambienceActive(): AmbienceKind[] {
+    return this.ambience?.active() ?? []
   }
 
   setVolume(volume: number) {
@@ -64,7 +85,7 @@ export class AudioEngine {
     const bus = this.bus
     if (!ctx || !bus) return
     const t = ctx.currentTime + 0.01 + delay
-    const sample = this.samples?.get(cue)
+    const sample = SYNTH_ONLY_CUES.has(cue) ? null : this.samples?.get(cue)
     if (sample) scheduleSample(bus, sample, t)
     else scheduleCue(bus, RECIPES[cue], t)
   }
@@ -72,6 +93,16 @@ export class AudioEngine {
   /** Resolves when the sample files have loaded (or failed), at most after `timeoutMs`; at once without samples. */
   samplesSettled(timeoutMs: number): Promise<void> {
     return this.samples ? this.samples.settled(timeoutMs) : Promise.resolve()
+  }
+
+  private applyAmbience() {
+    if (!this.ctx || !this.bus) return
+    const kinds = this._muted || !this.unlocked ? [] : [...this.wantedAmbience]
+    if (!this.ambience) {
+      if (kinds.length === 0) return
+      this.ambience = new AmbiencePlayer(this.bus)
+    }
+    this.ambience.set(kinds)
   }
 
   private applyGain() {
@@ -95,9 +126,12 @@ export class AudioEngine {
     }
     // lazy: the files are fetched the first time audio actually starts (a tap with sound on)
     void this.samples?.load(ctx)
+    this.applyAmbience()
   }
 
   dispose() {
+    this.ambience?.dispose()
+    this.ambience = null
     if (this.ctx) {
       void this.ctx.close().catch(() => {})
       this.ctx = null

@@ -160,13 +160,18 @@ function stageDone(): Voice[] {
 
 export const RECIPES: Record<SoundCue, Voice[]> = {
   // graph: frequent, so quiet and short
+  // Owner request 15 Nov 2026: running a command sounds like a small meteor streaking past, its result like the
+  // meteor touching down. Frequent, so both stay quiet, short and dry (no reverb).
   tool_start: [
-    // robotic tick: a two-step square click through a band
-    { type: 'square', freq: 1800, steps: [1800, 2700], start: 0, dur: 0.03, peak: 0.035, attack: 0.002, release: 0.02, filter: { type: 'bandpass', freq: 2400, q: 1.2 } },
+    // meteor streak: a narrow noise band falling from high to low, crossing left to right
+    whoosh(0, 0.26, 5200, 1300, 0.024, { q: 2.6, attack: 0.16, release: 0.09, pan: -0.45, panTo: 0.45 }),
+    // its faint burning whistle
+    { type: 'sine', freq: 2300, to: 900, start: 0.02, dur: 0.22, peak: 0.006, attack: 0.12, release: 0.08, pan: -0.3, panTo: 0.3 },
   ],
   tool_complete: [
-    // blip: a short rising sine with a metallic ring
-    { type: 'sine', freq: 2600, to: 3300, start: 0, dur: 0.045, peak: 0.03, attack: 0.003, release: 0.025, ring: 180 },
+    // touchdown: a soft thud (high enough for phone speakers) and a short crumble
+    sub(0, 0.22, 170, 60, 0.022, 0.004, 0.15),
+    { type: 'noise', freq: 0, start: 0, dur: 0.09, peak: 0.012, attack: 0.002, filter: { type: 'lowpass', freq: 1200, to: 400, q: 0.7 } },
   ],
   tool_error: [
     // low metallic clank

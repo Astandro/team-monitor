@@ -8,6 +8,7 @@ export class FakeParam {
   linearRampToValueAtTime(v: number, t: number) { this.calls.push(['linear', v, t]); return this }
   exponentialRampToValueAtTime(v: number, t: number) { this.calls.push(['exp', v, t]); return this }
   setTargetAtTime(v: number, t: number) { this.calls.push(['target', v, t]); return this }
+  cancelScheduledValues(t: number) { this.calls.push(['cancel', 0, t]); return this }
 }
 
 export class FakeNode {

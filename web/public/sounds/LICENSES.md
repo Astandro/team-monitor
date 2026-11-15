@@ -26,6 +26,11 @@ commercial projects" and does not name CC0, so it was not used.
 
 ## Files used, per sound
 
+Since 15 Nov 2026 the app does not play `sfx-tool_start.mp3` and `sfx-tool_complete.mp3`: those two cues are
+synthesised meteor sounds (`SYNTH_ONLY_CUES` in `web/lib/sound/samples.ts`, recipes in `web/lib/sound/recipes.ts`).
+The background loops for waiting, thinking and disintegrating (`web/lib/sound/ambience.ts`) are synthesised too.
+The files stay listed so the build report stays complete.
+
 | Our file | Event | Sci-Fi Sounds (`Audio/`) | Interface Sounds (`Audio/`) |
 |---|---|---|---|
 | `sfx-tool_start.mp3` | Tool start | | tick_002.ogg |
