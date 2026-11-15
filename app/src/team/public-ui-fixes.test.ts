@@ -16,7 +16,7 @@ import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
-import { appCsp, serveStatic, staticHeaders } from '../static'
+import { appCsp, MIME_TYPES, PWA_PUBLIC_PATHS, serveStatic, staticHeaders } from '../static'
 import { LoginLimiter, logoutAll, SessionStore } from './auth'
 import { buildRegistry } from './config'
 import { DoctorDeps, funnelChecks, funnelOffCommand, runDoctor, serveMappings } from './doctor'
@@ -150,6 +150,18 @@ describe('P-01: forwarding evidence and the local exception', () => {
       assert.equal((await viaFunnel(ctx, { path: HEALTH_PATH, headers: { Host: 'evil.example' } })).status, 403, 'Host check first')
       // Neighbours are not open.
       for (const p of ['/healthz/', '/healthz/x', '/health', '/HEALTHZ']) assert.equal((await local(ctx, { path: p })).status, 401, p)
+    })
+
+    test('PWA: manifest and icons answer without a session (GET only, exact paths); sw.js and everything else need one', async () => {
+      for (const p of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png']) {
+        for (const r of [await local(ctx, { path: p }), await viaFunnel(ctx, { path: p })]) assert.deepEqual([r.status, r.body], [200, 'ui'], p)
+        assert.equal((await local(ctx, { method: 'POST', path: p, body: '{}' })).status, 401, `POST ${p}`)
+        assert.equal((await local(ctx, { method: 'HEAD', path: p })).status, 401, `HEAD ${p}`)
+      }
+      assert.equal((await viaFunnel(ctx, { path: '/manifest.webmanifest', headers: { Host: 'evil.example' } })).status, 403, 'Host check first')
+      for (const p of ['/sw.js', '/index.js', '/manifest.webmanifest?x=1', '/x/icon-192.png', '/icon-192.png/', '/ICON-192.PNG', '/icon-1.png']) {
+        assert.equal((await local(ctx, { path: p })).status, 401, p)
+      }
     })
 
     test('service status / doctor probe uses the health route and is healthy on a --public-ui monitor', async () => {
@@ -491,7 +503,35 @@ describe('P-06: app shell and static assets', () => {
     assert.doesNotMatch(shell.body, /style="/)
     assert.doesNotMatch(shell.body, /<script>[^<]/, 'no inline script')
     assert.equal(csp, appCsp(false))
-    for (const d of ["img-src 'self' data:", "connect-src 'self'", "base-uri 'none'", "form-action 'self'"]) assert.ok(csp.includes(d), d)
+    for (const d of ["img-src 'self' data:", "connect-src 'self'", "manifest-src 'self'", "worker-src 'self'", "base-uri 'none'", "form-action 'self'"]) assert.ok(csp.includes(d), d)
+  })
+
+  test('PWA: the shell links the manifest and the Apple icon; manifest and icons get their content types', () => {
+    const shell = capture('/').body
+    assert.match(shell, /<link rel="manifest" href="\/manifest\.webmanifest">/)
+    assert.match(shell, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/)
+    assert.match(shell, /<meta name="theme-color" content="#0a0a1a">/)
+    assert.equal(MIME_TYPES['.webmanifest'], 'application/manifest+json')
+    assert.equal(MIME_TYPES['.png'], 'image/png')
+    assert.deepEqual([...PWA_PUBLIC_PATHS].sort(), ['/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/manifest.webmanifest'])
+  })
+
+  test('PWA: the manifest is valid, its icons exist as PNGs of the stated size, and sw.js only handles GET page loads', () => {
+    const dir = path.join(__dirname, '..', '..', '..', 'web', 'public', 'pwa')
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.webmanifest'), 'utf-8')) as {
+      start_url: string; scope: string; display: string; icons: Array<{ src: string; sizes: string; purpose: string }>
+    }
+    assert.deepEqual([manifest.start_url, manifest.scope, manifest.display], ['/', '/', 'standalone'])
+    assert.ok(manifest.icons.some((i) => i.sizes === '192x192') && manifest.icons.some((i) => i.sizes === '512x512' && i.purpose === 'maskable'))
+    for (const icon of [...manifest.icons, { src: '/apple-touch-icon.png', sizes: '180x180' }]) {
+      assert.ok(PWA_PUBLIC_PATHS.has(icon.src), icon.src)
+      const png = fs.readFileSync(path.join(dir, icon.src.slice(1)))
+      assert.equal(png.subarray(1, 4).toString('ascii'), 'PNG', icon.src)
+      assert.equal(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`, icon.sizes, icon.src)
+    }
+    const sw = fs.readFileSync(path.join(dir, 'sw.js'), 'utf-8')
+    assert.match(sw, /req\.mode !== 'navigate' \|\| req\.method !== 'GET'\) return/)
+    assert.doesNotMatch(sw, /caches\./, 'the service worker caches nothing')
   })
 
   test('cloud mode (preview pane frames the page): no X-Frame-Options and no frame-ancestors, the rest kept', () => {

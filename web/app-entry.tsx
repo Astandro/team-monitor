@@ -7,3 +7,11 @@ const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('Root element #root not found')
 const root = createRoot(rootElement)
 root.render(<TeamApp />)
+
+// Installable app (PWA): the service worker only adds an offline page and caches nothing. Not in a frame (the
+// cloud preview pane) and only where the browser allows workers (HTTPS or localhost).
+if ('serviceWorker' in navigator && window.isSecureContext && window.top === window) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* not installable here; the app works the same */ })
+  })
+}

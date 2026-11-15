@@ -23,6 +23,13 @@ const HTML_SHELL = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Team Monitor</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111827'/%3E%3Cpath d='M32 17L17 44M32 17L47 44M17 44L47 44' stroke='%239ca3af' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='17' r='7' fill='%2360a5fa'/%3E%3Ccircle cx='17' cy='44' r='7' fill='%23e5e7eb'/%3E%3Ccircle cx='47' cy='44' r='7' fill='%23e5e7eb'/%3E%3C/svg%3E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#0a0a1a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Team Monitor">
   <link rel="stylesheet" href="/index.css">
   <style>${SHELL_STYLE}</style>
 </head>
@@ -42,7 +49,9 @@ const SHELL_STYLE_HASH = `'sha256-${crypto.createHash('sha256').update(SHELL_STY
  * - img-src 'self' data:: the shell's data: favicon and the data:image/svg+xml images the graph draws on its canvas;
  * - connect-src 'self': fetch of /api/team/*, the sound files (fetched, then decoded by Web Audio) and the
  *   EventSource streams /events and /api/team/events;
- * - no fonts (system fonts only), media, workers, objects or frames; base-uri and form-action locked.
+ * - manifest-src 'self': /manifest.webmanifest (installable app, PWA);
+ * - worker-src 'self': the service worker /sw.js (installable app; it caches nothing);
+ * - no fonts (system fonts only), media, objects or frames; base-uri and form-action locked.
  */
 export function appCsp(frameable: boolean): string {
   return [
@@ -51,6 +60,8 @@ export function appCsp(frameable: boolean): string {
     `style-src 'self' ${SHELL_STYLE_HASH}`,
     "img-src 'self' data:",
     "connect-src 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self'",
     "base-uri 'none'",
     "form-action 'self'",
     ...(frameable ? [] : ["frame-ancestors 'none'"]),
@@ -81,7 +92,24 @@ export const MIME_TYPES: Record<string, string> = {
   // sound set v3 (copied flat into the webview folder by app/build.js)
   '.ogg': 'audio/ogg',
   '.mp3': 'audio/mpeg',
+  // installable app (PWA): manifest and icons, copied from web/public/pwa by app/build.js; /sw.js is a '.js'
+  '.webmanifest': 'application/manifest+json',
+  '.png': 'image/png',
 }
+
+/**
+ * The PWA files a browser fetches without the session cookie: the manifest is fetched with credentials "omit" and
+ * the install icons by the browser itself, so behind the login they would get 401 and the app would not be
+ * installable. Fixed, public content (no data); GET only. /sw.js is not here: the browser fetches it with the
+ * cookie, so it stays behind the login like the app.
+ */
+export const PWA_PUBLIC_PATHS: ReadonlySet<string> = new Set([
+  '/manifest.webmanifest',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/apple-touch-icon.png',
+])
 
 export interface StaticOptions {
   /** Cloud mode (preview pane frames the page): no framing ban. */

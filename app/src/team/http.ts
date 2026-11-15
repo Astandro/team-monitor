@@ -17,6 +17,7 @@ import type { GraphView } from '../../../scripts/graph-agents'
 import { LoginLimiter, SESSION_COOKIE, SESSION_TTL_MS, SessionStore, parseCookies, sessionKey, tokenMatches } from './auth'
 import { AUTO_OFFBOARD_DEFAULT_MINUTES, hasState, ProjectEntry } from './config'
 import { isAllowedRemoteHost, RemoteConfig } from './remote'
+import { PWA_PUBLIC_PATHS } from '../static'
 import { TeamSnapshot, TeamStateWatcher } from './state-watcher'
 import type { StatusOptions } from './heartbeat'
 import { coordinatorFromState, titleFromState, type WatchedProject } from '../../../scripts/session-projects'
@@ -485,6 +486,8 @@ export function createRequestHandler(opts: HandlerOptions): Handler {
     if (remote) {
       if (pathname === '/login') return void handleLogin(req, res, remote, login)
       if (pathname === '/logout') return void handleLogout(req, res, remote, streams)
+      // Installable app: manifest and icons are fetched without the cookie; fixed content, GET only (static.ts).
+      if (req.method === 'GET' && PWA_PUBLIC_PATHS.has(req.url ?? '')) return fallback(req, res)
       // The local-request exception (no login on this machine) is off with --public-ui (P-01).
       if (opts.publicUi === true || !isLocalRequest(req)) {
         const sid = sessionId(req)
