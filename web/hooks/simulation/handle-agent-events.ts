@@ -139,32 +139,40 @@ export function handleAgentComplete(
   if (agent && clock && agent.state === 'complete') {
     state.agents.set(name, { ...agent, finished: clock })
   }
-  if (agent && agent.state !== 'complete') {
-    state.agents.set(name, { ...agent, state: 'complete', completeTime: currentTime, ...(clock ? { finished: clock } : {}) })
+  if (!agent) return
+  const wasComplete = agent.state === 'complete'
+  // Children are dimmed with their parent, except when the main agent only ended a turn (its Stop hook): sub-agents
+  // started in the background keep working after that turn, and each reports its own completion. The end of the
+  // session (sessionEnd) still completes them all, also when an earlier turn already marked the main agent complete.
+  const cascade = !agent.isMain || payload.sessionEnd === true
+  if (wasComplete && !(agent.isMain && cascade)) return
 
+  const agentsToComplete: string[] = []
+  if (!wasComplete) {
+    state.agents.set(name, { ...agent, state: 'complete', completeTime: currentTime, ...(clock ? { finished: clock } : {}) })
+    agentsToComplete.push(name)
     const entry = state.timelineEntries.get(name)
     if (entry) {
       pushTimelineBlock(entry, currentTime, { type: 'complete', label: 'Selesai', color: COLORS.complete, endTime: currentTime }, ctx)
       entry.endTime = currentTime
     }
+  }
 
-    const agentsToComplete = [name]
-    for (const [childId, childAgent] of state.agents) {
-      if (childAgent.parentId === name && childAgent.state !== 'complete') {
-        state.agents.set(childId, { ...childAgent, state: 'complete', completeTime: currentTime })
-        agentsToComplete.push(childId)
-        const childEntry = state.timelineEntries.get(childId)
-        if (childEntry) {
-          pushTimelineBlock(childEntry, currentTime, { type: 'complete', label: 'Selesai', color: COLORS.complete, endTime: currentTime }, ctx)
-          childEntry.endTime = currentTime
-        }
+  for (const [childId, childAgent] of state.agents) {
+    if (cascade && childAgent.parentId === name && childAgent.state !== 'complete') {
+      state.agents.set(childId, { ...childAgent, state: 'complete', completeTime: currentTime })
+      agentsToComplete.push(childId)
+      const childEntry = state.timelineEntries.get(childId)
+      if (childEntry) {
+        pushTimelineBlock(childEntry, currentTime, { type: 'complete', label: 'Selesai', color: COLORS.complete, endTime: currentTime }, ctx)
+        childEntry.endTime = currentTime
       }
     }
+  }
 
-    for (const [tcId, tc] of state.toolCalls) {
-      if (agentsToComplete.includes(tc.agentId) && tc.state === 'running') {
-        state.toolCalls.set(tcId, { ...tc, state: 'complete', completeTime: currentTime })
-      }
+  for (const [tcId, tc] of state.toolCalls) {
+    if (agentsToComplete.includes(tc.agentId) && tc.state === 'running') {
+      state.toolCalls.set(tcId, { ...tc, state: 'complete', completeTime: currentTime })
     }
   }
 }
