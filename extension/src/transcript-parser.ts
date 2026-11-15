@@ -22,6 +22,7 @@ import {
   SYSTEM_CONTENT_PREFIXES,
   generateSubagentFallbackName,
   resolveSubagentChildName,
+  dispatchPromptKey,
 } from './constants'
 import { summarizeInput, summarizeResult, extractInputData, detectError, buildDiscovery } from './tool-summarizer'
 import { estimateTokensFromContent, estimateTokensFromText } from './token-estimator'
@@ -360,6 +361,7 @@ export class TranscriptParser {
       this.subagentChildNames.set(block.id, childName)
       // Only emit spawn once per subagent name (file watcher may have already spawned it)
       const session = sessionId ? this.delegate.getSession(sessionId) : undefined
+      rememberDispatchPrompt(session, block.input, childName)
       if (!session?.spawnedSubagents.has(childName)) {
         session?.spawnedSubagents.add(childName)
         emitSubagentSpawn(this.delegate, agentName, childName, args, sessionId)
@@ -617,6 +619,7 @@ export class TranscriptParser {
                   const childName = resolveSubagentChildName(toolBlock.input)
                   session.spawnedSubagents.add(childName)
                   this.subagentChildNames.set(toolBlock.id, childName)
+                  rememberDispatchPrompt(session, toolBlock.input, childName)
                 }
                 // Track pending tool calls so handleToolResult works after reconnect
                 const args = summarizeInput(toolBlock.name, toolBlock.input)
@@ -783,4 +786,13 @@ export class TranscriptParser {
     session.labelSet = true
     this.delegate.fireSessionLifecycle({ type: 'updated', sessionId, label: session.label })
   }
+}
+
+/** Remember an Agent/Task call's prompt -> child name on the session (see WatchedSession.dispatchPrompts). */
+function rememberDispatchPrompt(session: WatchedSession | undefined, input: Record<string, unknown>, childName: string): void {
+  if (!session) return
+  const key = dispatchPromptKey(input.prompt)
+  if (!key) return
+  if (!session.dispatchPrompts) session.dispatchPrompts = new Map()
+  session.dispatchPrompts.set(key, childName)
 }

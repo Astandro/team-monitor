@@ -228,6 +228,9 @@ export interface WatchedSession {
   subagentWatchers: Map<string, SubagentState>
   /** Names of subagents already spawned (by transcript parser or file watcher) — prevents duplicate spawns */
   spawnedSubagents: Set<string>
+  /** Agent/Task call prompt (dispatchPromptKey) -> child name, so a sub-agent transcript seen before its .meta.json
+   *  still gets the right name (its first line is that prompt). */
+  dispatchPrompts?: Map<string, string>
   /** Subagent names currently receiving inline progress events — file watcher skips these */
   inlineProgressAgents: Set<string>
   subagentsDirWatcher: import('fs').FSWatcher | null

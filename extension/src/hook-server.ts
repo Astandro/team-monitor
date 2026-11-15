@@ -7,6 +7,7 @@ import {
   SUBAGENT_ID_SUFFIX_LENGTH, HOOK_SERVER_HOST, HOOK_SERVER_NOT_STARTED,
   generateSubagentFallbackName,
 } from './constants'
+import { subagentNameFromHookMeta } from './subagent-watcher'
 import { summarizeInput, summarizeResult, extractFilePath, buildDiscovery } from './tool-summarizer'
 import { estimateTokenCost } from './token-estimator'
 import { createLogger } from './logger'
@@ -271,7 +272,8 @@ export class HookServer implements vscode.Disposable {
     const agentType = payload.agent_type || 'subagent'
     const agentId = payload.agent_id || ''
     const sessionAgents = this.getOrCreateSession(payload.session_id).agentNames
-    const childName = agentId ? `${agentType}-${agentId.slice(-SUBAGENT_ID_SUFFIX_LENGTH)}` : generateSubagentFallbackName(String(Date.now()), sessionAgents.size + 1)
+    const childName = subagentNameFromHookMeta(payload)
+      ?? (agentId ? `${agentType}-${agentId.slice(-SUBAGENT_ID_SUFFIX_LENGTH)}` : generateSubagentFallbackName(String(Date.now()), sessionAgents.size + 1))
 
     sessionAgents.set(agentId, childName)
   }
@@ -279,8 +281,11 @@ export class HookServer implements vscode.Disposable {
   private handleSubagentStop(payload: HookPayload): void {
     const agentId = payload.agent_id || ''
     const sessionAgents = this.sessionState.get(payload.session_id)?.agentNames
-    const childName = sessionAgents?.get(agentId) || 'subagent'
-    const parentName = this.resolveAgentName(payload)
+    // By the time it stops, its meta is written: prefer that name over the one guessed at start.
+    const childName = subagentNameFromHookMeta(payload) || sessionAgents?.get(agentId) || 'subagent'
+    if (agentId) sessionAgents?.set(agentId, childName)
+    // The sub-agent returns to the main agent (sub-agents do not start sub-agents of their own).
+    const parentName = ORCHESTRATOR_NAME
 
     this.emit({
       time: this.elapsedSeconds(payload.session_id),
@@ -333,7 +338,13 @@ export class HookServer implements vscode.Disposable {
   private resolveAgentName(payload: HookPayload): string {
     // If this event has an agent_id, look it up in the session's agent names.
     if (payload.agent_id) {
-      const name = this.sessionState.get(payload.session_id)?.agentNames.get(payload.agent_id)
+      const names = this.sessionState.get(payload.session_id)?.agentNames
+      const name = names?.get(payload.agent_id)
+      // A name guessed at SubagentStart ("general-purpose-88c35a") is replaced once the meta is there.
+      if (name && names && /^[a-z0-9-]+-[A-Za-z0-9]{6}$/.test(name) && !name.includes(' ')) {
+        const better = subagentNameFromHookMeta(payload)
+        if (better) { names.set(payload.agent_id, better); return better }
+      }
       if (name) return name
     }
     return ORCHESTRATOR_NAME
