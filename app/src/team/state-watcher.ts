@@ -18,6 +18,7 @@ import * as path from 'path'
 import { agentTeamDir } from './config'
 import { buildChat, ChatEntry, listInbox, readUnread } from './chat'
 import { HEARTBEAT_FILE, readWatcherStatus, StatusOptions, WatcherStatus } from './heartbeat'
+import { normalizeTeamState } from '../../../scripts/session-projects'
 
 export const MAX_STATE_BYTES = 1024 * 1024
 export const MAX_ANSWER_FILE_BYTES = 16 * 1024
@@ -243,7 +244,8 @@ export class TeamStateWatcher {
         this.fail('state.json must contain a JSON object', file)
         return
       }
-      this.raw = parsed as TeamState
+      // meta.run fields, a string coordinator and a coordinator only listed in agents become the documented shape
+      this.raw = normalizeTeamState(parsed) as TeamState
       this.error = null
     } catch (e) {
       this.fail('state.json is not valid JSON', `${file}: ${(e as Error).message}`)

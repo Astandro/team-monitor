@@ -34,7 +34,7 @@ export const COORDINATOR_FIELD_MAX = 60
  */
 export function coordinatorFromState(state: unknown): CoordinatorInfo | undefined {
   if (!state || typeof state !== 'object') return undefined
-  const meta = (state as { meta?: unknown }).meta
+  const meta = (normalizeTeamState(state) as { meta?: unknown }).meta
   if (!meta || typeof meta !== 'object') return undefined
   const c = (meta as { coordinator?: unknown }).coordinator
   if (!c || typeof c !== 'object' || Array.isArray(c)) return undefined
@@ -83,10 +83,43 @@ export function matchProjectDir<T extends Pick<WatchedProject, 'path'>>(dirName:
   return best
 }
 
+/**
+ * A parsed state.json in the shape the monitor reads, from the shapes coordinators really write (seen 15 Nov 2026):
+ * - fields under `meta.run` (the artifact monitor's `meta/run` document) also count as `meta.<field>`; a field set
+ *   directly on `meta` wins;
+ * - `meta.coordinator` (or `meta.run.coordinator`) as a plain string is the coordinator's name;
+ * - without any coordinator, the agent with `desk: "coordinator"` is it (its `nick`, its `name` as the role).
+ * Everything else is kept as it is. Returns a new object; the input is not changed.
+ */
+export function normalizeTeamState<T>(state: T): T {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state
+  const s = state as Record<string, unknown>
+  const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+  const meta = isObj(s.meta) ? s.meta : undefined
+  const run = meta && isObj(meta.run) ? meta.run : undefined
+  const merged: Record<string, unknown> = { ...(run ?? {}), ...(meta ?? {}) }
+  for (const [k, v] of Object.entries(run ?? {})) if (merged[k] === undefined) merged[k] = v
+  let c: unknown = merged.coordinator
+  if (c === undefined && run) c = run.coordinator
+  if (typeof c === 'string') c = c.trim() ? { name: c.trim() } : undefined
+  if (!isObj(c) && isObj(s.agents)) {
+    for (const a of Object.values(s.agents)) {
+      if (isObj(a) && a.desk === 'coordinator' && typeof a.nick === 'string' && a.nick.trim()) {
+        c = { name: a.nick.trim(), ...(typeof a.name === 'string' && a.name.trim() ? { role: a.name.trim() } : {}) }
+        break
+      }
+    }
+  }
+  if (isObj(c)) merged.coordinator = c
+  else delete merged.coordinator
+  if (!meta && !isObj(c)) return state
+  return { ...s, meta: merged } as T
+}
+
 /** `meta.title` of a parsed state.json, when it is a non-empty string. */
 export function titleFromState(state: unknown): string | undefined {
   if (!state || typeof state !== 'object') return undefined
-  const meta = (state as { meta?: unknown }).meta
+  const meta = (normalizeTeamState(state) as { meta?: unknown }).meta
   if (!meta || typeof meta !== 'object') return undefined
   const title = (meta as { title?: unknown }).title
   return typeof title === 'string' && title.trim() ? title.trim() : undefined

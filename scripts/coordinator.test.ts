@@ -25,13 +25,15 @@ test('coordinatorFromState trims and collapses spaces', () => {
 
 test('coordinatorFromState gives undefined without a usable name', () => {
   for (const state of [
-    null, undefined, 'x', {}, { meta: null }, { meta: {} }, { meta: { coordinator: 'Sora' } }, { meta: { coordinator: ['Sora'] } },
+    null, undefined, 'x', {}, { meta: null }, { meta: {} }, { meta: { coordinator: '  ' } }, { meta: { coordinator: ['Sora'] } },
     { meta: { coordinator: {} } }, { meta: { coordinator: { name: '' } } }, { meta: { coordinator: { name: '   ' } } },
     { meta: { coordinator: { name: 7 } } }, { meta: { coordinator: { name: 'S'.repeat(61) } } },
   ]) {
     assert.equal(coordinatorFromState(state), undefined, JSON.stringify(state))
   }
   assert.equal(coordinatorFromState({ meta: { coordinator: { name: 'S'.repeat(60) } } })?.name.length, 60)
+  // a plain string is the name (what coordinators write in practice, normalizeTeamState)
+  assert.deepEqual(coordinatorFromState({ meta: { coordinator: 'Sora' } }), { name: 'Sora', role: 'Orchestrator' })
 })
 
 test('coordinatorFromState caps a long role at 60 characters', () => {

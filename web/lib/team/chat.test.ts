@@ -154,3 +154,13 @@ test('ChatReplyTracker: silent on first payload and after a switch, true once pe
   assert.equal(t.step('z', withReply), false)
   assert.equal(t.step('z', [...withReply, { id: 'r4', from: 'sora', text: 'baru' }]), true)
 })
+
+test('coordinatorName: the documented meta.coordinator, a string, meta.run.coordinator, the coordinator agent, else Sora', () => {
+  assert.equal(coordinatorName({ coordinator: { name: 'Sora', role: 'Orchestrator' } }), 'Sora')
+  assert.equal(coordinatorName({ coordinator: 'Wulan' }), 'Wulan')
+  assert.equal(coordinatorName({ run: { coordinator: 'Wulan' } }), 'Wulan')
+  assert.equal(coordinatorName({ run: { coordinator: { name: 'Wulan' } } }), 'Wulan')
+  assert.equal(coordinatorName({}, { w: { nick: 'Wulan', desk: 'coordinator' }, x: { nick: 'Thorvald', desk: 'reviewer' } }), 'Wulan')
+  assert.equal(coordinatorName({}, { x: { nick: 'Thorvald', desk: 'reviewer' } }), 'Sora')
+  assert.equal(coordinatorName(undefined), 'Sora')
+})

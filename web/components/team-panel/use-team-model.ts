@@ -264,7 +264,7 @@ export function useTeamModel(): TeamModel {
     const pruned = pruneLocal(shownLocal, chat)
     if (pruned.length !== shownLocal.length) setLocalMessages({ project: selectedId ?? '', list: pruned })
   }, [chat, shownLocal, selectedId])
-  const coordinatorName = coordinatorNameOf(state?.meta)
+  const coordinatorName = coordinatorNameOf(state?.meta, state?.agents)
   const thread = useMemo(
     () => buildThread(chat, { now, coordinatorName, local: shownLocal }),
     [chat, now, coordinatorName, shownLocal],
