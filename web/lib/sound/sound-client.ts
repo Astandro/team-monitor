@@ -4,6 +4,7 @@
 // Created lazily in the browser; the first tap or key press anywhere unlocks audio (browsers block it before that).
 
 import { AudioEngine } from '@/lib/audio-engine'
+import type { AmbienceKind } from './ambience'
 import type { SoundCue } from './cues'
 import { demoLabel, demoSteps, DEMO_LOAD_WAIT_MS, DEMO_LOADING_LABEL, DEMO_ORDER } from './demo'
 import { STAGGER_MS } from './gate'
@@ -66,6 +67,11 @@ export function playCues(cues: readonly SoundCue[]): void {
   const c = getSoundClient()
   if (!c || cues.length === 0 || c.store.get().muted) return
   cues.forEach((cue, i) => c.engine.play(cue, (i * STAGGER_MS) / 1000))
+}
+
+/** The background loops the graph calls for now (lib/sound/ambience.ts); silent while muted. */
+export function setAmbience(kinds: Iterable<AmbienceKind>): void {
+  getSoundClient()?.engine.setAmbience(kinds)
 }
 
 /** Toggle from a button press (a user gesture, so audio may start right away). */

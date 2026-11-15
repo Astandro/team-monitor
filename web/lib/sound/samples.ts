@@ -7,6 +7,12 @@ import type { SoundCue } from './cues'
 import { RECIPES, recipeDuration } from './recipes'
 import report from './sample-report.json'
 
+/**
+ * Cues that always play their synthesised recipe (recipes.ts), even where sample files are loaded: the meteor
+ * streak and touchdown of a tool call (owner request 15 Nov 2026) are made by the synth, not by a sample mix.
+ */
+export const SYNTH_ONLY_CUES: ReadonlySet<SoundCue> = new Set<SoundCue>(['tool_start', 'tool_complete'])
+
 /** Event -> file. Lowercase flat names: the static server only serves plain names from the webview folder. */
 export const SAMPLE_FILES: Record<SoundCue, string> = {
   tool_start: 'sfx-tool_start.mp3',

@@ -71,6 +71,16 @@ export function detectStateChanges(
       transitions.push({ kind: 'tool_start' })
     }
 
+    // A fast tool can start and finish between two frames (its start and result arrive in one batch): it is first
+    // seen already done. It still counts as a start plus its end, or most tool calls after the first make no sound.
+    // No visual effect for it (the canvas never drew it running).
+    if (!oldState && tool.state === 'complete') {
+      transitions.push({ kind: 'tool_start' }, { kind: 'tool_complete' })
+    }
+    if (!oldState && tool.state === 'error') {
+      transitions.push({ kind: 'tool_start' }, { kind: 'tool_error' })
+    }
+
     // Tool just completed
     if (oldState === 'running' && tool.state === 'complete') {
       transitions.push({ kind: 'tool_complete' })
