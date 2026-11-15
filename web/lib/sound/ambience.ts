@@ -1,7 +1,7 @@
 // Background sounds that last as long as a state on the graph (owner request 15 Nov 2026), faint and pulsing in
 // and out instead of playing once:
-// - waiting:        an agent waits for permission: a robot's servos whirring in short phrases ("zuitt, zuitt
-//                   zhing zhingg, zuittt": rising motor whines and metallic pings), owner request 15 Nov 2026;
+// - waiting:        an agent waits for permission: a steady "ziiing, ziiing, ziiing" like a sci-fi mecha's steel
+//                   door sliding, the same sound at the same pace (owner request 15 Nov 2026);
 // - thinking:       an agent is thinking: a slow, very faint servo moving back and forth, now and then a soft ping;
 // - disintegrating: a finished sub-agent is wearing away before its offboard: a light crackle in episodes.
 //
@@ -38,7 +38,8 @@ export function ambienceFor(agents: Iterable<AmbienceAgent>, now: number): Set<A
  * `level`: the loop's overall gain before the master volume. Grain peaks below are relative to it.
  */
 export const AMBIENCE_SPECS: Record<AmbienceKind, { pulseHz: number; pulseDepth: number; level: number }> = {
-  waiting: { pulseHz: 0.4, pulseDepth: 0.9, level: 1 },
+  // steady, no swell to speak of: the owner wants the same ziiing every time
+  waiting: { pulseHz: 0.2, pulseDepth: 0.15, level: 1 },
   thinking: { pulseHz: 0.2, pulseDepth: 0.7, level: 1 },
   disintegrating: { pulseHz: 0.12, pulseDepth: 1, level: 1 },
 }
@@ -46,6 +47,8 @@ export const AMBIENCE_SPECS: Record<AmbienceKind, { pulseHz: number; pulseDepth:
 /** Fade in and out of a loop (time constant, seconds); a stopped loop is torn down after STOP_AFTER_S. */
 const FADE_TAU = 0.25
 const STOP_AFTER_S = 1.6
+/** One mecha-door ziiing every this many seconds while an agent waits for permission. */
+export const WAITING_PERIOD_S = 0.9
 /** The scheduler wakes this often and schedules grains this far ahead. */
 const TICK_MS = 100
 const AHEAD_S = 0.3
@@ -158,8 +161,11 @@ export class AmbiencePlayer {
     const horizon = this.bus.ctx.currentTime + AHEAD_S
     const r = this.rnd
     if (loop.kind === 'waiting') {
-      // servo phrases: "zuitt", "zuitt zuitt", "zhing zhingg", "zuittt", with a pause between them
-      while (loop.nextAt < horizon) loop.nextAt += this.waitingPhrase(loop.pulse, loop.nextAt) + 0.35 + r() * 0.5
+      // the same mecha-door "ziiing" at a fixed pace
+      while (loop.nextAt < horizon) {
+        this.mechaZing(loop.pulse, loop.nextAt)
+        loop.nextAt += WAITING_PERIOD_S
+      }
     } else if (loop.kind === 'thinking') {
       // a servo slowly turning one way and back, very faint; now and then a soft ping
       while (loop.nextAt < horizon) {
@@ -181,28 +187,49 @@ export class AmbiencePlayer {
     }
   }
 
-  /** One waiting phrase starting at t; returns its length in seconds. */
-  private waitingPhrase(dest: AudioNode, t: number): number {
-    const r = this.rnd
-    const pan = r() * 0.8 - 0.4
-    const kind = Math.floor(r() * 4)
-    if (kind === 0) { // zuitt
-      this.whir(dest, t, 380, 1100, 0.17, 0.011, pan)
-      return 0.17
-    }
-    if (kind === 1) { // zuitt, zuitt
-      this.whir(dest, t, 380, 1050, 0.15, 0.011, pan)
-      this.whir(dest, t + 0.24, 420, 1200, 0.15, 0.011, -pan)
-      return 0.39
-    }
-    if (kind === 2) { // zhing zhingg
-      this.zhing(dest, t, 1700, 0.28, 0.009, pan)
-      this.zhing(dest, t + 0.2, 2050, 0.38, 0.009, -pan)
-      return 0.58
-    }
-    // zuittt: a longer whine that settles
-    this.whir(dest, t, 330, 1250, 0.34, 0.011, pan)
-    return 0.34
+  /**
+   * One "ziiing": a steel door sliding. A buzzy saw rising through a resonant band (the slide), a thin hiss on top
+   * (steel on steel), and a short metallic ring as it locks. Fixed values: every ziiing sounds the same.
+   */
+  private mechaZing(dest: AudioNode, t: number): void {
+    const { ctx } = this.bus
+    const slide = 0.32
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(220, t)
+    osc.frequency.exponentialRampToValueAtTime(660, t + slide)
+    const band = ctx.createBiquadFilter()
+    band.type = 'bandpass'
+    band.Q.value = 6
+    band.frequency.setValueAtTime(900, t)
+    band.frequency.exponentialRampToValueAtTime(3200, t + slide)
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(0.011, t + 0.05)
+    env.gain.setTargetAtTime(0.0001, t + slide * 0.85, 0.04)
+    osc.connect(band)
+    band.connect(env)
+    env.connect(dest)
+    osc.start(t)
+    osc.stop(t + slide + 0.2)
+
+    const hiss = ctx.createBufferSource()
+    hiss.buffer = this.bus.noise
+    const hissBand = ctx.createBiquadFilter()
+    hissBand.type = 'bandpass'
+    hissBand.Q.value = 3
+    hissBand.frequency.setValueAtTime(2500, t)
+    hissBand.frequency.exponentialRampToValueAtTime(6500, t + slide)
+    const hissEnv = ctx.createGain()
+    hissEnv.gain.setValueAtTime(0.0001, t)
+    hissEnv.gain.linearRampToValueAtTime(0.006, t + 0.08)
+    hissEnv.gain.setTargetAtTime(0.0001, t + slide * 0.8, 0.04)
+    hiss.connect(hissBand)
+    hissBand.connect(hissEnv)
+    hissEnv.connect(dest)
+    hiss.start(t, 0, slide + 0.2)
+
+    this.zhing(dest, t + slide * 0.8, 2600, 0.35, 0.007, 0)
   }
 
   /** A servo motor whine gliding from `from` to `to` Hz: buzzy saw through a band that follows it, a fast jitter. */

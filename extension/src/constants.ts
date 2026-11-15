@@ -189,6 +189,12 @@ export function generateSubagentFallbackName(id: string, index: number): string 
   return `subagent-${id.length > SUBAGENT_ID_SUFFIX_LENGTH ? id.slice(-SUBAGENT_ID_SUFFIX_LENGTH) : index}`
 }
 
+/** Key of a sub-agent prompt: the start of the text, whitespace folded. The Agent call's `input.prompt` and the first
+ *  line of the sub-agent's own transcript give the same key. Empty for anything that is not a non-empty string. */
+export function dispatchPromptKey(prompt: unknown): string {
+  return typeof prompt === 'string' ? prompt.replace(/\s+/g, ' ').trim().slice(0, 400) : ''
+}
+
 /** Extract a child agent name from a tool_use input block (Agent or Task tool).
  *  Used by both live processing and prescan to avoid duplicating the extraction logic. */
 export function resolveSubagentChildName(input: Record<string, unknown>): string {

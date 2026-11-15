@@ -12,7 +12,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { AgentEvent, SubagentState, WatchedSession, emitSubagentSpawn } from './protocol'
-import { SESSION_ID_DISPLAY, ORCHESTRATOR_NAME, SUBAGENT_ID_SUFFIX_LENGTH, generateSubagentFallbackName, resolveSubagentChildName } from './constants'
+import { SESSION_ID_DISPLAY, ORCHESTRATOR_NAME, SUBAGENT_ID_SUFFIX_LENGTH, dispatchPromptKey, generateSubagentFallbackName, resolveSubagentChildName } from './constants'
 import { readNewFileLines } from './fs-utils'
 import { TranscriptParser } from './transcript-parser'
 import { handlePermissionDetection, PermissionDetectionDelegate } from './permission-detection'
@@ -34,7 +34,38 @@ export interface SubagentWatcherDelegate extends PermissionDetectionDelegate {
  * a stable name from the transcript file's own id (agent-<hash>.jsonl) so each
  * one renders as a distinct node instead of colliding on a generic label.
  */
-function resolveNameFromMeta(jsonlPath: string, fallbackIndex: number, unclaimed?: () => string[]): string {
+/** The first user message of a sub-agent transcript (its prompt), or '' when the file has no complete first line yet. */
+export function firstPromptOf(jsonlPath: string): string {
+  try {
+    const fd = fs.openSync(jsonlPath, 'r')
+    try {
+      const buf = Buffer.alloc(64 * 1024)
+      const n = fs.readSync(fd, buf, 0, buf.length, 0)
+      const text = buf.subarray(0, n).toString('utf-8')
+      const nl = text.indexOf('\n')
+      if (nl < 0) return ''
+      const entry = JSON.parse(text.slice(0, nl)) as { message?: { role?: string; content?: unknown } }
+      const c = entry.message?.content
+      if (typeof c === 'string') return c
+      if (Array.isArray(c)) {
+        return c.map((b) => (b && typeof b === 'object' && (b as { type?: string }).type === 'text' ? String((b as { text?: unknown }).text ?? '') : '')).join('')
+      }
+    } finally { fs.closeSync(fd) }
+  } catch { /* not readable yet */ }
+  return ''
+}
+
+/** True for the generic names given when nothing better was known ("subagent-174432"). */
+export function isFallbackSubagentName(name: string): boolean {
+  return /^subagent-[0-9a-z]+$/i.test(name)
+}
+
+function resolveNameFromMeta(
+  jsonlPath: string,
+  fallbackIndex: number,
+  unclaimed?: () => string[],
+  dispatchPrompts?: ReadonlyMap<string, string>,
+): string {
   const metaPath = jsonlPath.replace(/\.jsonl$/, '.meta.json')
   // Stable id from the filename, e.g. "agent-a0fb14872db487d5b" → "a0fb14872db487d5b"
   const fileId = path.basename(jsonlPath, '.jsonl')
@@ -51,6 +82,12 @@ function resolveNameFromMeta(jsonlPath: string, fallbackIndex: number, unclaimed
       return `${meta.agentType}-${agentId.slice(-SUBAGENT_ID_SUFFIX_LENGTH)}`
     }
   } catch { /* meta file may not exist for older Claude Code versions, or not yet */ }
+  // No meta yet: the transcript's first line is the prompt of the Agent call that started it, which the main
+  // transcript recorded with the child's name. Exact, also when several sub-agents were dispatched at once.
+  if (dispatchPrompts && dispatchPrompts.size > 0) {
+    const byPrompt = dispatchPrompts.get(dispatchPromptKey(firstPromptOf(jsonlPath)))
+    if (byPrompt) return byPrompt
+  }
   // The transcript can appear a moment before its .meta.json (seen in a cloud session, 15 Nov 2026). The main
   // transcript has already named the sub-agent from its Agent call; when exactly one such sub-agent has no
   // transcript of its own yet, this file is it. Otherwise the same agent showed up twice ("subagent-174432").
@@ -276,7 +313,8 @@ function startWatchingSubagentFile(
 
   // Resolve name from the meta file (deterministic, no queue race)
   const agentName = resolveNameFromMeta(filePath, session.subagentWatchers.size + 1, () =>
-    unclaimedSubagentNames(session.spawnedSubagents, [...session.subagentWatchers.values()].map((w) => w.agentName)))
+    unclaimedSubagentNames(session.spawnedSubagents, [...session.subagentWatchers.values()].map((w) => w.agentName)),
+  session.dispatchPrompts)
   log.info(`Tailing subagent: ${path.basename(filePath)} as "${agentName}" (session ${sessionId.slice(0, SESSION_ID_DISPLAY)})`)
 
   const state: SubagentState = {
@@ -401,6 +439,14 @@ export function readSubagentNewLines(
     return
   }
 
+  // A name given before anything was known (no meta, no first line yet) is looked up again now, before the node is
+  // drawn: the meta or the prompt line is usually there by the first new content.
+  if (!state.spawnEmitted && isFallbackSubagentName(state.agentName)) {
+    const others = [...session.subagentWatchers.values()].filter((w) => w !== state).map((w) => w.agentName)
+    const better = resolveNameFromMeta(filePath, 0, () => unclaimedSubagentNames(session.spawnedSubagents, others), session.dispatchPrompts)
+    if (!isFallbackSubagentName(better)) state.agentName = better
+  }
+
   // Lazily emit spawn on first new content if not already emitted
   if (!state.spawnEmitted) {
     state.spawnEmitted = true
@@ -427,4 +473,29 @@ export function readSubagentNewLines(
 
   // Keep main session alive while subagents are working
   delegate.resetInactivityTimer(sessionId)
+}
+
+/**
+ * The sub-agent's real name from its `.meta.json` (the Agent call's description, "Arjuna (Backend Engineer): ..."),
+ * the same name the transcript parser and the file watcher give its node. Without it the hook would name the
+ * agent "<agent_type>-<id>", a node that does not exist, so its completion never reached the graph (seen in a
+ * cloud session, 15 Nov 2026: no finished sub-agent ever disintegrated). Null while the meta is not written yet.
+ */
+export function subagentNameFromHookMeta(payload: { agent_id?: string; agent_transcript_path?: string; transcript_path?: string; session_id?: string }): string | null {
+  const agentId = payload.agent_id
+  if (!agentId || !/^[A-Za-z0-9_-]{1,80}$/.test(agentId)) return null
+  const candidates: string[] = []
+  if (payload.agent_transcript_path) candidates.push(payload.agent_transcript_path)
+  if (payload.transcript_path && payload.session_id && /^[A-Za-z0-9-]{1,80}$/.test(payload.session_id)) {
+    candidates.push(path.join(path.dirname(payload.transcript_path), payload.session_id, 'subagents', `agent-${agentId}.jsonl`))
+  }
+  for (const jsonl of candidates) {
+    if (!jsonl.endsWith('.jsonl')) continue
+    try {
+      const meta = JSON.parse(fs.readFileSync(jsonl.replace(/\.jsonl$/, '.meta.json'), 'utf-8')) as Record<string, unknown>
+      const name = resolveSubagentChildName(meta)
+      if (name && name !== 'subagent') return name
+    } catch { /* not written yet, or another layout */ }
+  }
+  return null
 }

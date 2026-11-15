@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 import { detectStateChanges } from '../../components/agent-visualizer/canvas/detect-state-changes'
 import type { Agent, ToolCallNode } from '../agent-types'
 import { AudioEngine } from '../audio-engine'
-import { AmbiencePlayer, ambienceFor, type AmbienceAgent } from './ambience'
+import { AmbiencePlayer, ambienceFor, WAITING_PERIOD_S, type AmbienceAgent } from './ambience'
 import { FakeCtx, type AnyNode } from './fake-audio'
 import { SampleBank, type FetchBytes } from './sample-bank'
 import { sampleUrls, SYNTH_ONLY_CUES } from './samples'
@@ -122,4 +122,21 @@ test('a tool first seen already done (start and result in one batch) still count
   assert.deepEqual(kinds(tool('running')), ['tool_start'])
   assert.deepEqual(kinds(tool('complete'), new Map([['t1', 'running']])), ['tool_complete'])
   assert.deepEqual(kinds(tool('complete'), new Map([['t1', 'complete']])), [], 'nothing twice')
+})
+
+test('waiting is steady: the same ziiing at a fixed pace, nothing random', () => {
+  const ctx = new FakeCtx()
+  const bus = createMasterBus(ctx as unknown as BaseAudioContext, 0.5)
+  const player = new AmbiencePlayer(bus, () => { throw new Error('waiting must not use randomness') })
+  try {
+    player.set(['waiting'])
+    const saws = (ctx.nodes.filter((n) => n.kind === 'oscillator') as AnyNode[]).filter((o) => o.type === 'sawtooth')
+    const starts = saws.map((o) => o.startAt as number)
+    assert.ok(starts.length >= 1)
+    for (let i = 1; i < starts.length; i++) assert.ok(Math.abs(starts[i] - starts[i - 1] - WAITING_PERIOD_S) < 1e-9)
+    const glides = saws.map((o) => JSON.stringify((o.frequency as { calls: unknown[] }).calls.map((c) => (c as number[]).slice(0, 2))))
+    assert.equal(new Set(glides).size, 1, 'every ziiing has the same pitch sweep')
+  } finally {
+    player.dispose()
+  }
 })
