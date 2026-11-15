@@ -28,7 +28,8 @@ test('ambienceFor: waiting for permission, thinking, and a finished sub-agent be
 test('AmbiencePlayer: starts with a fade-in and a pulse, fades out on stop, revives, and tears down on dispose', () => {
   const ctx = new FakeCtx()
   const bus = createMasterBus(ctx as unknown as BaseAudioContext, 0.5)
-  const player = new AmbiencePlayer(bus, () => 0.5)
+  let i = 0
+  const player = new AmbiencePlayer(bus, () => (i++ * 0.37) % 1) // cycles through every phrase kind
   try {
     player.set(['waiting', 'disintegrating'])
     assert.deepEqual(player.active().sort(), ['disintegrating', 'waiting'])
@@ -37,6 +38,10 @@ test('AmbiencePlayer: starts with a fade-in and a pulse, fades out on stop, revi
     const peaks = gains.flatMap((g) => (g.gain as { calls: [string, number, number][] }).calls.filter((c) => c[0] === 'linear').map((c) => c[1]))
     assert.ok(peaks.length > 0)
     for (const p of peaks) assert.ok(p <= 0.012, `grain peak ${p}`)
+    // waiting is servo whir: buzzy saw oscillators gliding in pitch ("zuitt"), not fixed bleeps
+    const saws = (ctx.nodes.filter((n) => n.kind === 'oscillator') as AnyNode[]).filter((o) => o.type === 'sawtooth')
+    assert.ok(saws.length > 0, 'servo whines')
+    for (const o of saws) assert.ok((o.frequency as { calls: [string, number, number][] }).calls.some((c) => c[0] === 'exp'), 'pitch glide')
     // each loop has a slow LFO (the swell in and out)
     const lfos = (ctx.nodes.filter((n) => n.kind === 'oscillator') as AnyNode[])
       .filter((o) => (o.frequency as { value: number }).value < 1)

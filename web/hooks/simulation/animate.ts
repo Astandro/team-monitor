@@ -21,8 +21,11 @@ export function animateAgents(agents: SimulationState['agents'], deltaTime: numb
     let timeAlive = agent.timeAlive
     let messageBubbles = agent.messageBubbles
 
-    if (agent.state !== 'complete' && opacity < 1) { opacity = Math.min(1, opacity + deltaTime * ANIM_SPEED.agentFadeIn); updated = true }
-    if (agent.state !== 'complete' && scale < 1) { scale = Math.min(1, scale + deltaTime * ANIM_SPEED.agentScaleIn); updated = true }
+    // The main agent stays fully visible when "complete": its Stop hook fires at the end of every turn, and it came in
+    // already complete when the page replays buffered events (it used to stay at opacity 0, invisible).
+    const fadeIn = agent.state !== 'complete' || agent.isMain
+    if (fadeIn && opacity < 1) { opacity = Math.min(1, opacity + deltaTime * ANIM_SPEED.agentFadeIn); updated = true }
+    if (fadeIn && scale < 1) { scale = Math.min(1, scale + deltaTime * ANIM_SPEED.agentScaleIn); updated = true }
     if (agent.state === 'complete' && !agent.isMain) {
       // Dim to a floor and stay: finished sub-agents remain visible (and are never cleaned up below).
       if (opacity > COMPLETED_SUBAGENT_OPACITY) { opacity = Math.max(COMPLETED_SUBAGENT_OPACITY, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }

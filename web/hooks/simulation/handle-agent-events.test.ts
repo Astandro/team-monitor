@@ -32,7 +32,7 @@ test('a finished agent_complete gives the sub-agent its clock and makes it offbo
 
 test('dimmed by the parent completing is not finished: no clock, no Offboard; the server word lands later', () => {
   const s = makeState()
-  handleAgentComplete({ name: 'orchestrator' }, 1, s, ctx)
+  handleAgentComplete({ name: 'orchestrator', sessionEnd: true }, 1, s, ctx)
   const ren = s.agents.get('Ren')!
   assert.equal(ren.state, 'complete')
   assert.equal(ren.finished, undefined)
@@ -41,6 +41,19 @@ test('dimmed by the parent completing is not finished: no clock, no Offboard; th
   handleAgentComplete({ name: 'Ren', ...done, sessionEnded: true }, 2, s, ctx)
   assert.ok(s.agents.get('Ren')!.finished)
   assert.equal(canOffboard(s.agents.get('Ren')), true)
+})
+
+test('the end of a main turn (Stop hook) does not complete sub-agents that keep working in the background', () => {
+  const s = makeState()
+  handleAgentComplete({ name: 'orchestrator' }, 1, s, ctx)
+  assert.equal(s.agents.get('orchestrator')!.state, 'complete')
+  assert.equal(s.agents.get('Ren')!.state, 'thinking')
+  assert.equal(s.agents.get('Hiro')!.state, 'thinking')
+  // the end of the session still completes them all
+  handleAgentComplete({ name: 'orchestrator', sessionEnd: true }, 2, s, ctx)
+  assert.equal(s.agents.get('orchestrator')!.state, 'complete')
+  assert.equal(s.agents.get('Ren')!.state, 'complete')
+  assert.equal(s.agents.get('Hiro')!.state, 'complete')
 })
 
 test('the Orchestrator never gets a clock, even if a payload says finished', () => {

@@ -48,7 +48,9 @@ export function handleMessage(
       }
     }
 
-    if (msgAgent.state !== 'complete' && msgAgent.state !== 'tool_calling') {
+    // The main agent comes back from "complete" (end of a turn) as soon as it says something again; a finished
+    // sub-agent stays complete.
+    if ((msgAgent.state !== 'complete' || msgAgent.isMain) && msgAgent.state !== 'tool_calling') {
       if (role === 'user' || role === 'thinking' || role === 'assistant') {
         updates.state = 'thinking'
       }
@@ -81,7 +83,7 @@ export function handleContextUpdate(
       tokensUsed: tokens,
       tokensMax: tokensMaxOverride ?? agent.tokensMax,
       contextBreakdown: breakdown || agent.contextBreakdown,
-      state: agent.state === 'complete' ? 'complete' : 'thinking'
+      state: agent.state === 'complete' && !agent.isMain ? 'complete' : 'thinking'
     })
   }
 }

@@ -1,7 +1,8 @@
 // Background sounds that last as long as a state on the graph (owner request 15 Nov 2026), faint and pulsing in
 // and out instead of playing once:
-// - waiting:        an agent waits for permission: robotic processing bleeps;
-// - thinking:       an agent is thinking: a very faint sci-fi processing hum with rare high glints;
+// - waiting:        an agent waits for permission: a robot's servos whirring in short phrases ("zuitt, zuitt
+//                   zhing zhingg, zuittt": rising motor whines and metallic pings), owner request 15 Nov 2026;
+// - thinking:       an agent is thinking: a slow, very faint servo moving back and forth, now and then a soft ping;
 // - disintegrating: a finished sub-agent is wearing away before its offboard: a light crackle in episodes.
 //
 // ambienceFor() decides which play (pure, unit tested). AmbiencePlayer makes them with Web Audio on the master bus
@@ -49,7 +50,6 @@ const STOP_AFTER_S = 1.6
 const TICK_MS = 100
 const AHEAD_S = 0.3
 
-const WAITING_NOTES = [880, 1175, 1320, 1568, 1760, 2093]
 
 interface Loop {
   kind: AmbienceKind
@@ -59,8 +59,6 @@ interface Loop {
   /** long-running sources (thinking's hum) */
   holds: AudioScheduledSourceNode[]
   nextAt: number
-  /** second grain clock (waiting's low tones, thinking's glints) */
-  nextAt2: number
   timer: ReturnType<typeof setInterval> | null
   stopping: ReturnType<typeof setTimeout> | null
 }
@@ -121,8 +119,7 @@ export class AmbiencePlayer {
     lfo.start(now)
     out.gain.setTargetAtTime(spec.level, now, FADE_TAU)
 
-    const loop: Loop = { kind, out, pulse, lfo, holds: [], nextAt: now + 0.05, nextAt2: now + 0.4, timer: null, stopping: null }
-    if (kind === 'thinking') loop.holds.push(...this.hum(pulse, now))
+    const loop: Loop = { kind, out, pulse, lfo, holds: [], nextAt: now + 0.05, timer: null, stopping: null }
     this.loops.set(kind, loop)
     this.schedule(loop)
     loop.timer = setInterval(() => this.schedule(loop), TICK_MS)
@@ -161,24 +158,20 @@ export class AmbiencePlayer {
     const horizon = this.bus.ctx.currentTime + AHEAD_S
     const r = this.rnd
     if (loop.kind === 'waiting') {
-      // processing bleeps: short square tones on a pentatonic-ish set, through a band
-      while (loop.nextAt < horizon) {
-        const note = WAITING_NOTES[Math.floor(r() * WAITING_NOTES.length)]
-        this.bleep(loop.pulse, loop.nextAt, note, 0.025 + r() * 0.025, 0.011, 'square', 1900, r() * 0.6 - 0.3)
-        loop.nextAt += 0.07 + r() * 0.08
-      }
-      // now and then a lower "computing" tone
-      while (loop.nextAt2 < horizon) {
-        this.bleep(loop.pulse, loop.nextAt2, r() < 0.5 ? 440 : 494, 0.05, 0.006, 'triangle', 900, 0)
-        loop.nextAt2 += 0.5 + r() * 0.5
-      }
+      // servo phrases: "zuitt", "zuitt zuitt", "zhing zhingg", "zuittt", with a pause between them
+      while (loop.nextAt < horizon) loop.nextAt += this.waitingPhrase(loop.pulse, loop.nextAt) + 0.35 + r() * 0.5
     } else if (loop.kind === 'thinking') {
-      // rare, very faint high glints over the hum
-      while (loop.nextAt2 < horizon) {
-        this.bleep(loop.pulse, loop.nextAt2, 2400 + r() * 1400, 0.08, 0.0025, 'sine', 3000, r() * 1.2 - 0.6)
-        loop.nextAt2 += 0.5 + r() * 0.6
+      // a servo slowly turning one way and back, very faint; now and then a soft ping
+      while (loop.nextAt < horizon) {
+        const t = loop.nextAt
+        const pan = r() * 0.8 - 0.4
+        const low = 200 + r() * 60
+        const high = low * (2.2 + r() * 0.5)
+        this.whir(loop.pulse, t, low, high, 0.5, 0.005, pan)
+        this.whir(loop.pulse, t + 0.62, high, low * 1.1, 0.45, 0.004, -pan)
+        if (r() < 0.35) this.zhing(loop.pulse, t + 1.1, 1900 + r() * 700, 0.3, 0.0025, pan)
+        loop.nextAt += 1.4 + r() * 1.2
       }
-      loop.nextAt = horizon
     } else {
       // crackle: tiny noise grains at random, bright, scattered in the stereo field
       while (loop.nextAt < horizon) {
@@ -188,53 +181,91 @@ export class AmbiencePlayer {
     }
   }
 
-  /** thinking's hum: looped noise in a narrow, slowly wandering band. */
-  private hum(dest: AudioNode, t: number): AudioScheduledSourceNode[] {
-    const { ctx } = this.bus
-    const src = ctx.createBufferSource()
-    src.buffer = this.bus.noise
-    src.loop = true
-    const band = ctx.createBiquadFilter()
-    band.type = 'bandpass'
-    band.frequency.value = 1100
-    band.Q.value = 9
-    const wander = ctx.createOscillator()
-    wander.frequency.value = 0.11
-    const wanderDepth = ctx.createGain()
-    wanderDepth.gain.value = 450
-    wander.connect(wanderDepth)
-    wanderDepth.connect(band.frequency)
-    const g = ctx.createGain()
-    g.gain.value = 0.004
-    src.connect(band)
-    band.connect(g)
-    g.connect(dest)
-    src.start(t)
-    wander.start(t)
-    return [src, wander]
+  /** One waiting phrase starting at t; returns its length in seconds. */
+  private waitingPhrase(dest: AudioNode, t: number): number {
+    const r = this.rnd
+    const pan = r() * 0.8 - 0.4
+    const kind = Math.floor(r() * 4)
+    if (kind === 0) { // zuitt
+      this.whir(dest, t, 380, 1100, 0.17, 0.011, pan)
+      return 0.17
+    }
+    if (kind === 1) { // zuitt, zuitt
+      this.whir(dest, t, 380, 1050, 0.15, 0.011, pan)
+      this.whir(dest, t + 0.24, 420, 1200, 0.15, 0.011, -pan)
+      return 0.39
+    }
+    if (kind === 2) { // zhing zhingg
+      this.zhing(dest, t, 1700, 0.28, 0.009, pan)
+      this.zhing(dest, t + 0.2, 2050, 0.38, 0.009, -pan)
+      return 0.58
+    }
+    // zuittt: a longer whine that settles
+    this.whir(dest, t, 330, 1250, 0.34, 0.011, pan)
+    return 0.34
   }
 
-  private bleep(dest: AudioNode, t: number, freq: number, dur: number, peak: number, type: OscillatorType, band: number, pan: number): void {
+  /** A servo motor whine gliding from `from` to `to` Hz: buzzy saw through a band that follows it, a fast jitter. */
+  private whir(dest: AudioNode, t: number, from: number, to: number, dur: number, peak: number, pan: number): void {
     const { ctx } = this.bus
     const osc = ctx.createOscillator()
-    osc.type = type
-    osc.frequency.value = freq
-    const f = ctx.createBiquadFilter()
-    f.type = 'bandpass'
-    f.frequency.value = band
-    f.Q.value = 1.5
+    osc.type = 'sawtooth'
+    osc.frequency.setValueAtTime(from, t)
+    osc.frequency.exponentialRampToValueAtTime(to, t + dur * 0.85)
+    const jitter = ctx.createOscillator()
+    jitter.frequency.value = 38
+    const jitterDepth = ctx.createGain()
+    jitterDepth.gain.value = from * 0.02
+    jitter.connect(jitterDepth)
+    jitterDepth.connect(osc.frequency)
+    const band = ctx.createBiquadFilter()
+    band.type = 'bandpass'
+    band.Q.value = 2
+    band.frequency.setValueAtTime(from * 2, t)
+    band.frequency.exponentialRampToValueAtTime(to * 2, t + dur * 0.85)
     const env = ctx.createGain()
     env.gain.setValueAtTime(0.0001, t)
-    env.gain.linearRampToValueAtTime(peak, t + Math.min(0.006, dur / 3))
-    env.gain.setTargetAtTime(0.0001, t + dur * 0.5, dur / 4)
+    env.gain.linearRampToValueAtTime(peak, t + Math.min(0.03, dur / 4))
+    env.gain.setTargetAtTime(0.0001, t + dur * 0.8, dur * 0.08)
     const p = ctx.createStereoPanner()
     p.pan.value = pan
-    osc.connect(f)
-    f.connect(env)
+    osc.connect(band)
+    band.connect(env)
     env.connect(p)
     p.connect(dest)
     osc.start(t)
-    osc.stop(t + dur + 0.05)
+    jitter.start(t)
+    osc.stop(t + dur + 0.1)
+    jitter.stop(t + dur + 0.1)
+  }
+
+  /** A metallic ping ("zhing"): an FM sine with an inharmonic modulator that dies away, gliding up a little. */
+  private zhing(dest: AudioNode, t: number, freq: number, dur: number, peak: number, pan: number): void {
+    const { ctx } = this.bus
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(freq, t)
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.08, t + dur)
+    const mod = ctx.createOscillator()
+    mod.frequency.value = freq * 2.76
+    const modDepth = ctx.createGain()
+    modDepth.gain.setValueAtTime(freq * 1.5, t)
+    modDepth.gain.exponentialRampToValueAtTime(freq * 0.05, t + dur * 0.6)
+    mod.connect(modDepth)
+    modDepth.connect(osc.frequency)
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(peak, t + 0.004)
+    env.gain.setTargetAtTime(0.0001, t + 0.01, dur / 4)
+    const p = ctx.createStereoPanner()
+    p.pan.value = pan
+    osc.connect(env)
+    env.connect(p)
+    p.connect(dest)
+    osc.start(t)
+    mod.start(t)
+    osc.stop(t + dur + 0.1)
+    mod.stop(t + dur + 0.1)
   }
 
   private grain(dest: AudioNode, t: number, dur: number, peak: number, highpass: number, pan: number): void {

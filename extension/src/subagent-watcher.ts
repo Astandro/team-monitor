@@ -34,7 +34,7 @@ export interface SubagentWatcherDelegate extends PermissionDetectionDelegate {
  * a stable name from the transcript file's own id (agent-<hash>.jsonl) so each
  * one renders as a distinct node instead of colliding on a generic label.
  */
-function resolveNameFromMeta(jsonlPath: string, fallbackIndex: number): string {
+function resolveNameFromMeta(jsonlPath: string, fallbackIndex: number, unclaimed?: () => string[]): string {
   const metaPath = jsonlPath.replace(/\.jsonl$/, '.meta.json')
   // Stable id from the filename, e.g. "agent-a0fb14872db487d5b" → "a0fb14872db487d5b"
   const fileId = path.basename(jsonlPath, '.jsonl')
@@ -50,8 +50,19 @@ function resolveNameFromMeta(jsonlPath: string, fallbackIndex: number): string {
     if (typeof meta.agentType === 'string' && meta.agentType) {
       return `${meta.agentType}-${agentId.slice(-SUBAGENT_ID_SUFFIX_LENGTH)}`
     }
-  } catch { /* meta file may not exist for older Claude Code versions */ }
+  } catch { /* meta file may not exist for older Claude Code versions, or not yet */ }
+  // The transcript can appear a moment before its .meta.json (seen in a cloud session, 15 Nov 2026). The main
+  // transcript has already named the sub-agent from its Agent call; when exactly one such sub-agent has no
+  // transcript of its own yet, this file is it. Otherwise the same agent showed up twice ("subagent-174432").
+  const candidates = unclaimed?.() ?? []
+  if (candidates.length === 1) return candidates[0]
   return generateSubagentFallbackName(agentId, fallbackIndex)
+}
+
+/** Sub-agents the main transcript dispatched (by name) that no watched transcript file belongs to yet. */
+export function unclaimedSubagentNames(spawned: Iterable<string>, watchedNames: Iterable<string>): string[] {
+  const claimed = new Set(watchedNames)
+  return [...new Set(spawned)].filter((n) => !claimed.has(n))
 }
 
 /** Recursively collect every agent-*.jsonl transcript under a subagents directory.
@@ -264,7 +275,8 @@ function startWatchingSubagentFile(
   if (!session) return
 
   // Resolve name from the meta file (deterministic, no queue race)
-  const agentName = resolveNameFromMeta(filePath, session.subagentWatchers.size + 1)
+  const agentName = resolveNameFromMeta(filePath, session.subagentWatchers.size + 1, () =>
+    unclaimedSubagentNames(session.spawnedSubagents, [...session.subagentWatchers.values()].map((w) => w.agentName)))
   log.info(`Tailing subagent: ${path.basename(filePath)} as "${agentName}" (session ${sessionId.slice(0, SESSION_ID_DISPLAY)})`)
 
   const state: SubagentState = {

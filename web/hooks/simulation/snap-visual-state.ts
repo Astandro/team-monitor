@@ -21,8 +21,8 @@ export function snapVisualState(state: SimulationState, targetTime: number): Sim
       snapped.scale = 1
       snapped.timeAlive = targetTime - agent.spawnTime
     } else {
-      // Main agent that completed
-      snapped.opacity = 0.5
+      // Main agent between turns (its Stop hook marks it complete): fully visible, like in live mode (animate.ts)
+      snapped.opacity = 1
       snapped.scale = 1
     }
     snapped.messageBubbles = agent.messageBubbles.filter(b => targetTime - b.time <= BUBBLE_VISIBLE_S)
