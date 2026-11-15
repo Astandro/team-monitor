@@ -6,8 +6,8 @@
  * - G2: `--public-ui` without `--remote --bind loopback` exits 1 with one line, creates no token, listens nowhere.
  * - G4: route audit. Without a session, every route and static path (UI, assets, icons, sounds, manifest,
  *   /events, every /api/team route, unknown paths, paths that would echo input) answers only 302 to /login or 401
- *   `login required`, for every method, with no data; only /login (GET, POST), /logout and the three ingest routes
- *   answer otherwise, and those with no data either. After login: UI, assets, /events, answers and chat work.
+ *   `login required`, for every method, with no data; only /login (GET, POST), /logout, the three ingest routes and
+ *   GET of the installable-app manifest and icons (fixed files) answer otherwise, and those with no data either. After login: UI, assets, /events, answers and chat work.
  * - G5: six wrong tokens from one forwarded address are limited, another address is not, forged forwarded headers
  *   do not move the count; the log has one line per kind and client and never the token.
  * - G6: `logout-all` (a second process) ends the sessions of the running monitor; the next request goes to the login.
@@ -196,8 +196,8 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
     // ── G4: unauthenticated surface ──
     const LOGIN_REQUIRED = '{"ok":false,"error":"login required"}'
     const gated = [
-      '/', '/index.html', '/index.js', '/index.css', '/chime.ogg', '/chime.mp3', '/favicon.ico', '/apple-touch-icon.png',
-      '/manifest.json', '/manifest.webmanifest', '/site.webmanifest', '/robots.txt', '/sw.js', '/index.js?v=2',
+      '/', '/index.html', '/index.js', '/index.css', '/chime.ogg', '/chime.mp3', '/favicon.ico', '/apple-touch-icon.png?x',
+      '/manifest.json', '/manifest.webmanifest?x', '/site.webmanifest', '/robots.txt', '/sw.js', '/index.js?v=2',
       '/events', '/events?x=1', '/api/team/projects', `/api/team/state?project=${PID}`, `/api/team/events?project=${PID}`,
       '/api/team/offboarded', `/api/team/offboarded?project=${PID}`, '/api/team/answer', '/api/team/message',
       '/api/team/offboard', '/api/team/offboard-all', '/api/team/nope', '/api', '/api/', '/nope', '/LOGIN', '/login/',
@@ -226,6 +226,17 @@ test('G4, G5, G6 against a running --remote --bind loopback --public-ui --ingest
             assert.equal(r.body, method === 'HEAD' ? '' : LOGIN_REQUIRED, `${method} ${p}`)
           }
         }
+      }
+    }
+    // Installable app (PWA): the manifest and the icons answer GET without a session (fixed files, no data; 404 when a
+    // build has none); every other method on them still needs the login.
+    for (const p of ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png']) {
+      const g = await funnel(port, { path: p, headers: { Accept: '*/*', ...SAME_ORIGIN } })
+      assert.ok(g.status === 200 || g.status === 404, `GET ${p}: ${g.status}`)
+      assert.notEqual(g.body, LOGIN_REQUIRED, p)
+      for (const method of ['HEAD', 'POST', 'PUT', 'DELETE']) {
+        const r = await funnel(port, { method, path: p, headers: { Accept: '*/*', 'Content-Type': 'application/json', 'X-Team-Monitor': '1', ...SAME_ORIGIN } })
+        assert.equal(r.status, 401, `${method} ${p}`)
       }
     }
     // A request that only pretends to be local (loopback Host, but forwarded) still needs the login.
