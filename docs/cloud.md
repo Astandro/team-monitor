@@ -181,7 +181,8 @@ loopback Host. Answer and chat in the hub.
 - **Public UI (`--public-ui`, off by default).** Only with `--remote --bind loopback`. The login page and, after
   login, the whole UI with full access (answers, chat, offboarding) are on the internet: anyone with the login
   token (`~/.team-monitor/token`) can steer the team. Without a session only `/login`, `/logout`, `/healthz`
-  (always just `{"ok":true}`) and the three ingest routes answer; everything else gets a redirect to `/login` or
+  (always just `{"ok":true}`), the installable-app manifest and icons (fixed files, no data; `docs/setup.md`,
+  "Install as an app") and the three ingest routes answer; everything else gets a redirect to `/login` or
   401 and no data, whatever the Host or headers: there is no login-free "local request" with `--public-ui`, so on
   the hub machine too you log in through the Funnel or tailnet URL. The ingest token still opens only the ingest
   routes, and the login token or a session never opens them. Logins are limited to 5 wrong tokens per 15 minutes

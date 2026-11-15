@@ -62,8 +62,10 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
   `Forbidden: this monitor runs without --remote and answers only requests made on this machine, not through a
   proxy.`, whatever its Host. So a default monitor behind `tailscale serve` or Funnel answers nothing but that
   (the ingest routes of `--ingest` keep working: they are judged first and need the ingest token).
-- **Remote mode** (`--remote`): every request needs a login session, except `/login`, `/logout`, `/healthz` and,
-  with `--ingest`, the three ingest routes. One exception, for tools on this machine: a request with a loopback
+- **Remote mode** (`--remote`): every request needs a login session, except `/login`, `/logout`, `/healthz`, the
+  installable-app files (`GET` of `/manifest.webmanifest`, `/icon-192.png`, `/icon-512.png`,
+  `/icon-maskable-512.png`, `/apple-touch-icon.png`: fixed content, no data) and, with `--ingest`, the three ingest
+  routes. One exception, for tools on this machine: a request with a loopback
   socket, a loopback Host (`127.0.0.1`, `localhost`, `[::1]`) and none of the forwarding headers above needs no
   login. `tailscale serve` and Funnel always add some of them, so their requests never get it.
 - **Public UI** (`--public-ui`): that exception is off. Every request needs a session, from this machine too
@@ -75,6 +77,7 @@ per-project service. Below, `tm` stands for `node ~/projects/team-monitor/app/di
   `frame-ancestors 'none'`. The CSP allows exactly what the build loads: `default-src 'none'; script-src 'self';
   style-src 'self' 'sha256-...'` (the hash of the page's one inline style), `img-src 'self' data:` (icon and the
   graph's drawn images), `connect-src 'self'` (API, sounds, `/events` and `/api/team/events` on the same origin),
+  `manifest-src 'self'` (the app manifest), `worker-src 'self'` (the service worker `/sw.js`),
   `base-uri 'none'; form-action 'self'`. No `unsafe-inline`, no `unsafe-eval` (the bundle needs neither). The login
   page has its own strict CSP, the same framing ban and nosniff, and `Referrer-Policy: same-origin` (its form POST
   would send `Origin: null` otherwise). In cloud mode (`docs/cloud.md`) the app page and files omit
@@ -146,9 +149,10 @@ not start and says so in one line).
 - **What it exposes.** The login page, at `https://<machine>.<tailnet>.ts.net/login`, to anyone on the internet.
   After login a device has full access, as on the tailnet: graph, team panel, answering decisions, chat,
   offboarding. **Anyone who has the token can steer the team from the internet.** Without a session nothing but
-  `/login`, `/logout`, `/healthz` (the fixed `{"ok":true}`) and, with `--ingest`, the three ingest routes (which
-  need the ingest token) answers: every page, asset, icon, sound, `/events` and API route gives a redirect to
-  `/login` or 401 and no data, whatever the Host or headers.
+  `/login`, `/logout`, `/healthz` (the fixed `{"ok":true}`), the installable-app manifest and icons (fixed files,
+  no data; see "Install as an app") and, with `--ingest`, the three ingest routes (which need the ingest token)
+  answers: every page, script, sound, `/sw.js`, `/events` and API route gives a redirect to `/login` or 401 and no
+  data, whatever the Host or headers.
 - **No login-free requests, also on this machine.** The remote-mode exception for local requests is off. Log in
   from this machine through the Funnel or tailnet URL (`https://<machine>.<tailnet>.ts.net/login`), not
   `http://127.0.0.1:3002`: a login there has no client address and is refused with 400 ("Masuk tidak bisa lewat
@@ -179,6 +183,23 @@ not start and says so in one line).
   new token is created (read it from the file; it is never printed) and every session made with the old one ends.
 - **Turn it off.** `tailscale funnel --https=443 off` (or `tailscale funnel reset`, which also removes an ingest
   mapping), then install the service again without `--public-ui`.
+
+## Install as an app (PWA)
+
+The UI is an installable web app: on a phone open the monitor's HTTPS URL, log in, then use the browser's
+"Install app" (Chrome on Android) or Share > "Add to Home Screen" (Safari on iOS). It opens full screen with its own
+icon. It needs HTTPS (the Funnel or tailnet URL) or `localhost`; plain `http://` to another address cannot install.
+
+- **What it adds.** `/manifest.webmanifest`, four icons and a service worker `/sw.js`. The service worker caches
+  nothing (the app always loads the current build and live data); it only shows a small "not reachable" page when
+  a page load cannot reach the monitor. API calls, the event streams and the login form go to the network untouched.
+- **Login.** An installed app on iOS keeps its own cookies, so log in once inside the app. The session lasts 30
+  days like in the browser; `tm logout-all` ends it too.
+- **Public files.** The browser fetches the manifest and the icons without the session cookie, so these five
+  fixed files answer without login (`GET` only, exact paths). They hold no data. `/sw.js` stays behind the login.
+- **Icons** are drawn by `node scripts/pwa-icons.js` from the shapes of `web/public/icon.svg` and committed in
+  `web/public/pwa/`; `build:app` copies that folder into `app/dist/webview/`. After a rebuild, run
+  `tm service restart`; the installed app picks up the new build on its next start.
 
 ## Service commands
 

@@ -74,4 +74,17 @@ if (fs.existsSync(SOUNDS_DIR)) {
   if (copied) console.log(`Copied ${copied} sound file(s) into app/dist/webview/`)
 }
 
+// 5. Copy the PWA files (web/public/pwa: manifest, service worker, icons; icons drawn by scripts/pwa-icons.js) flat
+//    into the webview folder, like the sounds.
+const PWA_DIR = path.join(ROOT, 'web', 'public', 'pwa')
+if (fs.existsSync(PWA_DIR)) {
+  let copied = 0
+  for (const name of fs.readdirSync(PWA_DIR)) {
+    if (!/^[a-z0-9][a-z0-9._-]*\.(png|webmanifest|js)$/i.test(name)) continue
+    fs.copyFileSync(path.join(PWA_DIR, name), path.join(WEBVIEW_OUT, name))
+    copied++
+  }
+  if (copied) console.log(`Copied ${copied} PWA file(s) into app/dist/webview/`)
+}
+
 console.log('\nDone! Package ready in app/dist/')
