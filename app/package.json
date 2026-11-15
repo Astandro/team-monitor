@@ -1,6 +1,6 @@
 {
   "name": "team-monitor",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Team monitor for an agentic team: live agent graph plus team, tasks and decisions",
   "bin": {
     "team-monitor": "dist/app.js"
