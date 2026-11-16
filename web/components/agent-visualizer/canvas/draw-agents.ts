@@ -8,7 +8,9 @@ import { canvasIdentity } from './identity'
 import { wrapTextCanvas, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite, getEmberGlowSprite, getGlowSprite } from './render-cache'
 import { debris, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, EMBER, emberGlow, sparks, tagPulse, type EmberGlow, type Mote } from '@/lib/disintegration'
-import { ALERT_TOKENS, alertBlinkAlpha, mixHex, WARNING_ICON } from '@/lib/alert-tag'
+import {
+  ALERT_TAG_BASE, ALERT_TOKENS, alertTagAlphas, alertTagBox, alertTagSize, mixHex, WARNING_ICON, type AlertTagSize,
+} from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
 import { nodeAlert, ownerTagPulse, type NodeAlert } from '@/lib/owner-decision'
 import { isCanvasOwnerNode } from './owner-state'
@@ -351,7 +353,7 @@ function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: numb
     ctx.stroke()
   }
 
-  // Slower orbiting particles in amber
+  // Slower orbiting particles in the node's alert colour: amber while waiting for permission, red for the owner
   for (let i = 0; i < 3; i++) {
     const angle = time * AGENT_DRAW.waitingOrbitSpeed + (i / 3) * Math.PI * 2
     ctx.beginPath()
@@ -406,51 +408,64 @@ function drawDebrisAndSparks(ctx: CanvasRenderingContext2D, agent: Agent, bits: 
   ctx.globalCompositeOperation = prevOp
 }
 
+/** Top of the node's name label, below the hexagon (and below the context bar when it is drawn). */
+function labelTop(agent: Agent, r: number): number {
+  return agent.tokensUsed > 0
+    ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
+    : r + AGENT_DRAW.labelYOffset
+}
+
 /**
  * The alert tag under a node's name and role: "disintegrating" on a leaving node (item 4a), "Butuh jawaban" on a node
  * waiting for the owner's answer. A see-through red pill with a matching border, a warning triangle and readable
- * text; the whole tag blinks (`pulse` 0..1). Static under reduced motion (pulse 0).
+ * text. Only the pill (tint and border) blinks (`pulse` 0..1); the text and the triangle stay fully opaque (QA F4).
+ * Static under reduced motion (pulse 0). `size` comes from alertTagSize (a minimum on-screen size for the owner tag,
+ * QA F2); `backing` lays the canvas background under the pill first, so passing ripples do not show through it.
  */
-function drawAlertTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number, label: string) {
+function drawAlertTag(
+  ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number, label: string, size: AlertTagSize, backing: boolean,
+) {
   const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
-  const hasBar = agent.tokensUsed > 0
-  const top = hasBar
-    ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
-    : r + AGENT_DRAW.labelYOffset
   ctx.font = '10px monospace'
   const id = canvasIdentity(agent)
   const lines = wrapTextCanvas(ctx, id.name, maxLabelW).length + (id.role ? wrapTextCanvas(ctx, id.role, maxLabelW).length : 0)
   const t = ALERT_TOKENS[getGraphTheme() === 'dark' ? 'dark' : 'light']
-  ctx.font = 'bold 9px sans-serif'
-  const icon = 9
-  const textW = ctx.measureText(label).width
-  const w = textW + icon + 3 + 9
-  const h = 13
-  const x = agent.x - w / 2
-  const y = agent.y + top + lines * AGENT_DRAW.labelLineHeight + 2
-  // Owner (13 Nov): the whole alert component blinks (pill, triangle and text together), not only its border.
+  ctx.font = `bold ${size.font}px sans-serif`
+  const labelBottom = agent.y + labelTop(agent, r) + lines * AGENT_DRAW.labelLineHeight
+  const { x, y, w, h } = alertTagBox(size, ctx.measureText(label).width, agent.x, labelBottom)
+  const s = size.height / ALERT_TAG_BASE.height
+  const alphas = alertTagAlphas(pulse)
+  if (backing) {
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, h, size.radius)
+    ctx.fillStyle = COLORS.void
+    ctx.fill()
+  }
   ctx.save()
-  ctx.globalAlpha *= alertBlinkAlpha(pulse)
+  ctx.globalAlpha *= alphas.pill
   if (pulse > 0) {
     // the ring is a stroke outside the pill, so the see-through tint does not darken under it
     ctx.beginPath()
-    ctx.roundRect(x - 1.5, y - 1.5, w + 3, h + 3, 5.5)
+    ctx.roundRect(x - 1.5 * s, y - 1.5 * s, w + 3 * s, h + 3 * s, size.radius + 1.5 * s)
     ctx.strokeStyle = t.line + alphaHex(0.35 * pulse)
-    ctx.lineWidth = 3
+    ctx.lineWidth = 3 * s
     ctx.stroke()
   }
   ctx.beginPath()
-  ctx.roundRect(x, y, w, h, 4)
+  ctx.roundRect(x, y, w, h, size.radius)
   ctx.fillStyle = mixHex(t.bg, t.bgHi, pulse)
   ctx.fill()
   ctx.strokeStyle = t.line
-  ctx.lineWidth = 1
+  ctx.lineWidth = s
   ctx.stroke()
-  drawWarningIcon(ctx, x + 4, y + (h - icon) / 2, icon, t.ink)
+  ctx.restore()
+  ctx.save()
+  ctx.globalAlpha *= alphas.ink
+  drawWarningIcon(ctx, x + size.padL, y + (h - size.icon) / 2, size.icon, t.ink)
   ctx.fillStyle = t.ink
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(label, x + 4 + icon + 3, y + h / 2 + 0.5)
+  ctx.fillText(label, x + size.padL + size.icon + size.gap, y + h / 2 + 0.5 * s)
   ctx.restore()
 }
 
@@ -472,21 +487,31 @@ function drawWarningIcon(ctx: CanvasRenderingContext2D, x: number, y: number, si
   ctx.restore()
 }
 
-function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean) {
-  ctx.fillStyle = isHovered ? COLORS.textPrimary : COLORS.textDim
+/**
+ * The node's name and role. `backing` (a node with ripples, QA F3) lays a small patch of the canvas background under
+ * the text first, so the ripples drawn before it never cross the letters.
+ */
+function drawAgentLabel(ctx: CanvasRenderingContext2D, agent: Agent, r: number, isHovered: boolean, backing: boolean) {
   ctx.font = '10px monospace'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
   // Agent names carry task titles: wrap them, never cut them. When the context
   // bar is drawn under the hexagon the name starts below it so they never overlap.
-  const hasBar = agent.tokensUsed > 0
-  const top = hasBar
-    ? r + CONTEXT_BAR.yOffset + CONTEXT_BAR.barHeight + AGENT_DRAW.labelBelowBarGap
-    : r + AGENT_DRAW.labelYOffset
+  const top = labelTop(agent, r)
   // Personal name first, the role on its own line(s) under it in the muted colour (D23)
   const id = canvasIdentity(agent)
   const lines = wrapTextCanvas(ctx, id.name, maxLabelW)
+  if (backing) {
+    const all = id.role ? lines.concat(wrapTextCanvas(ctx, id.role, maxLabelW)) : lines
+    let widest = 0
+    for (const l of all) widest = Math.max(widest, ctx.measureText(l).width)
+    ctx.beginPath()
+    ctx.roundRect(agent.x - widest / 2 - 3, agent.y + top - 1, widest + 6, all.length * AGENT_DRAW.labelLineHeight + 1, 3)
+    ctx.fillStyle = COLORS.void
+    ctx.fill()
+  }
+  ctx.fillStyle = isHovered ? COLORS.textPrimary : COLORS.textDim
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], agent.x, agent.y + top + i * AGENT_DRAW.labelLineHeight)
   }
@@ -544,6 +569,8 @@ export function drawAgents(
   hoveredAgentId: string | null,
   showStats: boolean,
   time: number,
+  /** The graph's zoom (camera scale), so the owner tag keeps a readable on-screen size (F2). */
+  zoom = 1,
 ) {
   // Wall clock for the auto-offboard countdown (the server's finishedAt / autoOffboardAt are real times)
   const now = Date.now()
@@ -616,12 +643,14 @@ export function drawAgents(
     if (agent.state === 'complete' && !agent.isMain && agent.opacity >= COMPLETED_SUBAGENT_OPACITY) {
       ctx.globalAlpha = look ? look.label : 1
     }
-    drawAgentLabel(ctx, agent, r, isHovered)
+    // The label (and the owner tag) go after the ripples, on a patch of the canvas background while ripples run (F3)
+    const rippling = !!alert?.animated
+    drawAgentLabel(ctx, agent, r, isHovered, rippling)
     if (look && progress < 1) {
       ctx.globalAlpha = look.label
-      drawAlertTag(ctx, agent, r, tagPulse(id, progress, time, still), DISINTEGRATING_TAG)
+      drawAlertTag(ctx, agent, r, tagPulse(id, progress, time, still), DISINTEGRATING_TAG, alertTagSize(zoom, false), false)
     } else if (alert?.tag) {
-      drawAlertTag(ctx, agent, r, ownerTagPulse(time, alert.animated), alert.tag)
+      drawAlertTag(ctx, agent, r, ownerTagPulse(time, alert.animated), alert.tag, alertTagSize(zoom, true), rippling)
     }
     ctx.globalAlpha = bodyAlpha
 

@@ -47,16 +47,64 @@ export function mixHex(a: string, b: string, t: number): string {
   return toHex(out)
 }
 
-/** Lowest opacity of the whole alert component at the bottom of a blink (owner, 13 Nov: the component blinks). */
+/** Lowest opacity of the pill's tint and border at the bottom of a blink. */
 export const ALERT_BLINK_MIN_ALPHA = 0.3
 
 /**
- * Opacity of the whole alert component (pill, triangle and text together) for a pulse value 0..1: fully visible at
- * pulse 0 (also the static, reduced-motion state), fading to ALERT_BLINK_MIN_ALPHA at pulse 1.
+ * Opacity of the pill's tint and border for a pulse value 0..1: fully visible at pulse 0 (also the static,
+ * reduced-motion state), fading to ALERT_BLINK_MIN_ALPHA at pulse 1. The text and its triangle do not blink (F4).
  */
 export function alertBlinkAlpha(pulse: number): number {
   const k = Math.min(1, Math.max(0, pulse))
   return 1 - (1 - ALERT_BLINK_MIN_ALPHA) * k
+}
+
+/**
+ * What blinks in the alert tag (QA F4, 16 Nov): only the pill (tint and border) fades; the text and the triangle stay
+ * fully opaque, so they read at 4.5:1 or more through the whole cycle (alertTagBackdrop, tested).
+ */
+export function alertTagAlphas(pulse: number): { pill: number; ink: number } {
+  return { pill: alertBlinkAlpha(pulse), ink: 1 }
+}
+
+/** The opaque colour behind the tag text at a pulse: the pill tint, faded by the blink, laid over `under`. */
+export function alertTagBackdrop(tokens: AlertTokens, pulse: number, under: string): string {
+  const fill = mixHex(tokens.bg, tokens.bgHi, pulse)
+  const a = (channel(fill, 3) / 255) * alertTagAlphas(pulse).pill
+  return compositeOver(fill.slice(0, 7) + toHex([Math.round(a * 255)]).slice(1), under)
+}
+
+/** The graph tag's size in world units at zoom 1 (the size it had before QA F2). */
+export const ALERT_TAG_BASE = { font: 9, icon: 9, height: 13, padL: 4, gap: 3, padR: 5, radius: 4, offset: 2 } as const
+/** The smallest on-screen size (CSS px) of the owner tag's text and triangle, whatever the graph zoom (QA F2). */
+export const ALERT_TAG_MIN_SCREEN = { font: 11, icon: 14 } as const
+
+export type AlertTagSize = { -readonly [K in keyof typeof ALERT_TAG_BASE]: number }
+
+/**
+ * The tag's size in world units at a graph zoom. With `minimum`, the text and the triangle never look smaller on
+ * screen than ALERT_TAG_MIN_SCREEN; where the zoom already makes them bigger they keep their base size. The pill's
+ * height, padding and corner grow with the larger of the two, so the triangle still fits inside it.
+ */
+export function alertTagSize(zoom: number, minimum: boolean): AlertTagSize {
+  const b = ALERT_TAG_BASE
+  const z = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+  const font = minimum ? Math.max(b.font, ALERT_TAG_MIN_SCREEN.font / z) : b.font
+  const icon = minimum ? Math.max(b.icon, ALERT_TAG_MIN_SCREEN.icon / z) : b.icon
+  const s = Math.max(font / b.font, icon / b.icon)
+  return {
+    font, icon,
+    height: b.height * s, padL: b.padL * s, gap: b.gap * s, padR: b.padR * s, radius: b.radius * s, offset: b.offset * s,
+  }
+}
+
+/**
+ * Where the pill goes: centred on `cx`, its top `offset` below the bottom of the node's name and role, so it grows
+ * downward and never covers the name label. `textWidth` is the label measured at `size.font`.
+ */
+export function alertTagBox(size: AlertTagSize, textWidth: number, cx: number, labelBottom: number) {
+  const w = size.padL + size.icon + size.gap + textWidth + size.padR
+  return { x: cx - w / 2, y: labelBottom + size.offset, w, h: size.height }
 }
 
 /** A #RRGGBBAA colour laid over an opaque #RRGGBB background: the opaque colour the eye sees. */

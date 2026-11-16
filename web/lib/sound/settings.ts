@@ -6,7 +6,13 @@ import { SOUND_PREF_KEY } from '../canvas-constants'
 /** Kept from upstream so a choice made before this change survives: 'on' means sound on. */
 export const SOUND_MUTE_KEY = SOUND_PREF_KEY
 export const SOUND_VOLUME_KEY = `${SOUND_PREF_KEY}-volume`
-/** Volume of a fresh profile (spec 0.9.7); a volume stored before is kept as it is. */
+/**
+ * Marks a stored volume as a slider value for the squared gain (volumeGain). A volume stored without it was written
+ * by 0.9.6 or earlier, where the value was the gain itself; it is migrated once on load (migrateStoredVolume).
+ */
+export const SOUND_VOLUME_SCALE_KEY = `${SOUND_PREF_KEY}-volume-scale`
+export const VOLUME_SCALE_SQUARED = 'squared'
+/** Volume of a fresh profile (spec 0.9.7); a volume stored before keeps the gain the user heard (migrateStoredVolume). */
 export const DEFAULT_VOLUME = 0.7
 
 /**
@@ -37,6 +43,19 @@ export function clampVolume(v: number): number {
 export function parseVolume(raw: string | null): number {
   if (raw === null || raw.trim() === '') return DEFAULT_VOLUME
   return clampVolume(Number(raw))
+}
+
+/**
+ * The slider value for a stored volume. Up to 0.9.6 the stored value was the gain; since 0.9.7 the gain is the
+ * value squared, so an unmarked value becomes sqrt(old), which plays at the gain the user had (F9). `migrate` says
+ * whether the value and the marker must be written back. Nothing stored: the fresh default, nothing to write.
+ */
+export function migrateStoredVolume(raw: string | null, scale: string | null): { volume: number; migrate: boolean } {
+  if (raw === null || raw.trim() === '') return { volume: DEFAULT_VOLUME, migrate: false }
+  const stored = Number(raw)
+  if (!Number.isFinite(stored)) return { volume: DEFAULT_VOLUME, migrate: false }
+  if (scale === VOLUME_SCALE_SQUARED) return { volume: clampVolume(stored), migrate: false }
+  return { volume: Math.sqrt(clampVolume(stored)), migrate: true }
 }
 
 /** What the store needs from localStorage; every call may throw (private windows, blocked site data). */
@@ -76,9 +95,11 @@ export class SoundSettingsStore {
     private readonly storage?: () => StorageLike | null,
     private readonly output?: SoundOutput,
   ) {
+    const stored = migrateStoredVolume(safeGet(storage, SOUND_VOLUME_KEY), safeGet(storage, SOUND_VOLUME_SCALE_KEY))
+    if (stored.migrate) this.persistVolume(stored.volume)
     this.state = {
       muted: parseMuted(safeGet(storage, SOUND_MUTE_KEY)),
-      volume: parseVolume(safeGet(storage, SOUND_VOLUME_KEY)),
+      volume: stored.volume,
     }
     output?.setVolume(this.state.volume)
     output?.setMuted(this.state.muted)
@@ -109,8 +130,14 @@ export class SoundSettingsStore {
     if (v === this.state.volume) return
     this.state = { ...this.state, volume: v }
     this.output?.setVolume(v)
-    safeSet(this.storage, SOUND_VOLUME_KEY, String(v))
+    this.persistVolume(v)
     this.emit()
+  }
+
+  /** The marker goes first: if only it is written, the old value stays quieter rather than being migrated twice. */
+  private persistVolume(v: number): void {
+    safeSet(this.storage, SOUND_VOLUME_SCALE_KEY, VOLUME_SCALE_SQUARED)
+    safeSet(this.storage, SOUND_VOLUME_KEY, String(v))
   }
 
   private emit(): void {
