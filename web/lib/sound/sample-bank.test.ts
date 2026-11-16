@@ -29,13 +29,16 @@ test('nothing is downloaded until load(); then every file once, and a second loa
   assert.equal(p1, p2)
   assert.equal(bank.status('stage_done'), 'loading')
   await p1
-  assert.equal(f.calls.length, 15)
-  assert.equal(new Set(f.calls).size, 15)
+  // 15 event sounds and 4 loops
+  assert.equal(f.calls.length, 19)
+  assert.equal(new Set(f.calls).size, 19)
   assert.ok(f.calls.includes('/sfx-stage_done.mp3'))
+  assert.ok(f.calls.includes('/loop-owner.mp3'))
   for (const s of Object.values(bank.statuses())) assert.equal(s, 'ready')
   assert.ok(bank.get('tool_start'))
+  assert.ok(bank.get('loop:thinking'))
   await bank.load(ctx)
-  assert.equal(f.calls.length, 15)
+  assert.equal(f.calls.length, 19)
 })
 
 test('a file that fails to download or decode stays failed (its cue falls back), the others still load', async () => {
@@ -47,7 +50,7 @@ test('a file that fails to download or decode stays failed (its cue falls back),
   assert.equal(bank.status('decision_open'), 'failed')
   assert.equal(bank.get('decision_open'), null)
   const ready = (Object.entries(bank.statuses()) as [SoundCue, string][]).filter(([, s]) => s === 'ready')
-  assert.equal(ready.length, 13)
+  assert.equal(ready.length, 17)
 })
 
 test('settled() waits for loading, but never longer than its timeout, and is immediate when nothing loads', async () => {

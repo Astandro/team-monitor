@@ -10,6 +10,8 @@ import { getAgentGlowSprite, getEmberGlowSprite, getGlowSprite } from './render-
 import { debris, DISINTEGRATING_TAG, disintegrationLook, disintegrationProgress, EMBER, emberGlow, sparks, tagPulse, type EmberGlow, type Mote } from '@/lib/disintegration'
 import { ALERT_TOKENS, alertBlinkAlpha, mixHex, WARNING_ICON } from '@/lib/alert-tag'
 import { reducedMotion } from '@/lib/motion'
+import { nodeAlert, ownerTagPulse, type NodeAlert } from '@/lib/owner-decision'
+import { isCanvasOwnerNode } from './owner-state'
 import { drawNodeAvatar } from './avatar-sprites'
 
 let _claudeSparkPath: Path2D | null = null
@@ -225,25 +227,33 @@ function drawScanline(ctx: CanvasRenderingContext2D, agent: Agent, r: number, co
   ctx.restore()
 }
 
-function drawStateRing(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, isHovered: boolean, isSelected: boolean, isWaiting: boolean, time: number) {
+function drawStateRing(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, isHovered: boolean, isSelected: boolean, alert: NodeAlert | null, time: number) {
   drawHexagon(ctx, agent.x, agent.y, r)
   ctx.strokeStyle = color
   ctx.lineWidth = (isSelected || isHovered) ? 2.5 : 2
-  if (agent.state === 'complete') {
+  if (alert) {
+    // dashed ring, moving unless reduced motion
+    ctx.setLineDash([6, 4])
+    ctx.lineDashOffset = alert.animated ? -time * AGENT_DRAW.waitingDashSpeed : 0
+    ctx.lineWidth = 2.5
+  } else if (agent.state === 'complete') {
     ctx.setLineDash([4, 4])
     ctx.strokeStyle = color + '60'
-  } else if (isWaiting) {
-    ctx.setLineDash([6, 4])
-    ctx.lineDashOffset = -time * AGENT_DRAW.waitingDashSpeed
-    ctx.lineWidth = 2.5
   }
   ctx.stroke()
   ctx.setLineDash([])
   ctx.lineDashOffset = 0
 }
 
-function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, isWaiting: boolean) {
-  if (isWaiting) {
+/** Warning triangle with an exclamation mark centred on (cx, cy), `size` wide (the owner state's icon). */
+function drawCenteredWarning(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
+  drawWarningIcon(ctx, cx - size / 2, cy - size / 2, size, color)
+}
+
+function drawCenterIcon(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, alert: NodeAlert | null) {
+  if (alert?.icon === 'warning') {
+    drawCenteredWarning(ctx, agent.x, agent.y, r * 0.75, color)
+  } else if (alert?.icon === 'lock') {
     // Geometric lock icon — fits the holographic style
     const s = r * 0.3
     ctx.save()
@@ -294,6 +304,23 @@ function drawLockBadge(ctx: CanvasRenderingContext2D, agent: Agent, r: number, c
   ctx.restore()
 }
 
+/** The owner state while the avatar fills the hexagon: the warning triangle in a small badge on its lower right. */
+function drawWarningBadge(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string) {
+  const s = r * 0.42
+  const bx = agent.x + r * 0.52
+  const by = agent.y + r * 0.5
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(bx, by, s * 0.75, 0, Math.PI * 2)
+  ctx.fillStyle = COLORS.nodeInterior
+  ctx.fill()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.restore()
+  drawCenteredWarning(ctx, bx, by - s * 0.03, s * 0.95, color)
+}
+
 function drawOrbitingParticles(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, time: number) {
   for (let i = 0; i < 4; i++) {
     const angle = time * ANIM.orbitSpeed + (i / 4) * Math.PI * 2
@@ -308,10 +335,13 @@ function drawOrbitingParticles(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   }
 }
 
-function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, time: number) {
-  // Radar ripples — 2 concentric rings expanding outward, staggered
-  for (let i = 0; i < 2; i++) {
-    const ripplePhase = ((time * 0.65 + i * 0.5) % 1.0)
+/** Ripples and orbiting particles of a node that waits (permission, or the owner's answer). Nothing under reduced motion. */
+function drawWaitingRipples(ctx: CanvasRenderingContext2D, agent: Agent, r: number, color: string, time: number, alert: NodeAlert) {
+  if (!alert.animated) return
+  // Radar ripples: concentric rings expanding outward, evenly staggered (2 for permission, 3 for the owner)
+  const n = alert.ripples
+  for (let i = 0; i < n; i++) {
+    const ripplePhase = ((time * 0.65 + i / n) % 1.0)
     const rippleR = r + AGENT_DRAW.rippleInnerOffset + ripplePhase * AGENT_DRAW.rippleMaxExpand
     const rippleAlpha = (1 - ripplePhase) * AGENT_DRAW.rippleMaxAlpha
     ctx.beginPath()
@@ -377,11 +407,11 @@ function drawDebrisAndSparks(ctx: CanvasRenderingContext2D, agent: Agent, bits: 
 }
 
 /**
- * The "disintegrating" alert tag under a leaving node's name and role (item 4a): a see-through red pill with a matching
- * border, a warning triangle and readable text; the pill pulses (stronger tint plus a soft ring), the text does not.
- * Static under reduced motion.
+ * The alert tag under a node's name and role: "disintegrating" on a leaving node (item 4a), "Butuh jawaban" on a node
+ * waiting for the owner's answer. A see-through red pill with a matching border, a warning triangle and readable
+ * text; the whole tag blinks (`pulse` 0..1). Static under reduced motion (pulse 0).
  */
-function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number) {
+function drawAlertTag(ctx: CanvasRenderingContext2D, agent: Agent, r: number, pulse: number, label: string) {
   const maxLabelW = Math.max(r * AGENT_DRAW.labelWidthMultiplier, AGENT_DRAW.labelMinWidth)
   const hasBar = agent.tokensUsed > 0
   const top = hasBar
@@ -393,7 +423,7 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   const t = ALERT_TOKENS[getGraphTheme() === 'dark' ? 'dark' : 'light']
   ctx.font = 'bold 9px sans-serif'
   const icon = 9
-  const textW = ctx.measureText(DISINTEGRATING_TAG).width
+  const textW = ctx.measureText(label).width
   const w = textW + icon + 3 + 9
   const h = 13
   const x = agent.x - w / 2
@@ -420,7 +450,7 @@ function drawDisintegratingTag(ctx: CanvasRenderingContext2D, agent: Agent, r: n
   ctx.fillStyle = t.ink
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
-  ctx.fillText(DISINTEGRATING_TAG, x + 4 + icon + 3, y + h / 2 + 0.5)
+  ctx.fillText(label, x + 4 + icon + 3, y + h / 2 + 0.5)
   ctx.restore()
 }
 
@@ -521,14 +551,16 @@ export function drawAgents(
   const theme = getGraphTheme() === 'dark' ? 'dark' : 'light'
   for (const [id, agent] of agents) {
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
-    const color = getStateColor(agent.state)
     const isHovered = id === hoveredAgentId
     const isSelected = id === selectedAgentId
 
-    const isWaiting = agent.state === 'waiting_permission'
+    // Waiting for the owner's answer (red, triangle, tag) wins over waiting for permission (amber, lock)
+    const alert = nodeAlert(agent.state, isCanvasOwnerNode(id), still)
+    const isWaiting = alert !== null
+    const color = alert?.kind === 'owner' ? COLORS.ownerDecision : getStateColor(agent.state)
 
     const breathe = isWaiting
-      ? Math.sin(time * AGENT_DRAW.waitingBreatheSpeed) * AGENT_DRAW.waitingBreatheAmp + 1
+      ? (alert.animated ? Math.sin(time * AGENT_DRAW.waitingBreatheSpeed) * AGENT_DRAW.waitingBreatheAmp + 1 : 1)
       : agent.state === 'thinking'
       ? Math.sin(time * ANIM.breathe.thinkingSpeed) * ANIM.breathe.thinkingAmp + 1
       : agent.state === 'idle' ? Math.sin(time * ANIM.breathe.idleSpeed) * ANIM.breathe.idleAmp + 1 : 1
@@ -564,17 +596,18 @@ export function drawAgents(
       drawDebrisAndSparks(ctx, agent, debris(id, progress, time, still, r), sparks(id, progress, time, still, r), dark, agent.opacity)
       ctx.globalAlpha = bodyAlpha
     } else {
-      drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
+      drawStateRing(ctx, agent, r, color, isHovered, isSelected, alert, time)
     }
-    if (!avatarDrawn) drawCenterIcon(ctx, agent, r, color, isWaiting)
-    else if (isWaiting) drawLockBadge(ctx, agent, r, color)
+    if (!avatarDrawn) drawCenterIcon(ctx, agent, r, color, alert)
+    else if (alert?.icon === 'warning') drawWarningBadge(ctx, agent, r, color)
+    else if (alert?.icon === 'lock') drawLockBadge(ctx, agent, r, color)
 
-    if (agent.state === 'thinking') {
+    if (agent.state === 'thinking' && !alert) {
       drawOrbitingParticles(ctx, agent, r, color, time)
     }
 
-    if (isWaiting) {
-      drawWaitingRipples(ctx, agent, r, color, time)
+    if (alert) {
+      drawWaitingRipples(ctx, agent, r, color, time, alert)
     }
 
     // A finished sub-agent's node is dimmed, but its name stays readable (muted text at full strength): the owner
@@ -586,7 +619,9 @@ export function drawAgents(
     drawAgentLabel(ctx, agent, r, isHovered)
     if (look && progress < 1) {
       ctx.globalAlpha = look.label
-      drawDisintegratingTag(ctx, agent, r, tagPulse(id, progress, time, still))
+      drawAlertTag(ctx, agent, r, tagPulse(id, progress, time, still), DISINTEGRATING_TAG)
+    } else if (alert?.tag) {
+      drawAlertTag(ctx, agent, r, ownerTagPulse(time, alert.animated), alert.tag)
     }
     ctx.globalAlpha = bodyAlpha
 

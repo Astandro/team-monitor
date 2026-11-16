@@ -1,6 +1,7 @@
-// Loads and decodes the sample files of sound set v3, once, when the engine first gets an AudioContext (that is
-// after the first tap with sound on: a muted page never downloads them). A file that fails to load or decode stays
-// "failed" and its cue keeps playing the synthesised v2 sound (the engine falls back per cue).
+// Loads and decodes the sample files (event sounds and background loops), once, when the engine first gets an
+// AudioContext (that is after the first tap with sound on: a muted page never downloads them). A file that fails to
+// load or decode stays "failed" and its sound keeps playing the synthesised fallback (the engine falls back per
+// sound).
 
 import type { SoundCue } from './cues'
 
@@ -20,37 +21,37 @@ export const browserFetchBytes: FetchBytes = async (url) => {
   return res.arrayBuffer()
 }
 
-export class SampleBank {
-  private readonly buffers = new Map<SoundCue, AudioBuffer>()
-  private readonly states = new Map<SoundCue, SampleStatus>()
+export class SampleBank<K extends string = SoundCue> {
+  private readonly buffers = new Map<K, AudioBuffer>()
+  private readonly states = new Map<K, SampleStatus>()
   private loading: Promise<void> | null = null
 
   constructor(
-    private readonly urls: Readonly<Record<SoundCue, string>>,
+    private readonly urls: Readonly<Record<K, string>>,
     private readonly fetchBytes: FetchBytes = browserFetchBytes,
   ) {}
 
-  status(cue: SoundCue): SampleStatus {
-    return this.states.get(cue) ?? 'idle'
+  status(key: K): SampleStatus {
+    return this.states.get(key) ?? 'idle'
   }
 
-  statuses(): Record<SoundCue, SampleStatus> {
-    const out = {} as Record<SoundCue, SampleStatus>
-    for (const cue of Object.keys(this.urls) as SoundCue[]) out[cue] = this.status(cue)
+  statuses(): Record<K, SampleStatus> {
+    const out = {} as Record<K, SampleStatus>
+    for (const key of Object.keys(this.urls) as K[]) out[key] = this.status(key)
     return out
   }
 
   /** The decoded sound, or null while it loads, after it failed, or before load() ran. */
-  get(cue: SoundCue): AudioBuffer | null {
-    return this.buffers.get(cue) ?? null
+  get(key: K): AudioBuffer | null {
+    return this.buffers.get(key) ?? null
   }
 
   /** Start loading every file (only the first call does anything). Resolves when all are ready or failed. */
   load(decoder: SampleDecoder): Promise<void> {
     if (this.loading) return this.loading
-    const cues = Object.keys(this.urls) as SoundCue[]
-    for (const cue of cues) this.states.set(cue, 'loading')
-    this.loading = Promise.all(cues.map((cue) => this.loadOne(cue, decoder))).then(() => undefined)
+    const keys = Object.keys(this.urls) as K[]
+    for (const key of keys) this.states.set(key, 'loading')
+    this.loading = Promise.all(keys.map((key) => this.loadOne(key, decoder))).then(() => undefined)
     return this.loading
   }
 
@@ -66,14 +67,14 @@ export class SampleBank {
     })
   }
 
-  private async loadOne(cue: SoundCue, decoder: SampleDecoder): Promise<void> {
+  private async loadOne(key: K, decoder: SampleDecoder): Promise<void> {
     try {
-      const bytes = await this.fetchBytes(this.urls[cue])
+      const bytes = await this.fetchBytes(this.urls[key])
       const buffer = await decoder.decodeAudioData(bytes)
-      this.buffers.set(cue, buffer)
-      this.states.set(cue, 'ready')
+      this.buffers.set(key, buffer)
+      this.states.set(key, 'ready')
     } catch {
-      this.states.set(cue, 'failed')
+      this.states.set(key, 'failed')
     }
   }
 }

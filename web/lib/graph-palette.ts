@@ -70,6 +70,8 @@ export function graphPalette(theme: GraphTheme) {
     error: t.blocked,
     paused: t.muted,
     waiting_permission: t.review,
+    /** "Butuh jawaban owner" (lib/owner-decision.ts): the blocked red, owner's choice 16 Nov 2026 */
+    ownerDecision: t.blocked,
 
     // Edges and particles
     dispatch: t.muted,

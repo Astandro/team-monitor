@@ -9,26 +9,26 @@ import type { SoundCue } from './cues'
 import { demoLabel, demoSteps, DEMO_LOAD_WAIT_MS, DEMO_LOADING_LABEL, DEMO_ORDER } from './demo'
 import { STAGGER_MS } from './gate'
 import { SampleBank } from './sample-bank'
-import { sampleUrls } from './samples'
-import { SoundSettingsStore, type SoundSettings } from './settings'
+import { sampleUrls, type SampleKey } from './samples'
+import { DEFAULT_VOLUME, SoundSettingsStore, type SoundSettings } from './settings'
 import { renderCueOffline, renderMixOffline } from './synth'
 
 /**
- * Sound set v3 (sample files) only in the standalone app, whose server serves the files next to index.js. The VS Code
- * webview keeps the synthesised v2 set (its CSP does not allow fetching media).
+ * Sound set v4 (sample files) only in the standalone app, whose server serves the files next to index.js. The VS Code
+ * webview keeps the synthesised set (its CSP does not allow fetching media).
  */
 const USE_SAMPLES = process.env.AGENT_FLOW_STANDALONE === '1'
 
 interface SoundClient {
   engine: AudioEngine
   store: SoundSettingsStore
-  samples: SampleBank | null
+  samples: SampleBank<SampleKey> | null
 }
 
 let client: SoundClient | null = null
 
-// QA handle (plays nothing): render any synthesised (v2) sound offline, e.g. to save it as a WAV in a headless
-// browser, and read which sample files (v3) loaded.
+// QA handle (plays nothing): render any synthesised (fallback) sound offline, e.g. to save it as a WAV in a headless
+// browser, and read which sample files (v4) loaded.
 if (typeof window !== 'undefined') {
   ;(window as unknown as { tmSoundLab?: unknown }).tmSoundLab = {
     cues: DEMO_ORDER,
@@ -45,7 +45,7 @@ function browserStorage() {
 export function getSoundClient(): SoundClient | null {
   if (typeof window === 'undefined') return null
   if (client) return client
-  const samples = USE_SAMPLES ? new SampleBank(sampleUrls('/')) : null
+  const samples = USE_SAMPLES ? new SampleBank<SampleKey>(sampleUrls('/')) : null
   const engine = new AudioEngine({ samples: samples ?? undefined })
   const store = new SoundSettingsStore(browserStorage, engine)
   client = { engine, store, samples }
@@ -128,7 +128,7 @@ export function setSoundVolume(volume: number): void {
   getSoundClient()?.store.setVolume(volume)
 }
 
-const SERVER_SETTINGS: SoundSettings = { muted: true, volume: 0.5 }
+const SERVER_SETTINGS: SoundSettings = { muted: true, volume: DEFAULT_VOLUME }
 
 export function soundSubscribe(listener: () => void): () => void {
   const c = getSoundClient()

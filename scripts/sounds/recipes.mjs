@@ -1,228 +1,128 @@
-// Sound set v3 (owner decision D45): every event sound is built from CC0 samples by build.mjs.
-// This file is the recipe list. Sources are named "<pack>/<file>", packs are listed in PACKS (licences in
-// web/public/sounds/LICENSES.md). Times are seconds, gains dB, pan -1 (left) .. 1 (right).
+// Sound set v4, "mecha" (owner approval 16 Nov 2026): every event sound and every background loop is mixed by
+// build.mjs from the "Free Cinematic Sound Effects" pack by Gregor Quendel (CC BY 4.0, see
+// web/public/sounds/LICENSES.md). The recipes are a port of the reference mixer the owner listened to
+// (handover mix.py): same source segments, pitch ratios, offsets and layer gains.
 //
-// A layer: { src, at | endAt, from, to, rate, reverse, gain, filters, pan, panTo, fadeIn, fadeOut }
-//   at       where the layer starts in the output; endAt instead places the layer so it ends there
-//   from/to  trim of the source before anything else
-//   rate     pitch and speed together (0.5 = an octave down and twice as long)
-//   filters  plain ffmpeg audio filters (EQ etc.), applied after the pitch change
-// A cue: { cue, file, dur, space, target, layers }
-//   space    reverb: { mix (wet level), seconds (tail), predelay }
-//   target   level: { lufs (loudest 400 ms window, LUFS), peak (true-peak cap, dBTP) }
+// A layer: { src, at, from, to, rate, gain, fadeIn, fadeOut }
+//   src      "<pack>/<file>" under scripts/sounds/sources/
+//   at       where the layer starts in the output (s)
+//   from/to  trim of the source (s); no `to` = to the end of the file
+//   rate     pitch and speed together (0.75 = lower and longer)
+//   gain     linear, applied after the layer is peak-normalised (mix.py's g)
+//   fadeIn   linear fade in (s, default 0.005); fadeOut: squared fade out (s, default 0.08)
+// A cue:  { cue, file, target, layers }
+// A loop: { loop, file, target, layers, period, crossfade }: one seamless period (dsp.mjs loopPeriod); the file
+//         holds two periods so the app can loop a window that never touches the MP3's encoder delay or padding.
+// target: { lufs, peak }: loudness (EBU R128 momentary maximum, or the whole length for cues under 400 ms) and the
+//         true-peak cap (dBTP). The build calibrates each sound's overall gain to its target.
 
-/** Licensed packs this set may use; build.mjs refuses any other source and checks each pack's licence file. */
 export const PACKS = {
-  scifi: {
-    name: 'Sci-Fi Sounds (1.0) by Kenney',
-    licenceFile: 'License.txt',
-    audioDir: 'Audio',
-  },
-  interface: {
-    name: 'Interface Sounds (1.0) by Kenney',
-    licenceFile: 'License.txt',
-    audioDir: 'Audio',
+  'gregor-quendel': {
+    name: 'Free Cinematic Sound Effects by Gregor Quendel',
+    licenceFile: 'LICENSE.txt',
+    licence: 'CC BY 4.0',
+    licenceUrl: 'https://creativecommons.org/licenses/by/4.0/',
   },
 }
 
 export const SAMPLE_RATE = 48000
-export const BITRATE = '128k'
+export const BITRATE = '96k'
 
-/** Rare events are big and wide; frequent ones quiet, short and nearly dry. */
+const GQ = 'gregor-quendel/'
+const MECHANISMS = `${GQ}Mecha_Sequences_Mechanisms_01.mp3`
+const IMPACT = `${GQ}Mecha_Elements_Impact_01.mp3`
+const MECHANISM = `${GQ}Mecha_Elements_Mechanism_01.mp3`
+
+/** mix.py's imp(): the mecha impact, whole (or cut at `to`), with a 0.3 s fade out. */
+const impact = (at, rate = 1, gain = 1, to) => ({ src: IMPACT, at, rate, gain, ...(to === undefined ? {} : { to }), fadeOut: 0.3 })
+const layer = (src, at, from, to, opts = {}) => ({ src: src.includes('/') ? src : GQ + src, at, from, ...(to === undefined ? {} : { to }), ...opts })
+
+// Peak caps follow mix.py: alerts -1.5, milestones -3, the rest -5 (dBTP).
+const ALERT = { lufs: -14, peak: -1.5 }
+const MILESTONE = { lufs: -18, peak: -3 }
+const FREQUENT = { lufs: -20, peak: -5 }
+
 export const RECIPES = [
+  // alerts
   {
-    cue: 'tool_start',
-    file: 'sfx-tool_start.mp3',
-    dur: 0.16,
-    space: { mix: 0.05, seconds: 0.6, predelay: 0.01 },
-    target: { lufs: -38, peak: -24 },
+    cue: 'decision_open',
+    target: ALERT,
     layers: [
-      { src: 'interface/tick_002.ogg', at: 0, rate: 0.8, filters: ['highpass=f=500', 'lowpass=f=6500'], pan: -0.15 },
-    ],
-  },
-  {
-    cue: 'tool_complete',
-    file: 'sfx-tool_complete.mp3',
-    dur: 0.18,
-    space: { mix: 0.05, seconds: 0.6, predelay: 0.01 },
-    target: { lufs: -38, peak: -24 },
-    layers: [
-      { src: 'interface/select_002.ogg', at: 0, rate: 1.12, filters: ['highpass=f=600', 'lowpass=f=7000'], pan: 0.15 },
-    ],
-  },
-  {
-    cue: 'handoff',
-    file: 'sfx-handoff.mp3',
-    dur: 0.4,
-    space: { mix: 0.08, seconds: 0.9, predelay: 0.015 },
-    target: { lufs: -33, peak: -20 },
-    layers: [
-      {
-        src: 'scifi/computerNoise_002.ogg', at: 0, from: 0.5, to: 0.78, rate: 1.1,
-        filters: ['bandpass=f=2400:w=1800', 'highpass=f=300'], fadeIn: 0.02, fadeOut: 0.1, pan: -0.5, panTo: 0.5,
-      },
-      { src: 'interface/glitch_002.ogg', at: 0.02, rate: 0.9, gain: -4, filters: ['lowpass=f=6000'] },
-    ],
-  },
-  {
-    cue: 'tool_error',
-    file: 'sfx-tool_error.mp3',
-    dur: 1.05,
-    space: { mix: 0.3, seconds: 1.4, predelay: 0.02 },
-    target: { lufs: -24, peak: -10 },
-    layers: [
-      { src: 'interface/error_005.ogg', at: 0, rate: 0.7, filters: ['lowpass=f=5000'] },
-      { src: 'scifi/impactMetal_002.ogg', at: 0, rate: 0.75, gain: -2 },
-      { src: 'scifi/laserSmall_002.ogg', at: 0.06, rate: 0.5, gain: -3, filters: ['lowpass=f=1500'] },
-    ],
-  },
-  {
-    cue: 'agent_spawn',
-    file: 'sfx-agent_spawn.mp3',
-    dur: 1.25,
-    space: { mix: 0.35, seconds: 1.6, predelay: 0.02 },
-    target: { lufs: -27, peak: -12 },
-    layers: [
-      { src: 'scifi/forceField_000.ogg', at: 0, fadeIn: 0.06, fadeOut: 0.3, pan: -0.5, panTo: 0.3 },
-      { src: 'interface/maximize_003.ogg', at: 0.1, rate: 0.8, gain: -3, filters: ['lowpass=f=6000'] },
-    ],
-  },
-  {
-    cue: 'agent_complete',
-    file: 'sfx-agent_complete.mp3',
-    dur: 1.6,
-    space: { mix: 0.45, seconds: 2, predelay: 0.025 },
-    target: { lufs: -27, peak: -12 },
-    layers: [
-      { src: 'interface/confirmation_002.ogg', at: 0, rate: 0.8 },
-      { src: 'interface/glass_003.ogg', at: 0.05, rate: 0.5, gain: -2, pan: -0.35 },
-      { src: 'interface/glass_003.ogg', at: 0.12, rate: 1, gain: -8, pan: 0.45 },
-    ],
-  },
-  {
-    cue: 'agent_offboarded',
-    file: 'sfx-agent_offboarded.mp3',
-    dur: 2,
-    space: { mix: 0.5, seconds: 2.2, predelay: 0.03 },
-    target: { lufs: -27, peak: -12 },
-    layers: [
-      {
-        src: 'scifi/thrusterFire_002.ogg', at: 0, from: 0.5, to: 1.8, rate: 0.8,
-        filters: ['lowpass=f=3200', 'highpass=f=250'], fadeIn: 0.3, fadeOut: 0.8, pan: 0.7, panTo: -0.7,
-      },
-      { src: 'interface/minimize_004.ogg', at: 0.2, rate: 0.55, gain: -4, pan: 0.2, panTo: -0.4 },
-    ],
-  },
-  {
-    cue: 'task_start',
-    file: 'sfx-task_start.mp3',
-    dur: 1.05,
-    space: { mix: 0.3, seconds: 1.4, predelay: 0.02 },
-    target: { lufs: -25, peak: -10 },
-    layers: [
-      { src: 'scifi/spaceEngineLow_001.ogg', at: 0, from: 0, to: 0.9, fadeIn: 0.15, fadeOut: 0.4, gain: -3 },
-      { src: 'scifi/doorOpen_001.ogg', at: 0, rate: 0.6, gain: -4, filters: ['lowpass=f=7000'] },
-      { src: 'interface/open_002.ogg', at: 0.05, rate: 0.7, gain: -6 },
-    ],
-  },
-  {
-    cue: 'task_review',
-    file: 'sfx-task_review.mp3',
-    dur: 1.6,
-    space: { mix: 0.4, seconds: 1.8, predelay: 0.02 },
-    target: { lufs: -26, peak: -10 },
-    layers: [
-      { src: 'scifi/laserLarge_001.ogg', at: 0, rate: 0.55, filters: ['lowpass=f=4000'], pan: -0.6, panTo: 0.6 },
-      { src: 'interface/scroll_003.ogg', at: 0.1, rate: 0.8, gain: -8, pan: -0.3, panTo: 0.3 },
-    ],
-  },
-  {
-    cue: 'task_done',
-    file: 'sfx-task_done.mp3',
-    dur: 1.8,
-    space: { mix: 0.5, seconds: 2.2, predelay: 0.025 },
-    target: { lufs: -24, peak: -8 },
-    layers: [
-      { src: 'interface/confirmation_003.ogg', at: 0 },
-      { src: 'interface/glass_004.ogg', at: 0.1, rate: 0.75, gain: -2, pan: -0.3 },
-      { src: 'interface/glass_004.ogg', at: 0.18, rate: 1.5, gain: -8, pan: 0.45 },
+      impact(0, 0.75),
+      impact(0.45, 0.75),
+      layer('Circuits_Ambience_Burst_01.mp3', 0, 0, 2.4, { gain: 0.6, fadeOut: 0.8 }),
+      layer(MECHANISMS, 0.9, 21.3, 22.7, { gain: 0.5 }),
     ],
   },
   {
     cue: 'task_blocked',
-    file: 'sfx-task_blocked.mp3',
-    dur: 1.25,
-    space: { mix: 0.3, seconds: 1.5, predelay: 0.02 },
-    target: { lufs: -20, peak: -6 },
-    layers: [
-      { src: 'interface/error_006.ogg', at: 0, rate: 0.55, filters: ['lowpass=f=4000'] },
-      { src: 'scifi/impactMetal_001.ogg', at: 0, rate: 0.8 },
-      { src: 'scifi/forceField_004.ogg', at: 0, from: 0, to: 0.5, rate: 0.6, gain: -4, filters: ['lowpass=f=800'], fadeOut: 0.3 },
-    ],
+    target: ALERT,
+    layers: [layer('Sci-Fi_Circuits_Error_RobotSpeech.mp3', 0, 0, 1.8, { gain: 0.8, fadeOut: 0.3 }), impact(0.9, 0.7)],
   },
   {
-    cue: 'decision_answered',
-    file: 'sfx-decision_answered.mp3',
-    dur: 1.8,
-    space: { mix: 0.45, seconds: 2.2, predelay: 0.025 },
-    target: { lufs: -21, peak: -6 },
-    layers: [
-      { src: 'scifi/laserLarge_002.ogg', at: 0, rate: 0.7, filters: ['lowpass=f=5000'], pan: 0.4, panTo: -0.2 },
-      { src: 'interface/confirmation_004.ogg', at: 0.15, rate: 0.9 },
-      { src: 'interface/glass_006.ogg', at: 0.2, rate: 0.6, gain: -3, pan: 0.3 },
-    ],
+    cue: 'tool_error',
+    target: ALERT,
+    layers: [layer('Sci-Fi_Tuner_Chaoswhip_02.mp3', 0, 0, 1.5, { gain: 0.8 }), impact(0.35, 0.9, 0.9)],
   },
-  {
-    cue: 'decision_open',
-    file: 'sfx-decision_open.mp3',
-    dur: 2.6,
-    space: { mix: 0.4, seconds: 2.2, predelay: 0.02 },
-    target: { lufs: -16, peak: -3 },
-    layers: [
-      { src: 'interface/question_002.ogg', at: 0, rate: 0.6, pan: -0.3 },
-      { src: 'interface/question_002.ogg', at: 0.55, rate: 0.6, pan: 0.3 },
-      { src: 'interface/question_002.ogg', at: 1.1, rate: 0.6 },
-      { src: 'scifi/forceField_003.ogg', at: 0, rate: 0.5, gain: -2, filters: ['lowpass=f=400'], fadeOut: 0.5 },
-      { src: 'scifi/lowFrequency_explosion_001.ogg', at: 0, gain: -10 },
-    ],
-  },
+  // milestones
   {
     cue: 'session_start',
-    file: 'sfx-session_start.mp3',
-    dur: 3.8,
-    space: { mix: 0.5, seconds: 3, predelay: 0.03 },
-    target: { lufs: -14, peak: -1.5 },
+    target: MILESTONE,
     layers: [
-      {
-        src: 'scifi/spaceEngineLarge_002.ogg', at: 0, from: 0, to: 2.4, rate: 0.7,
-        filters: ['lowpass=f=5000'], fadeIn: 1.2, fadeOut: 1.2, gain: -4,
-      },
-      {
-        src: 'scifi/thrusterFire_003.ogg', at: 0, from: 0, to: 2.8, rate: 0.9,
-        fadeIn: 1.5, fadeOut: 1.1, pan: -0.6, panTo: 0.6, gain: -2,
-      },
-      { src: 'scifi/forceField_002.ogg', at: 0, rate: 0.5, gain: -6, filters: ['lowpass=f=900'] },
-      { src: 'scifi/laserLarge_000.ogg', at: 1.3, rate: 0.35, gain: -3, filters: ['lowpass=f=3000'] },
-      { src: 'scifi/lowFrequency_explosion_000.ogg', at: 1.45 },
+      layer('Fire_Swooshes_Burst_Evolving_19.mp3', 0, 0.2, 3.6, { fadeIn: 0.3, fadeOut: 1.0 }),
+      layer(MECHANISMS, 0.3, 0, 1.8, { gain: 0.35 }),
+      impact(1.9, 0.8, 0.9),
     ],
   },
   {
     cue: 'stage_done',
-    file: 'sfx-stage_done.mp3',
-    dur: 4.5,
-    space: { mix: 0.55, seconds: 3.2, predelay: 0.03 },
-    target: { lufs: -13, peak: -1.5 },
+    target: MILESTONE,
     layers: [
-      // riser: a force field played backwards, an octave-ish down, ending on the impact
-      { src: 'scifi/forceField_001.ogg', endAt: 1.5, rate: 0.65, reverse: true, gain: -3, pan: -0.4, panTo: 0.2 },
-      { src: 'scifi/spaceEngineLow_002.ogg', at: 0, from: 0, to: 1.5, fadeIn: 1.4, fadeOut: 0.05, gain: -8 },
-      // impact
-      { src: 'scifi/lowFrequency_explosion_000.ogg', at: 1.5 },
-      { src: 'scifi/explosionCrunch_003.ogg', at: 1.5, rate: 0.6, gain: -5, filters: ['lowpass=f=3000'] },
-      { src: 'scifi/impactMetal_003.ogg', at: 1.5, rate: 0.5, gain: -2 },
-      // shimmer after the hit
-      { src: 'interface/glass_005.ogg', at: 1.55, rate: 0.5, gain: -4, pan: -0.5 },
-      { src: 'interface/glass_005.ogg', at: 1.6, rate: 1, gain: -9, pan: 0.5 },
+      layer(MECHANISMS, 0, 21.3, 22.2, { gain: 0.4 }),
+      layer('Fire_Impacts_Complex_04.mp3', 0.7, 0, undefined, { fadeOut: 0.8 }),
+      impact(0.7, 0.85, 0.7),
     ],
   },
-]
+  { cue: 'task_start', target: MILESTONE, layers: [layer(MECHANISMS, 0, 9.8, 11.3, { gain: 0.6 }), impact(1.15, 1.0, 0.9)] },
+  { cue: 'task_review', target: MILESTONE, layers: [layer(MECHANISM, 0, 0.3, 1.8), impact(0, 1.3, 0.35, 0.8)] },
+  { cue: 'task_done', target: MILESTONE, layers: [layer(MECHANISM, 0, 0.3, 1.1, { gain: 0.6 }), impact(0.65, 1.0)] },
+  { cue: 'decision_answered', target: MILESTONE, layers: [layer(MECHANISMS, 0, 13.1, 14.7, { gain: 0.6 }), impact(1.2, 1.1, 0.9)] },
+  { cue: 'agent_spawn', target: MILESTONE, layers: [layer(MECHANISMS, 0, 0, 1.6, { gain: 0.6 }), impact(1.25, 1.15, 0.8)] },
+  { cue: 'agent_complete', target: MILESTONE, layers: [layer(MECHANISMS, 0, 16.4, 17.9, { gain: 0.6 }), impact(1.1, 1.25, 0.8)] },
+  {
+    cue: 'agent_offboarded',
+    target: MILESTONE,
+    layers: [layer(MECHANISMS, 0, 3.3, 6.2, { rate: 0.75, gain: 0.6, fadeOut: 1.5 }), impact(2.6, 0.7, 0.7)],
+  },
+  // frequent
+  { cue: 'tool_start', target: FREQUENT, layers: [layer(MECHANISMS, 0, 19.7, 20.15, { fadeOut: 0.15 })] },
+  { cue: 'tool_complete', target: FREQUENT, layers: [impact(0, 1.35, 1.0, 0.5)] },
+  { cue: 'handoff', target: FREQUENT, layers: [layer(MECHANISMS, 0, 6.6, 7.2, { fadeOut: 0.2 })] },
+].map((r) => ({ ...r, file: `sfx-${r.cue}.mp3` }))
+
+export const LOOPS = [
+  // "Butuh jawaban owner": the double impact of decision_open, once every 2.2 s
+  { loop: 'owner', target: { lufs: -20, peak: -5 }, period: 2.2, crossfade: 0, layers: [impact(0, 0.75), impact(0.45, 0.75)] },
+  // waiting for permission: one mechanism gesture every 1.5 s
+  { loop: 'waiting', target: { lufs: -21, peak: -5 }, period: 1.5, crossfade: 0, layers: [layer(MECHANISMS, 0, 19.7, 20.8)] },
+  // thinking: 6 s of mecha ambience with a circuit hum under it, looped every 5 s with a 1 s equal-power crossfade
+  // (mix.py's 1.0 s / 1.5 s fades were for a one-shot preview; the crossfade takes their place at the seam)
+  {
+    loop: 'thinking',
+    target: { lufs: -28, peak: -5 },
+    period: 5,
+    crossfade: 1,
+    layers: [layer('Mecha_Sequences_Ambience_06.mp3', 0, 2, 8), layer('Circuits_Hum_06.mp3', 0, 1, 7, { gain: 0.4 })],
+  },
+  // disintegrating: a creak, then rock crumbling; one gesture every 4.9 s
+  {
+    loop: 'disintegrating',
+    target: { lufs: -26, peak: -5 },
+    period: 4.9,
+    crossfade: 0,
+    layers: [
+      layer('Plastic_Elements_Creaking_04.mp3', 0, 0, 2.6, { rate: 0.8, fadeOut: 0.6 }),
+      layer('Rocks_Elements_09.mp3', 1.2, 0, 3.7, { gain: 0.8, fadeOut: 1.0 }),
+    ],
+  },
+].map((r) => ({ ...r, file: `loop-${r.loop}.mp3` }))

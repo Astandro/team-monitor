@@ -1,0 +1,10 @@
+Free Cinematic Sound Effects, by Gregor Quendel
+https://opengameart.org/content/free-cinematic-sound-effects
+(archive: gregor_quendel_-_free_cinematic_sound_effects_-_mp3.zip)
+
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+The files in this folder are unmodified copies of the pack's MP3 files that scripts/sounds/recipes.mjs uses.
+The sounds the app plays (web/public/sounds/*.mp3) are modified: trimmed, pitch-shifted, layered, levelled
+and looped by scripts/sounds/build.mjs. Credits: web/public/sounds/LICENSES.md and the sound settings in the app.

@@ -7,6 +7,7 @@ import { useClickOutside } from "@/hooks/use-click-outside"
 import { useSoundSettings } from "@/hooks/use-sound-settings"
 import { soundButtonLabel, volumePercent } from "@/lib/sound/control-labels"
 import { DEMO_ORDER } from "@/lib/sound/demo"
+import { SOUND_CREDIT } from "@/lib/sound/samples"
 import { startSoundDemo } from "@/lib/sound/sound-client"
 
 function SpeakerIcon({ muted }: { muted: boolean }) {
@@ -168,6 +169,17 @@ export function SoundControl() {
               {demo ?? (sound.muted ? `Nyalakan suara, putar ${DEMO_ORDER.length} suara` : `${DEMO_ORDER.length} suara, satu per satu`)}
             </span>
           </div>
+          <p className="tm-sound-credit text-[11px] leading-snug" style={{ color: COLORS.textMuted, margin: 0 }}>
+            Suara:{" "}
+            <a href={SOUND_CREDIT.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.textPrimary, textDecoration: "underline" }}>
+              {SOUND_CREDIT.pack}
+            </a>{" "}
+            oleh {SOUND_CREDIT.author},{" "}
+            <a href={SOUND_CREDIT.licenceUrl} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.textPrimary, textDecoration: "underline" }}>
+              {SOUND_CREDIT.licence}
+            </a>
+            , {SOUND_CREDIT.modified}.
+          </p>
         </div>
       )}
     </div>

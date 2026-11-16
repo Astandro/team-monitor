@@ -46,12 +46,45 @@ test('lazy: no context and no download while muted or before the first tap; the 
   t.engine.unlock() // first tap
   assert.equal(t.contexts.length, 1)
   await t.engine.samplesSettled(1000)
-  assert.equal(t.fetched.length, 15)
-  assert.equal(t.contexts[0].decoded.length, 15)
+  assert.equal(t.fetched.length, 19, '15 event sounds and 4 loops')
+  assert.equal(t.contexts[0].decoded.length, 19)
   t.engine.unlock()
   t.engine.setMuted(false)
   await t.engine.samplesSettled(1000)
-  assert.equal(t.fetched.length, 15, 'loaded once')
+  assert.equal(t.fetched.length, 19, 'loaded once')
+})
+
+test('every one of the 15 events plays its own sample file once loaded (tool_start and tool_complete too)', async () => {
+  const s = setup()
+  s.engine.setMuted(false)
+  s.engine.unlock()
+  await s.engine.samplesSettled(1000)
+  const ctx = s.contexts[0]
+  const cues = ['decision_open', 'task_blocked', 'tool_error', 'stage_done', 'decision_answered', 'task_done', 'task_review',
+    'task_start', 'session_start', 'agent_complete', 'agent_offboarded', 'agent_spawn', 'handoff', 'tool_complete', 'tool_start'] as const
+  for (const cue of cues) {
+    const before = ctx.nodes.length
+    s.engine.play(cue)
+    const created = ctx.nodes.slice(before) as AnyNode[]
+    assert.equal(created.length, 1, cue)
+    assert.equal(created[0].kind, 'buffer', cue)
+    assert.equal(created[0].buffer, s.bank!.get(cue), cue)
+  }
+})
+
+test('volume: the slider value is squared into the master gain (0.5 -> 0.25), muted is 0', async () => {
+  const s = setup()
+  s.engine.setVolume(0.5)
+  s.engine.setMuted(false)
+  s.engine.unlock()
+  const ctx = s.contexts[0]
+  const master = masterInput(ctx) as AnyNode
+  assert.equal((master.gain as { value: number }).value, 0.25, 'created at value squared')
+  s.engine.setVolume(0.7)
+  const calls = (master.gain as { calls: [string, number, number][] }).calls
+  assert.ok(Math.abs(calls[calls.length - 1][1] - 0.49) < 1e-12)
+  s.engine.setMuted(true)
+  assert.equal(calls[calls.length - 1][1], 0)
 })
 
 test('a loaded cue plays its file through the master gain (volume, limiter), not the synthesiser', async () => {

@@ -1,31 +1,39 @@
-// Background sounds that last as long as a state on the graph (owner request 15 Nov 2026), faint and pulsing in
-// and out instead of playing once:
-// - waiting:        an agent waits for permission: a steady "ziiing, ziiing, ziiing" like a sci-fi mecha's steel
-//                   door sliding, the same sound at the same pace (owner request 15 Nov 2026);
-// - thinking:       an agent is thinking: a slow, very faint servo moving back and forth, now and then a soft ping;
-// - disintegrating: a finished sub-agent is wearing away before its offboard: a light crackle in episodes.
+// Background sounds that last as long as a state on the graph (owner requests 15 and 16 Nov 2026):
+// - owner:          a decision waits for the owner ("Butuh jawaban owner"): the double mecha impact every 2.2 s;
+// - waiting:        an agent waits for permission: one mecha mechanism gesture every 1.5 s;
+// - thinking:       an agent is thinking: a faint mecha ambience with a circuit hum under it;
+// - disintegrating: a finished sub-agent is wearing away before its offboard: a creak, then rock crumbling.
 //
-// ambienceFor() decides which play (pure, unit tested). AmbiencePlayer makes them with Web Audio on the master bus
-// (volume, limiter) of synth.ts. No sample files: everything is synthesised.
+// ambienceFor() decides which play (pure, unit tested). AmbiencePlayer plays them on the master bus (volume, limiter)
+// of synth.ts: each loop is a sample file (loop-<kind>.mp3, one seamless period looped, see samples.ts loopWindow)
+// once it has loaded; before that, or when it failed to load, a synthesised stand-in plays and is swapped for the
+// file as soon as it is there.
 
 import type { MasterBus } from './synth'
 
-export type AmbienceKind = 'waiting' | 'thinking' | 'disintegrating'
+export type AmbienceKind = 'owner' | 'waiting' | 'thinking' | 'disintegrating'
 
-export const AMBIENCE_KINDS: readonly AmbienceKind[] = ['waiting', 'thinking', 'disintegrating']
+export const AMBIENCE_KINDS: readonly AmbienceKind[] = ['owner', 'waiting', 'thinking', 'disintegrating']
 
 /** What ambienceFor reads of an agent (lib/agent-types Agent). */
 export interface AmbienceAgent {
+  id?: string
   state: string
   isMain: boolean
   finished?: { at: number; offboardAt: number }
 }
 
-/** The background sounds the agents call for now. */
-export function ambienceFor(agents: Iterable<AmbienceAgent>, now: number): Set<AmbienceKind> {
+const NO_OWNER: ReadonlySet<string> = new Set()
+
+/**
+ * The background sounds the agents call for now. `ownerNodes`: ids of the nodes in the "Butuh jawaban owner" state
+ * (lib/owner-decision.ts); on such a node the owner state wins, so it asks for the owner loop and nothing else.
+ */
+export function ambienceFor(agents: Iterable<AmbienceAgent>, now: number, ownerNodes: ReadonlySet<string> = NO_OWNER): Set<AmbienceKind> {
   const out = new Set<AmbienceKind>()
   for (const a of agents) {
-    if (a.state === 'waiting_permission') out.add('waiting')
+    if (a.id !== undefined && ownerNodes.has(a.id)) out.add('owner')
+    else if (a.state === 'waiting_permission') out.add('waiting')
     else if (a.state === 'thinking') out.add('thinking')
     // same rule as the canvas (draw-agents.ts): a finished sub-agent before its offboard deadline
     else if (!a.isMain && a.state === 'complete' && a.finished && now < a.finished.offboardAt) out.add('disintegrating')
@@ -38,6 +46,7 @@ export function ambienceFor(agents: Iterable<AmbienceAgent>, now: number): Set<A
  * `level`: the loop's overall gain before the master volume. Grain peaks below are relative to it.
  */
 export const AMBIENCE_SPECS: Record<AmbienceKind, { pulseHz: number; pulseDepth: number; level: number }> = {
+  owner: { pulseHz: 0.2, pulseDepth: 0, level: 1 },
   // steady, no swell to speak of: the owner wants the same ziiing every time
   waiting: { pulseHz: 0.2, pulseDepth: 0.15, level: 1 },
   thinking: { pulseHz: 0.2, pulseDepth: 0.7, level: 1 },
@@ -49,18 +58,34 @@ const FADE_TAU = 0.25
 const STOP_AFTER_S = 1.6
 /** One mecha-door ziiing every this many seconds while an agent waits for permission. */
 export const WAITING_PERIOD_S = 0.9
+/** The synthesised owner stand-in: a double thump every OWNER_PERIOD_S, the second OWNER_GAP_S after the first. */
+export const OWNER_PERIOD_S = 2.2
+const OWNER_GAP_S = 0.45
 /** The scheduler wakes this often and schedules grains this far ahead. */
 const TICK_MS = 100
 const AHEAD_S = 0.3
 
+/** A decoded loop file and the window of it to loop over (seconds, samples.ts loopWindow). */
+export interface LoopSample {
+  buffer: AudioBuffer
+  start: number
+  end: number
+}
+
+/** The loop file of a kind, or null while it is not loaded (or failed): then the synthesised stand-in plays. */
+export type LoopSamples = (kind: AmbienceKind) => LoopSample | null
 
 interface Loop {
   kind: AmbienceKind
   out: GainNode
   pulse: GainNode
   lfo: OscillatorNode
-  /** long-running sources (thinking's hum) */
+  /** reverb send of the synthesised stand-in (the sample files are dry) */
+  send: GainNode
+  /** long-running sources (the looping sample) */
   holds: AudioScheduledSourceNode[]
+  /** 'sample' once the loop file plays; 'synth' while the stand-in is scheduled grain by grain */
+  mode: 'sample' | 'synth'
   nextAt: number
   timer: ReturnType<typeof setInterval> | null
   stopping: ReturnType<typeof setTimeout> | null
@@ -70,7 +95,7 @@ export class AmbiencePlayer {
   private loops = new Map<AmbienceKind, Loop>()
   private readonly rnd: () => number
 
-  constructor(private readonly bus: MasterBus, rnd: () => number = Math.random) {
+  constructor(private readonly bus: MasterBus, rnd: () => number = Math.random, private readonly samples: LoopSamples = () => null) {
     this.rnd = rnd
   }
 
@@ -122,10 +147,36 @@ export class AmbiencePlayer {
     lfo.start(now)
     out.gain.setTargetAtTime(spec.level, now, FADE_TAU)
 
-    const loop: Loop = { kind, out, pulse, lfo, holds: [], nextAt: now + 0.05, timer: null, stopping: null }
+    const loop: Loop = { kind, out, pulse, lfo, send, holds: [], mode: 'synth', nextAt: now + 0.05, timer: null, stopping: null }
     this.loops.set(kind, loop)
+    const sample = this.samples(kind)
+    if (sample) {
+      this.useSample(loop, sample)
+      return
+    }
     this.schedule(loop)
     loop.timer = setInterval(() => this.schedule(loop), TICK_MS)
+  }
+
+  /**
+   * Swap the synthesised stand-in for the loop file once it is loaded: the file loops over its one-period window
+   * straight into the loop's fade gain (no swell, no reverb: the file is the finished sound).
+   */
+  private useSample(loop: Loop, sample: LoopSample): void {
+    const { ctx } = this.bus
+    const src = ctx.createBufferSource()
+    src.buffer = sample.buffer
+    src.loop = true
+    src.loopStart = sample.start
+    src.loopEnd = sample.end
+    src.connect(loop.out)
+    // grains already scheduled (at most AHEAD_S ahead) still sound; nothing new is scheduled
+    try { loop.out.disconnect(loop.send) } catch { /* not connected */ }
+    if (loop.timer !== null) clearInterval(loop.timer)
+    loop.timer = null
+    src.start(ctx.currentTime + 0.02, sample.start)
+    loop.holds.push(src)
+    loop.mode = 'sample'
   }
 
   private revive(loop: Loop): void {
@@ -158,9 +209,22 @@ export class AmbiencePlayer {
 
   /** Schedule the grains of one loop up to AHEAD_S ahead of the audio clock. */
   private schedule(loop: Loop): void {
+    if (loop.mode !== 'synth') return
+    const sample = this.samples(loop.kind)
+    if (sample) {
+      this.useSample(loop, sample)
+      return
+    }
     const horizon = this.bus.ctx.currentTime + AHEAD_S
     const r = this.rnd
-    if (loop.kind === 'waiting') {
+    if (loop.kind === 'owner') {
+      // stand-in for the owner loop: a low double thump at the same pace as the file
+      while (loop.nextAt < horizon) {
+        this.thump(loop.pulse, loop.nextAt)
+        this.thump(loop.pulse, loop.nextAt + OWNER_GAP_S)
+        loop.nextAt += OWNER_PERIOD_S
+      }
+    } else if (loop.kind === 'waiting') {
       // the same mecha-door "ziiing" at a fixed pace
       while (loop.nextAt < horizon) {
         this.mechaZing(loop.pulse, loop.nextAt)
@@ -230,6 +294,24 @@ export class AmbiencePlayer {
     hiss.start(t, 0, slide + 0.2)
 
     this.zhing(dest, t + slide * 0.8, 2600, 0.35, 0.007, 0)
+  }
+
+  /** A low metallic thump: a sine dropping an octave, with a short bright click on top. Fixed values. */
+  private thump(dest: AudioNode, t: number): void {
+    const { ctx } = this.bus
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(110, t)
+    osc.frequency.exponentialRampToValueAtTime(52, t + 0.25)
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(0.03, t + 0.006)
+    env.gain.setTargetAtTime(0.0001, t + 0.02, 0.08)
+    osc.connect(env)
+    env.connect(dest)
+    osc.start(t)
+    osc.stop(t + 0.6)
+    this.zhing(dest, t, 1400, 0.25, 0.006, 0)
   }
 
   /** A servo motor whine gliding from `from` to `to` Hz: buzzy saw through a band that follows it, a fast jitter. */

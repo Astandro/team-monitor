@@ -42,6 +42,12 @@ file at 1 MB, and keeps showing the last good state (with an error) if the JSON 
 
 A decision is answerable only while `approvals.<Dn>.status` is `"open"` and no `answers/<Dn>.json` exists yet.
 
+While a decision is open, the graph shows **"Butuh jawaban owner"** on the node of the agent that asked: red dashed
+ring, ripples, a warning triangle, a blinking "Butuh jawaban" tag and a background loop sound, until it is answered.
+Name the asker in the optional `approvals.<Dn>.agent` (a key of `agents`, or the name or nick written there, e.g.
+`"agent": "Leif"`); without it, or when that agent has no node on the graph, the coordinator's node shows it. The
+`ask` command does not set `agent`; add it by hand when a sub-agent asked.
+
 ### 2a. Instance names (D22/D23)
 
 - Coordinator: put `"coordinator": {"name": "Sora", "role": "Orchestrator"}` in `meta` (name required, at most 60

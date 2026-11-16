@@ -59,6 +59,11 @@ export interface TeamApproval {
   askedAt?: string
   answeredAt?: string
   order?: number
+  /**
+   * Optional: the agent that asked (a key of `agents`, or its name or nick). While the decision is open its node on
+   * the graph shows "Butuh jawaban owner"; without it the coordinator's node does (lib/owner-decision.ts).
+   */
+  agent?: string
 }
 
 export interface TeamLogRow {

@@ -1,285 +1,336 @@
 {
   "generator": "scripts/sounds/build.mjs",
-  "ffmpeg": "ffmpeg version 9.0.2",
+  "ffmpeg": "ffmpeg version 6.1.1-3ubuntu5",
   "sampleRate": 48000,
-  "bitrate": "128k",
-  "totalBytes": 408576,
+  "channels": 1,
+  "bitrate": "96k",
+  "totalBytes": 842688,
   "cues": {
-    "tool_start": {
-      "file": "sfx-tool_start.mp3",
-      "bytes": 3072,
-      "duration": 0.192,
-      "lufsMax": -48.1,
-      "truePeak": -25.4,
-      "target": {
-        "lufs": -38,
-        "peak": -24
-      },
-      "sources": [
-        "interface/tick_002.ogg"
-      ]
-    },
-    "tool_complete": {
-      "file": "sfx-tool_complete.mp3",
-      "bytes": 3456,
-      "duration": 0.216,
-      "lufsMax": -46,
-      "truePeak": -25.1,
-      "target": {
-        "lufs": -38,
-        "peak": -24
-      },
-      "sources": [
-        "interface/select_002.ogg"
-      ]
-    },
-    "handoff": {
-      "file": "sfx-handoff.mp3",
-      "bytes": 6912,
-      "duration": 0.432,
-      "lufsMax": -38.2,
-      "truePeak": -21.3,
-      "target": {
-        "lufs": -33,
-        "peak": -20
-      },
-      "sources": [
-        "scifi/computerNoise_002.ogg",
-        "interface/glitch_002.ogg"
-      ]
-    },
-    "tool_error": {
-      "file": "sfx-tool_error.mp3",
-      "bytes": 17280,
-      "duration": 1.08,
-      "lufsMax": -24.6,
-      "truePeak": -12.6,
-      "target": {
-        "lufs": -24,
-        "peak": -10
-      },
-      "sources": [
-        "interface/error_005.ogg",
-        "scifi/impactMetal_002.ogg",
-        "scifi/laserSmall_002.ogg"
-      ]
-    },
-    "agent_spawn": {
-      "file": "sfx-agent_spawn.mp3",
-      "bytes": 20736,
-      "duration": 1.296,
-      "lufsMax": -27.5,
-      "truePeak": -20,
-      "target": {
-        "lufs": -27,
-        "peak": -12
-      },
-      "sources": [
-        "scifi/forceField_000.ogg",
-        "interface/maximize_003.ogg"
-      ]
-    },
-    "agent_complete": {
-      "file": "sfx-agent_complete.mp3",
-      "bytes": 26112,
-      "duration": 1.632,
-      "lufsMax": -27.6,
-      "truePeak": -15.2,
-      "target": {
-        "lufs": -27,
-        "peak": -12
-      },
-      "sources": [
-        "interface/confirmation_002.ogg",
-        "interface/glass_003.ogg"
-      ]
-    },
-    "agent_offboarded": {
-      "file": "sfx-agent_offboarded.mp3",
-      "bytes": 32640,
-      "duration": 2.04,
-      "lufsMax": -27.3,
-      "truePeak": -17.7,
-      "target": {
-        "lufs": -27,
-        "peak": -12
-      },
-      "sources": [
-        "scifi/thrusterFire_002.ogg",
-        "interface/minimize_004.ogg"
-      ]
-    },
-    "task_start": {
-      "file": "sfx-task_start.mp3",
-      "bytes": 17280,
-      "duration": 1.08,
-      "lufsMax": -25.4,
-      "truePeak": -15.8,
-      "target": {
-        "lufs": -25,
-        "peak": -10
-      },
-      "sources": [
-        "scifi/spaceEngineLow_001.ogg",
-        "scifi/doorOpen_001.ogg",
-        "interface/open_002.ogg"
-      ]
-    },
-    "task_review": {
-      "file": "sfx-task_review.mp3",
-      "bytes": 26112,
-      "duration": 1.632,
-      "lufsMax": -26,
-      "truePeak": -13.2,
-      "target": {
-        "lufs": -26,
-        "peak": -10
-      },
-      "sources": [
-        "scifi/laserLarge_001.ogg",
-        "interface/scroll_003.ogg"
-      ]
-    },
-    "task_done": {
-      "file": "sfx-task_done.mp3",
-      "bytes": 29184,
-      "duration": 1.824,
-      "lufsMax": -24.5,
-      "truePeak": -17.9,
-      "target": {
-        "lufs": -24,
-        "peak": -8
-      },
-      "sources": [
-        "interface/confirmation_003.ogg",
-        "interface/glass_004.ogg"
-      ]
-    },
-    "task_blocked": {
-      "file": "sfx-task_blocked.mp3",
-      "bytes": 20736,
-      "duration": 1.296,
-      "lufsMax": -20.4,
-      "truePeak": -11.9,
-      "target": {
-        "lufs": -20,
-        "peak": -6
-      },
-      "sources": [
-        "interface/error_006.ogg",
-        "scifi/impactMetal_001.ogg",
-        "scifi/forceField_004.ogg"
-      ]
-    },
-    "decision_answered": {
-      "file": "sfx-decision_answered.mp3",
-      "bytes": 29184,
-      "duration": 1.824,
-      "lufsMax": -21.4,
-      "truePeak": -10.9,
-      "target": {
-        "lufs": -21,
-        "peak": -6
-      },
-      "sources": [
-        "scifi/laserLarge_002.ogg",
-        "interface/confirmation_004.ogg",
-        "interface/glass_006.ogg"
-      ]
-    },
     "decision_open": {
       "file": "sfx-decision_open.mp3",
-      "bytes": 42240,
-      "duration": 2.64,
-      "lufsMax": -16.4,
-      "truePeak": -8.8,
-      "target": {
-        "lufs": -16,
-        "peak": -3
-      },
-      "sources": [
-        "interface/question_002.ogg",
-        "scifi/forceField_003.ogg",
-        "scifi/lowFrequency_explosion_001.ogg"
-      ]
-    },
-    "session_start": {
-      "file": "sfx-session_start.mp3",
-      "bytes": 61440,
-      "duration": 3.84,
-      "lufsMax": -14.7,
-      "truePeak": -2.9,
+      "bytes": 40320,
+      "duration": 3.331,
+      "lufsMax": -14.2,
+      "truePeak": -3.1,
+      "measuredOn": "momentary",
       "target": {
         "lufs": -14,
         "peak": -1.5
       },
       "sources": [
-        "scifi/spaceEngineLarge_002.ogg",
-        "scifi/thrusterFire_003.ogg",
-        "scifi/forceField_002.ogg",
-        "scifi/laserLarge_000.ogg",
-        "scifi/lowFrequency_explosion_000.ogg"
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3",
+        "gregor-quendel/Circuits_Ambience_Burst_01.mp3",
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3"
+      ]
+    },
+    "task_blocked": {
+      "file": "sfx-task_blocked.mp3",
+      "bytes": 48384,
+      "duration": 3.987,
+      "lufsMax": -14,
+      "truePeak": -3.4,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -14,
+        "peak": -1.5
+      },
+      "sources": [
+        "gregor-quendel/Sci-Fi_Circuits_Error_RobotSpeech.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "tool_error": {
+      "file": "sfx-tool_error.mp3",
+      "bytes": 33408,
+      "duration": 2.751,
+      "lufsMax": -14.1,
+      "truePeak": -3.4,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -14,
+        "peak": -1.5
+      },
+      "sources": [
+        "gregor-quendel/Sci-Fi_Tuner_Chaoswhip_02.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "session_start": {
+      "file": "sfx-session_start.mp3",
+      "bytes": 55584,
+      "duration": 4.601,
+      "lufsMax": -18,
+      "truePeak": -4.8,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Fire_Swooshes_Burst_Evolving_19.mp3",
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
       ]
     },
     "stage_done": {
       "file": "sfx-stage_done.mp3",
-      "bytes": 72192,
-      "duration": 4.512,
-      "lufsMax": -13.5,
-      "truePeak": -3,
+      "bytes": 46944,
+      "duration": 3.869,
+      "lufsMax": -18,
+      "truePeak": -6.4,
+      "measuredOn": "momentary",
       "target": {
-        "lufs": -13,
-        "peak": -1.5
+        "lufs": -18,
+        "peak": -3
       },
       "sources": [
-        "scifi/forceField_001.ogg",
-        "scifi/spaceEngineLow_002.ogg",
-        "scifi/lowFrequency_explosion_000.ogg",
-        "scifi/explosionCrunch_003.ogg",
-        "scifi/impactMetal_003.ogg",
-        "interface/glass_005.ogg"
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Fire_Impacts_Complex_04.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "task_start": {
+      "file": "sfx-task_start.mp3",
+      "bytes": 40032,
+      "duration": 3.311,
+      "lufsMax": -18,
+      "truePeak": -4.9,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "task_review": {
+      "file": "sfx-task_review.mp3",
+      "bytes": 18432,
+      "duration": 1.5,
+      "lufsMax": -18,
+      "truePeak": -5.1,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Elements_Mechanism_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "task_done": {
+      "file": "sfx-task_done.mp3",
+      "bytes": 34272,
+      "duration": 2.811,
+      "lufsMax": -18.2,
+      "truePeak": -5.5,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Elements_Mechanism_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "decision_answered": {
+      "file": "sfx-decision_answered.mp3",
+      "bytes": 38304,
+      "duration": 3.164,
+      "lufsMax": -18.1,
+      "truePeak": -5,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "agent_spawn": {
+      "file": "sfx-agent_spawn.mp3",
+      "bytes": 38016,
+      "duration": 3.129,
+      "lufsMax": -18,
+      "truePeak": -4.6,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "agent_complete": {
+      "file": "sfx-agent_complete.mp3",
+      "bytes": 34272,
+      "duration": 2.829,
+      "lufsMax": -18,
+      "truePeak": -5.5,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "agent_offboarded": {
+      "file": "sfx-agent_offboarded.mp3",
+      "bytes": 68544,
+      "duration": 5.687,
+      "lufsMax": -18,
+      "truePeak": -5.9,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -18,
+        "peak": -3
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3",
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "tool_start": {
+      "file": "sfx-tool_start.mp3",
+      "bytes": 5760,
+      "duration": 0.45,
+      "lufsMax": -20,
+      "truePeak": -5.1,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -20,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3"
+      ]
+    },
+    "tool_complete": {
+      "file": "sfx-tool_complete.mp3",
+      "bytes": 4896,
+      "duration": 0.37,
+      "lufsMax": -20.1,
+      "truePeak": -6.5,
+      "measuredOn": "whole",
+      "target": {
+        "lufs": -20,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ]
+    },
+    "handoff": {
+      "file": "sfx-handoff.mp3",
+      "bytes": 7488,
+      "duration": 0.6,
+      "lufsMax": -20.2,
+      "truePeak": -5.1,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -20,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3"
       ]
     }
   },
+  "loops": {
+    "owner": {
+      "file": "loop-owner.mp3",
+      "bytes": 53280,
+      "duration": 4.4,
+      "lufsMax": -19.9,
+      "truePeak": -7.4,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -20,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Elements_Impact_01.mp3"
+      ],
+      "period": 2.2,
+      "crossfade": 0
+    },
+    "waiting": {
+      "file": "loop-waiting.mp3",
+      "bytes": 36288,
+      "duration": 3,
+      "lufsMax": -20.9,
+      "truePeak": -5.5,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -21,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3"
+      ],
+      "period": 1.5,
+      "crossfade": 0
+    },
+    "thinking": {
+      "file": "loop-thinking.mp3",
+      "bytes": 120384,
+      "duration": 10,
+      "lufsMax": -28,
+      "truePeak": -16.1,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -28,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Mecha_Sequences_Ambience_06.mp3",
+        "gregor-quendel/Circuits_Hum_06.mp3"
+      ],
+      "period": 5,
+      "crossfade": 1
+    },
+    "disintegrating": {
+      "file": "loop-disintegrating.mp3",
+      "bytes": 118080,
+      "duration": 9.8,
+      "lufsMax": -26,
+      "truePeak": -7.4,
+      "measuredOn": "momentary",
+      "target": {
+        "lufs": -26,
+        "peak": -5
+      },
+      "sources": [
+        "gregor-quendel/Plastic_Elements_Creaking_04.mp3",
+        "gregor-quendel/Rocks_Elements_09.mp3"
+      ],
+      "period": 4.9,
+      "crossfade": 0
+    }
+  },
   "sources": {
-    "interface/tick_002.ogg": "869442f54214be902ec7437f79e400dc91c1bfd90d18a6dd2d5b7e41ffbf457b",
-    "interface/select_002.ogg": "4cc6ac5341b9b2c86fef80c347de028e9ab9f2e037586ac7d9fa59a403a1c012",
-    "scifi/computerNoise_002.ogg": "6ae9bb261c6536d1699972da0cdbf6e0762cf7e9b925adb64a06ff375255cb71",
-    "interface/glitch_002.ogg": "1da06a2e63ce131f5e0316ca27c75fc0d672db7a8f9b986c70693f2bd992eabc",
-    "interface/error_005.ogg": "3f75b11df5b06d68d2c25fbf0e9c9d9e7dd9250562a4007ee34856b8a309a2ae",
-    "scifi/impactMetal_002.ogg": "0c1bb4db8a4d48b2b8c2e65a175d9056b845f1063837599995d81be1c5957d2c",
-    "scifi/laserSmall_002.ogg": "e70139466c3e801358c9041ee17db7ff82c0e9a9cdf44647ad0ea6b9f8458f63",
-    "scifi/forceField_000.ogg": "c2916f2a062c8ddd1aca2826d134fe90847037db31342726ffb0f9097afe339c",
-    "interface/maximize_003.ogg": "df16f25d45189f5d44d6a482ab20d5067350ca8525a9affa1f8ce599e31a20a5",
-    "interface/confirmation_002.ogg": "33b17a9a9a2397c62b285c52c33a907fdffb476909c99e42dde603f6a7a8b12c",
-    "interface/glass_003.ogg": "9a6f16e3c2eff6fe5d017a4755a28306b14555728831cd00d70308e8f9689566",
-    "scifi/thrusterFire_002.ogg": "5f7731c30196d73777d62eec7cb36a28bf63852e70244057b7625b888e71a3a8",
-    "interface/minimize_004.ogg": "fcfe6fbb03a728e90b907f34d2ec7bf3ea1857397c3e47ee01990c1be059e4f6",
-    "scifi/spaceEngineLow_001.ogg": "307dfd8fbfe7e6f2d59dec4de445cf02bd4fff86005803096b8c95e333836a70",
-    "scifi/doorOpen_001.ogg": "8c204ca94eb722d3af95f29221f4551938ca3c217fda32c14dabe2cf6a9c782b",
-    "interface/open_002.ogg": "24ff224fe2c09c6aed1b41249825382dc74cf324b887ff279d8494912ce2beee",
-    "scifi/laserLarge_001.ogg": "e678aca631495b7dfef4ac625f0349875ccac81a60f538d530e072241af3e4bd",
-    "interface/scroll_003.ogg": "c2fecaa6e37c73d7141d0bd303d1c2231428d97c19ce83d50236a56804818643",
-    "interface/confirmation_003.ogg": "3091bf0be0497f825769ee0733ca7bdc3bcd59bd6c6e8f2ba8f93d580ff38022",
-    "interface/glass_004.ogg": "2379b58f953e3d86982aa8cddcae763022c6258e9820171bf905ce58b4e97766",
-    "interface/error_006.ogg": "a97513d7fd2b12b1210c423be943b4c1ab0e899b11db95855e9b74836e646ae0",
-    "scifi/impactMetal_001.ogg": "4a2b76f20052819c6ace57cc5ba55ec58deffcf74e3ed30694d619c582cc8e8e",
-    "scifi/forceField_004.ogg": "05609bb296cbc287ae95ac8924c89809d69c89d7bb357cc6a117ec1b1ef65e09",
-    "scifi/laserLarge_002.ogg": "e5e0b6ccc4d5720c8174a3e5b7cc6f9be3057352a89cbb2e99a00efc6fe5cc11",
-    "interface/confirmation_004.ogg": "568967a3d9f8a8f6af54ea01729c4882284308f2a27d78c07ffd7ee0d6951661",
-    "interface/glass_006.ogg": "840500be48078f1210f1fd7a9ac4e5665ed9b6f4a2b8dce91a237152a65e94cc",
-    "interface/question_002.ogg": "46056f10c70dda860e93bd27b66f4d33c0b7154eff28def06471b50028efa5b3",
-    "scifi/forceField_003.ogg": "15e3fe971ffd3415e5ab641d3a4d043fb31f6712b0956315b524ba29c3889cda",
-    "scifi/lowFrequency_explosion_001.ogg": "cdda50600a4928f2f1b8371224d53c171ac799c1cf2c30b11999508985250b3b",
-    "scifi/spaceEngineLarge_002.ogg": "dc1a5c00a93d24bd5fd1d3cfca70483054e7c025b40d255980309544428084de",
-    "scifi/thrusterFire_003.ogg": "04f558ca5abf30788e49ed4370289dfd7e38c7f054d2ea35c2a013210374f1e5",
-    "scifi/forceField_002.ogg": "051b0eafc479695af4ca3607d41fd4be41bae7c21f4f9508d004722b09f1bd63",
-    "scifi/laserLarge_000.ogg": "a56d95794cd732d6c2d66ce488c14cf557fe526c282897c9a77675c2bd9b77e6",
-    "scifi/lowFrequency_explosion_000.ogg": "3cb48d86dab63140cfb9aaeea4d4a6846abaca5831d157d8adbec0490da26343",
-    "scifi/forceField_001.ogg": "5574e69dd04e5f59322c5ddffde5978f077b09170ae5e29cec0bd9901828cd90",
-    "scifi/spaceEngineLow_002.ogg": "3b1adf8645a40c35fcad25eee224c82c9836dc443102a9af5586eb22cbedabcc",
-    "scifi/explosionCrunch_003.ogg": "8c7197bb3a1c504690319c3abe0e62a5423ee246dd70caab57963d0b7aa8144f",
-    "scifi/impactMetal_003.ogg": "ef29c3943ee701616f65e3d596c13eb3ff6b11ca5b3ac01e7bc923366a5c6f76",
-    "interface/glass_005.ogg": "1f6c88008d0d9fe449197512811785e1d4638daf408a96a4a02756530e019172"
+    "gregor-quendel/Circuits_Ambience_Burst_01.mp3": "15de8a42d589b29ebafc54a91538a872efc961916cb85f7cd74dfb22fb80e32d",
+    "gregor-quendel/Circuits_Hum_06.mp3": "5fe3fe2336fa6839f8e19ae716b833cc3196082f2f12c3b537bd785605e03558",
+    "gregor-quendel/Fire_Impacts_Complex_04.mp3": "f25ccddd2a40909b6c82faa627c7458b16d912f10db7ce78e6aab8d0dd5e3743",
+    "gregor-quendel/Fire_Swooshes_Burst_Evolving_19.mp3": "72506535de7691d8be993101f7ba4fecae7bea548e5f384598d310fa46e16825",
+    "gregor-quendel/Mecha_Elements_Impact_01.mp3": "50720807917d78b370c99ea3921f71762957b42c986b8373c0b26fa14ab86776",
+    "gregor-quendel/Mecha_Elements_Mechanism_01.mp3": "f30fc691f513096b48aa9015bc8e9f6435d4740240d7e97db44d2cbe29983d0d",
+    "gregor-quendel/Mecha_Sequences_Ambience_06.mp3": "c60d7d79cadde2e7b7943065c3e3b626032eefa2bc5e54e90fa27b85b20aae09",
+    "gregor-quendel/Mecha_Sequences_Mechanisms_01.mp3": "4c36252bc19f660de2a4f3ede3ad38e5ce908c39c7566dad22c74e09ad5aa7de",
+    "gregor-quendel/Plastic_Elements_Creaking_04.mp3": "474a9c2f0891538b2a4a1e0b248314afcab7f402c7b382d53de60f2f345d1845",
+    "gregor-quendel/Rocks_Elements_09.mp3": "6e3a08aa3816061b4371e061de8e307822ce9e10a6a368df3f6de8eeacbf1d36",
+    "gregor-quendel/Sci-Fi_Circuits_Error_RobotSpeech.mp3": "90cd12b48a9a48bf916ed49a7beae4abf824677cf88a6caf8b5557b9b275e475",
+    "gregor-quendel/Sci-Fi_Tuner_Chaoswhip_02.mp3": "2ddf4cf59df575f8698590136e08be1cfa4fcad6a10289a0d070d270abad11f0"
   }
 }

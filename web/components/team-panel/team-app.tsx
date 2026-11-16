@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChatSection, type ChatSectionHandle } from './chat-section'
 import { AgentVisualizer } from '@/components/agent-visualizer'
 import { applyGraphTheme } from '@/lib/colors'
@@ -32,6 +32,7 @@ import {
 } from '@/lib/team/chat-unread'
 import { isPanelToggleKey, PANEL_HIDDEN_KEY, parsePanelHidden, storePanelHidden } from '@/lib/team/sections'
 import { nextThemePref, parseThemePref, resolveTheme, type ThemePref } from '@/lib/team/session'
+import { openOwnerAsks } from '@/lib/owner-decision'
 import { readStored, writeStored } from './storage'
 import { TeamPanel } from './team-panel'
 import { useTeamModel } from './use-team-model'
@@ -146,6 +147,8 @@ function useDesktop(): boolean {
 export function TeamApp() {
   const model = useTeamModel()
   useTeamSounds(model.selectedId, model.state, model.chat)
+  // open owner decisions put the asking agent's node on the graph in the "Butuh jawaban owner" state
+  const ownerAsks = useMemo(() => openOwnerAsks(model.state), [model.state])
   const systemDark = useSystemDark()
   const [theme, setTheme] = useState<ThemePref>(() => parseThemePref(readStored('tm-theme')))
   const [pane, setPane] = useState<Pane>('tim')
@@ -292,7 +295,7 @@ export function TeamApp() {
           <TeamPanel model={model} theme={theme} onCycleTheme={cycleTheme} onHide={() => togglePanel(true)} />
         </main>
         <section className="tm-pane tm-pane-graph" id="tm-panel-grafik" data-active={pane === 'grafik'} aria-label="Grafik">
-          <AgentVisualizer projectId={model.selectedId} active={graphOnScreen} />
+          <AgentVisualizer projectId={model.selectedId} active={graphOnScreen} ownerAsks={ownerAsks} />
           {/* Desktop with the panel hidden: a slim tab on the left edge brings it back; it carries the open-decision
               count so a waiting decision is not missed while the panel is away. */}
           {panelHidden && (

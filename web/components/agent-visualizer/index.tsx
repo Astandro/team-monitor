@@ -34,14 +34,19 @@ import { agentIdentity, identityLine, parseCoordinator } from "@/lib/agent-ident
 import { canOffboard, finishedSubAgents, offboardAgent, offboardAllFinished, type OffboardResult } from "@/lib/team/offboard"
 import type { PostFetch } from "@/lib/team/post"
 import { setCanvasCoordinator } from "./canvas/identity"
+import { setCanvasOwnerNodes } from "./canvas/owner-state"
+import { ownerAsksKey, ownerNodeIds, type OwnerAsk } from "@/lib/owner-decision"
 
 const postFetch: PostFetch = (url, init) => fetch(url, init)
+const NO_ASKS: readonly OwnerAsk[] = []
 
-export function AgentVisualizer({ projectId = null, active = true }: {
+export function AgentVisualizer({ projectId = null, active = true, ownerAsks = NO_ASKS }: {
   /** Team project chosen in the panel's switcher: only its sessions are shown (sessions without a project stay). */
   projectId?: string | null
   /** The graph is on screen (false behind the phone's Tim tab): the canvas stops drawing while it is not. */
   active?: boolean
+  /** Open owner decisions of the project's state.json (lib/owner-decision.ts openOwnerAsks). */
+  ownerAsks?: readonly OwnerAsk[]
 } = {}) {
   const bridge = useVSCodeBridge()
   // Re-render the chrome (inline styles read COLORS) when the page theme switches
@@ -105,11 +110,28 @@ export function AgentVisualizer({ projectId = null, active = true }: {
   }, [])
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
+  // The selected session's coordinator names the main node (prefer the session's over the spawn payload)
+  const coordinator = useMemo(
+    () => parseCoordinator(bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.coordinator),
+    [bridge.sessions, bridge.selectedSessionId],
+  )
+  useLayoutEffect(() => setCanvasCoordinator(coordinator), [coordinator])
+
+  // "Butuh jawaban owner": the asking agent's node (else the coordinator's) while a decision is open
+  const asksKey = ownerAsksKey(ownerAsks)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the asks' content, not the array identity
+  const asks = useMemo(() => ownerAsks, [asksKey])
+  const ownerNodes = useMemo(() => ownerNodeIds(agents.values(), asks, coordinator), [agents, asks, coordinator])
+  useLayoutEffect(() => setCanvasOwnerNodes(ownerNodes), [ownerNodes])
+  useEffect(() => () => setCanvasOwnerNodes(new Set()), [])
+
   const [isReviewing, setIsReviewing] = useState(false)
   const { seekingRef, handleToggleMute } = useAudioEffects({
     agents, toolCalls, particles, isReviewing,
     sessionKey: bridge.selectedSessionId,
     sessions: bridge.sessions,
+    ownerNodes,
+    ownerOpen: asks.length > 0,
   })
 
   // Auto-play on mount
@@ -172,13 +194,6 @@ export function AgentVisualizer({ projectId = null, active = true }: {
     bridge.flushSessionEvents(sid)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
   }, [offboardRevision])
-
-  // The selected session's coordinator names the main node (prefer the session's over the spawn payload)
-  const coordinator = useMemo(
-    () => parseCoordinator(bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.coordinator),
-    [bridge.sessions, bridge.selectedSessionId],
-  )
-  useLayoutEffect(() => setCanvasCoordinator(coordinator), [coordinator])
 
   // Offboarding works in the standalone app (it has the endpoints), on live data, with a session shown
   const offboardSession = !bridge.isVSCode && !bridge.useMockData ? bridge.selectedSessionId : null

@@ -20,9 +20,10 @@ export class FakeNode {
 
 export class FakeSource extends FakeNode {
   startAt: number | null = null
+  startOffset: number | null = null
   stopAt: number | null = null
   onended: (() => void) | null = null
-  start(t: number) { this.startAt = t }
+  start(t: number, offset?: number) { this.startAt = t; this.startOffset = offset ?? null }
   stop(t: number) { this.stopAt = t }
 }
 
@@ -38,7 +39,7 @@ export class FakeCtx {
   createOscillator() {
     return Object.assign(new FakeSource('oscillator', this), { type: 'sine', frequency: new FakeParam(), detune: new FakeParam() })
   }
-  createBufferSource() { return Object.assign(new FakeSource('buffer', this), { buffer: null, loop: false }) }
+  createBufferSource() { return Object.assign(new FakeSource('buffer', this), { buffer: null, loop: false, loopStart: 0, loopEnd: 0 }) }
   createBiquadFilter() {
     return Object.assign(new FakeNode('filter', this), { type: 'lowpass', frequency: new FakeParam(), Q: new FakeParam() })
   }

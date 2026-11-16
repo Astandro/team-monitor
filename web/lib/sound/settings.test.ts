@@ -7,6 +7,7 @@ import {
   SoundSettingsStore,
   parseMuted,
   parseVolume,
+  volumeGain,
   type StorageLike,
 } from './settings'
 
@@ -45,6 +46,26 @@ test('volume parses, clamps and falls back to the default', () => {
   assert.equal(parseVolume('0'), 0)
   assert.equal(parseVolume('7'), 1)
   assert.equal(parseVolume('-1'), 0)
+})
+
+test('a fresh profile starts at volume 0.7; a stored volume is kept as it is', () => {
+  assert.equal(DEFAULT_VOLUME, 0.7)
+  const fresh = new SoundSettingsStore(() => memoryStorage())
+  assert.equal(fresh.get().volume, 0.7)
+  const stored = memoryStorage({ [SOUND_VOLUME_KEY]: '0.5' })
+  const store = new SoundSettingsStore(() => stored)
+  assert.equal(store.get().volume, 0.5)
+  assert.equal(stored.data[SOUND_VOLUME_KEY], '0.5', 'not rewritten')
+  assert.equal(new SoundSettingsStore(() => memoryStorage({ [SOUND_VOLUME_KEY]: '1' })).get().volume, 1)
+})
+
+test('slider gain is the value squared: 0.5 gives 0.25, 0.7 about 0.49, ends at 0 and 1', () => {
+  assert.equal(volumeGain(0.5), 0.25)
+  assert.ok(Math.abs(volumeGain(0.7) - 0.49) < 1e-12)
+  assert.equal(volumeGain(0), 0)
+  assert.equal(volumeGain(1), 1)
+  assert.equal(volumeGain(2), 1, 'clamped')
+  assert.equal(volumeGain(Number.NaN), DEFAULT_VOLUME * DEFAULT_VOLUME)
 })
 
 test('a fresh page is muted and tells the engine so', () => {

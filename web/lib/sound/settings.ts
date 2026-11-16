@@ -6,7 +6,17 @@ import { SOUND_PREF_KEY } from '../canvas-constants'
 /** Kept from upstream so a choice made before this change survives: 'on' means sound on. */
 export const SOUND_MUTE_KEY = SOUND_PREF_KEY
 export const SOUND_VOLUME_KEY = `${SOUND_PREF_KEY}-volume`
-export const DEFAULT_VOLUME = 0.5
+/** Volume of a fresh profile (spec 0.9.7); a volume stored before is kept as it is. */
+export const DEFAULT_VOLUME = 0.7
+
+/**
+ * The gain a slider value gives: value squared, so the slider follows loudness more evenly than a linear gain
+ * (0.5 -> 0.25, about -12 dB; 0.7 -> 0.49, about -6 dB).
+ */
+export function volumeGain(volume: number): number {
+  const v = clampVolume(volume)
+  return v * v
+}
 
 export interface SoundSettings {
   muted: boolean

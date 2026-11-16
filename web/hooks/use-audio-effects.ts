@@ -20,10 +20,16 @@ interface AudioEffectsInput {
   /** selected session: a switch replays that session's history, which stays quiet */
   sessionKey: string | null
   sessions: SessionInfo[]
+  /** Nodes in the "Butuh jawaban owner" state (lib/owner-decision.ts): they ask for the owner loop, not waiting. */
+  ownerNodes?: ReadonlySet<string>
+  /** A decision is open: the owner loop plays as long as it is, also when no node on the graph shows it. */
+  ownerOpen?: boolean
 }
 
+const NO_NODES: ReadonlySet<string> = new Set()
+
 /** Graph events to sounds. Mute and volume are the page-wide settings (useSoundSettings). */
-export function useAudioEffects({ agents, toolCalls, particles, isReviewing, sessionKey, sessions }: AudioEffectsInput) {
+export function useAudioEffects({ agents, toolCalls, particles, isReviewing, sessionKey, sessions, ownerNodes = NO_NODES, ownerOpen = false }: AudioEffectsInput) {
   const sound = useSoundSettings()
   const seekingRef = useRef(false)
   const gateRef = useRef<SoundGate | null>(null)
@@ -83,21 +89,27 @@ export function useAudioEffects({ agents, toolCalls, particles, isReviewing, ses
     if (cues.length > 0) playCues(gateRef.current!.admit(cues, performance.now()))
   }, [agents, toolCalls, particles, isReviewing])
 
-  // Background loops while a state lasts (waiting for permission, thinking, disintegrating). Live mode only. Checked
-  // on every graph change and every few seconds (a disintegration ends by the clock, not by a graph change).
+  // Background loops while a state lasts (owner decision open, waiting for permission, thinking, disintegrating).
+  // Live mode only. Checked on every graph or decision change and every few seconds (a disintegration ends by the
+  // clock, not by a graph change).
   const agentsRef = useRef(agents)
   agentsRef.current = agents
   const reviewingRef = useRef(isReviewing)
   reviewingRef.current = isReviewing
+  const ownerRef = useRef({ nodes: ownerNodes, open: ownerOpen })
+  ownerRef.current = { nodes: ownerNodes, open: ownerOpen }
   useEffect(() => {
     const update = () => {
       const off = seekingRef.current || reviewingRef.current
-      setAmbience(off ? [] : ambienceFor(agentsRef.current.values(), Date.now()))
+      const { nodes, open } = ownerRef.current
+      const kinds = ambienceFor(agentsRef.current.values(), Date.now(), nodes)
+      if (open) kinds.add('owner')
+      setAmbience(off ? [] : kinds)
     }
     update()
     const id = window.setInterval(update, AMBIENCE_RECHECK_MS)
     return () => window.clearInterval(id)
-  }, [agents, isReviewing])
+  }, [agents, isReviewing, ownerNodes, ownerOpen])
   useEffect(() => () => setAmbience([]), [])
 
   return { isMuted: sound.muted, seekingRef, handleToggleMute: sound.toggle }

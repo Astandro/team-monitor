@@ -3,13 +3,82 @@ import { strict as assert } from 'node:assert'
 import { detectStateChanges } from '../../components/agent-visualizer/canvas/detect-state-changes'
 import type { Agent, ToolCallNode } from '../agent-types'
 import { AudioEngine } from '../audio-engine'
-import { AmbiencePlayer, ambienceFor, WAITING_PERIOD_S, type AmbienceAgent } from './ambience'
+import { AmbiencePlayer, ambienceFor, OWNER_PERIOD_S, WAITING_PERIOD_S, type AmbienceAgent, type AmbienceKind, type LoopSample } from './ambience'
 import { FakeCtx, type AnyNode } from './fake-audio'
 import { SampleBank, type FetchBytes } from './sample-bank'
-import { sampleUrls, SYNTH_ONLY_CUES } from './samples'
+import { loopKey, loopWindow, sampleUrls } from './samples'
 import { createMasterBus } from './synth'
 
 const NOW = 1_000_000
+
+test('ambienceFor: a node in the owner state asks for the owner loop, and the owner state wins over waiting', () => {
+  const a = (id: string, state: string, isMain = false): AmbienceAgent => ({ id, state, isMain })
+  const owner = new Set(['m'])
+  assert.deepEqual([...ambienceFor([a('m', 'waiting_permission', true)], NOW, owner)], ['owner'])
+  assert.deepEqual([...ambienceFor([a('m', 'idle', true)], NOW, owner)], ['owner'])
+  // another node still waits for permission: both loops
+  assert.deepEqual([...ambienceFor([a('m', 'idle', true), a('s', 'waiting_permission')], NOW, owner)].sort(), ['owner', 'waiting'])
+  // decision answered: no owner nodes, the waiting comes back
+  assert.deepEqual([...ambienceFor([a('m', 'waiting_permission', true)], NOW, new Set())], ['waiting'])
+})
+
+/** A loop sample getter for the player: `ready` lists the kinds whose file is loaded. */
+function loopFiles(ctx: FakeCtx, ready: Set<AmbienceKind>) {
+  const buffers = new Map<AmbienceKind, AudioBuffer>()
+  return (kind: AmbienceKind): LoopSample | null => {
+    if (!ready.has(kind)) return null
+    if (!buffers.has(kind)) buffers.set(kind, ctx.createBuffer(1, 8000, 8000) as unknown as AudioBuffer)
+    return { buffer: buffers.get(kind)!, ...loopWindow(kind) }
+  }
+}
+
+test('AmbiencePlayer: a loaded loop file loops over its one-period window, starts and stops with its state', () => {
+  const ctx = new FakeCtx()
+  const bus = createMasterBus(ctx as unknown as BaseAudioContext, 0.5)
+  const player = new AmbiencePlayer(bus, () => 0.5, loopFiles(ctx, new Set(['owner', 'waiting', 'thinking', 'disintegrating'])))
+  try {
+    player.set(['owner'])
+    const srcs = ctx.nodes.filter((n) => n.kind === 'buffer') as AnyNode[]
+    assert.equal(srcs.length, 1)
+    const src = srcs[0]
+    assert.equal(src.loop, true)
+    assert.equal(src.loopStart, loopWindow('owner').start)
+    assert.equal(src.loopEnd, loopWindow('owner').end)
+    assert.ok(Math.abs((src.loopEnd as number) - (src.loopStart as number) - 2.2) < 1e-9, 'one 2.2 s turn')
+    assert.equal(src.startOffset, loopWindow('owner').start, 'starts inside the window')
+    assert.equal(ctx.nodes.filter((n) => n.kind === 'oscillator' && (n as AnyNode).type === 'sawtooth').length, 0, 'no synth stand-in')
+    assert.deepEqual(player.active(), ['owner'])
+    player.set([])
+    assert.deepEqual(player.active(), [], 'fading out')
+  } finally {
+    player.dispose()
+  }
+  const src = ctx.nodes.find((n) => n.kind === 'buffer') as AnyNode
+  assert.notEqual(src.stopAt, null, 'the loop source is stopped on teardown')
+})
+
+test('AmbiencePlayer: before its file loads a loop plays the synthesised stand-in, then swaps to the file', async () => {
+  const ctx = new FakeCtx()
+  const bus = createMasterBus(ctx as unknown as BaseAudioContext, 0.5)
+  const ready = new Set<AmbienceKind>()
+  const player = new AmbiencePlayer(bus, () => 0.5, loopFiles(ctx, ready))
+  try {
+    player.set(['owner'])
+    const thumps = (ctx.nodes.filter((n) => n.kind === 'oscillator') as AnyNode[]).filter((o) => o.type === 'sine' && o.startAt !== null)
+    assert.ok(thumps.length >= 2, 'the stand-in double thump')
+    assert.equal(ctx.nodes.filter((n) => n.kind === 'buffer' && (n as AnyNode).loop).length, 0)
+    ready.add('owner')
+    await new Promise((r) => setTimeout(r, 250)) // a scheduler tick
+    const looping = ctx.nodes.filter((n) => n.kind === 'buffer' && (n as AnyNode).loop) as AnyNode[]
+    assert.equal(looping.length, 1, 'swapped to the file')
+    const before = ctx.nodes.length
+    await new Promise((r) => setTimeout(r, 250))
+    assert.equal(ctx.nodes.length, before, 'no more synth grains after the swap')
+  } finally {
+    player.dispose()
+  }
+  assert.ok(OWNER_PERIOD_S === 2.2)
+})
 
 test('ambienceFor: waiting for permission, thinking, and a finished sub-agent before its offboard deadline', () => {
   const a = (state: string, extra: Partial<AmbienceAgent> = {}): AmbienceAgent => ({ state, isMain: false, ...extra })
@@ -69,7 +138,7 @@ function engineSetup() {
       return c as unknown as AudioContext
     },
   })
-  return { engine, contexts }
+  return { engine, contexts, bank }
 }
 
 test('engine: background loops play only with sound on after a tap; muting stops them; the wish is kept', () => {
@@ -92,21 +161,25 @@ test('engine: background loops play only with sound on after a tap; muting stops
   }
 })
 
-test('engine: the tool meteors are synthesised even when their sample files loaded', async () => {
-  const { engine, contexts } = engineSetup()
+test('engine: each of the four loops plays its loaded file while its state lasts, and stops with it', async () => {
+  const { engine, contexts, bank } = engineSetup()
   try {
     engine.setMuted(false)
     engine.unlock()
     await engine.samplesSettled(1000)
     const ctx = contexts[0]
-    for (const cue of SYNTH_ONLY_CUES) {
+    for (const kind of ['owner', 'waiting', 'thinking', 'disintegrating'] as const) {
       const before = ctx.nodes.length
-      engine.play(cue)
-      const created = ctx.nodes.slice(before)
-      assert.ok(created.length > 1, `${cue} builds synth voices`)
-      assert.ok(created.some((n) => n.kind === 'oscillator' || n.kind === 'buffer'))
+      engine.setAmbience([kind])
+      assert.deepEqual(engine.ambienceActive(), [kind])
+      const src = (ctx.nodes.slice(before) as AnyNode[]).find((n) => n.kind === 'buffer' && n.loop)
+      assert.ok(src, `${kind} loops a file`)
+      assert.equal(src.buffer, bank.get(loopKey(kind)), kind)
+      assert.equal(src.loopStart, loopWindow(kind).start)
+      assert.equal(src.loopEnd, loopWindow(kind).end)
+      engine.setAmbience([])
+      assert.deepEqual(engine.ambienceActive(), [], `${kind} stops with its state`)
     }
-    assert.deepEqual([...SYNTH_ONLY_CUES].sort(), ['tool_complete', 'tool_start'])
   } finally {
     engine.dispose()
   }

@@ -1,62 +1,66 @@
-# Sound set v3: sources and licences
+# Sound set v4 ("mecha"): sources and licence
 
-The `sfx-*.mp3` files in this folder are our own mixes, built by `scripts/sounds/build.mjs` from the recipe list
-`scripts/sounds/recipes.mjs`. The mixes trim, layer, pitch-shift, filter, pan and add reverb to samples from the two
-packs below. Both packs are **CC0 1.0 Universal (public domain dedication)**: free for personal, educational and
-commercial use, and attribution is not required. We credit Kenney anyway.
+The `sfx-*.mp3` (event sounds) and `loop-*.mp3` (background loops) files in this folder are our own mixes, built by
+`scripts/sounds/build.mjs` from the recipe list `scripts/sounds/recipes.mjs`. They are **modified** versions of
+samples from the pack below: trimmed, pitch-shifted, layered, levelled and, for the loops, folded into seamless loops.
 
-Each licence was checked in two places: on the pack's web page and in the `License.txt` inside the downloaded
-archive. The build script refuses a pack whose `License.txt` does not state CC0. The SHA-256 of every source file
-used is in `web/lib/sound/sample-report.json` (`sources`).
+## Credit
 
-## Packs used
+**"Free Cinematic Sound Effects"** by **Gregor Quendel**, licensed under
+**CC BY 4.0** (Creative Commons Attribution 4.0 International, https://creativecommons.org/licenses/by/4.0/).
+Modified. Source: https://opengameart.org/content/free-cinematic-sound-effects
+(archive `gregor_quendel_-_free_cinematic_sound_effects_-_mp3.zip`).
 
-| Pack | Author | Pages (licence shown as CC0) | Archive | Licence file in the archive |
-|---|---|---|---|---|
-| Sci-Fi Sounds (1.0), 2020-10-11 | Kenney (www.kenney.nl) | https://kenney.nl/assets/sci-fi-sounds and https://opengameart.org/content/sci-fi-sounds | https://opengameart.org/sites/default/files/sci-fi_sounds.zip (sha256 `119340f351a5098ad814f78719438c0da355a9ce8a4c8a3af6a8d48aa3d49e04`) | `License.txt`: "License: (Creative Commons Zero, CC0) http://creativecommons.org/publicdomain/zero/1.0/" |
-| Interface Sounds (1.0), 2020-02-11 | Kenney (www.kenney.nl) | https://kenney.nl/assets/interface-sounds and https://opengameart.org/content/interface-sounds | https://opengameart.org/sites/default/files/kenney_interfaceSounds.zip (sha256 `f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232`) | `License.txt`: "License: (Creative Commons Zero, CC0) http://creativecommons.org/publicdomain/zero/1.0/" |
+The same credit is shown in the app, under the volume slider of the sound settings.
 
-Downloaded 13 Nov 2026. Kenney's own site only offers the archive through an in-page download step, so the
-archives come from the OpenGameArt copies uploaded by Kenney. Those pages also show CC0, and the archives contain the same
-`License.txt`.
-
-Rejected: Kenney's "63 Digital sound effects" (https://opengameart.org/content/63-digital-sound-effects-lasers-phasers-space-etc).
-Its page says CC0, but the `readme.txt` in the archive only says "You may use these sounds in personal and
-commercial projects" and does not name CC0, so it was not used.
+The unmodified source files the recipes use are committed in `scripts/sounds/sources/gregor-quendel/` with a
+`LICENSE.txt`; the build refuses the pack when that file does not name CC BY 4.0. The SHA-256 of every source file
+is in `web/lib/sound/sample-report.json` (`sources`).
 
 ## Files used, per sound
 
-Since 15 Nov 2026 the app does not play `sfx-tool_start.mp3` and `sfx-tool_complete.mp3`: those two cues are
-synthesised meteor sounds (`SYNTH_ONLY_CUES` in `web/lib/sound/samples.ts`, recipes in `web/lib/sound/recipes.ts`).
-The background loops for waiting, thinking and disintegrating (`web/lib/sound/ambience.ts`) are synthesised too.
-The files stay listed so the build report stays complete.
+| Our file | Plays for | Source files (`scripts/sounds/sources/gregor-quendel/`) |
+|---|---|---|
+| `sfx-decision_open.mp3` | Decision waiting | Mecha_Elements_Impact_01.mp3, Circuits_Ambience_Burst_01.mp3, Mecha_Sequences_Mechanisms_01.mp3 |
+| `sfx-task_blocked.mp3` | Task blocked | Sci-Fi_Circuits_Error_RobotSpeech.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-tool_error.mp3` | Tool error | Sci-Fi_Tuner_Chaoswhip_02.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-session_start.mp3` | Session started | Fire_Swooshes_Burst_Evolving_19.mp3, Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-stage_done.mp3` | Stage done | Mecha_Sequences_Mechanisms_01.mp3, Fire_Impacts_Complex_04.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-task_start.mp3` | Task started | Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-task_review.mp3` | Task to review | Mecha_Elements_Mechanism_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-task_done.mp3` | Task done | Mecha_Elements_Mechanism_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-decision_answered.mp3` | Decision answered | Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-agent_spawn.mp3` | Agent spawned | Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-agent_complete.mp3` | Agent finished | Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-agent_offboarded.mp3` | Instance offboarded | Mecha_Sequences_Mechanisms_01.mp3, Mecha_Elements_Impact_01.mp3 |
+| `sfx-tool_start.mp3` | Tool start | Mecha_Sequences_Mechanisms_01.mp3 |
+| `sfx-tool_complete.mp3` | Tool finished | Mecha_Elements_Impact_01.mp3 |
+| `sfx-handoff.mp3` | Handoff / message | Mecha_Sequences_Mechanisms_01.mp3 |
+| `loop-owner.mp3` | "Butuh jawaban owner" (a decision is open) | Mecha_Elements_Impact_01.mp3 |
+| `loop-waiting.mp3` | Waiting for permission | Mecha_Sequences_Mechanisms_01.mp3 |
+| `loop-thinking.mp3` | Thinking | Mecha_Sequences_Ambience_06.mp3, Circuits_Hum_06.mp3 |
+| `loop-disintegrating.mp3` | Finished sub-agent wearing away | Plastic_Elements_Creaking_04.mp3, Rocks_Elements_09.mp3 |
 
-| Our file | Event | Sci-Fi Sounds (`Audio/`) | Interface Sounds (`Audio/`) |
-|---|---|---|---|
-| `sfx-tool_start.mp3` | Tool start | | tick_002.ogg |
-| `sfx-tool_complete.mp3` | Tool finished | | select_002.ogg |
-| `sfx-handoff.mp3` | Handoff / message | computerNoise_002.ogg | glitch_002.ogg |
-| `sfx-tool_error.mp3` | Tool error | impactMetal_002.ogg, laserSmall_002.ogg | error_005.ogg |
-| `sfx-agent_spawn.mp3` | Agent spawned | forceField_000.ogg | maximize_003.ogg |
-| `sfx-agent_complete.mp3` | Agent finished | | confirmation_002.ogg, glass_003.ogg |
-| `sfx-agent_offboarded.mp3` | Instance offboarded | thrusterFire_002.ogg | minimize_004.ogg |
-| `sfx-task_start.mp3` | Task started | spaceEngineLow_001.ogg, doorOpen_001.ogg | open_002.ogg |
-| `sfx-task_review.mp3` | Task to review | laserLarge_001.ogg | scroll_003.ogg |
-| `sfx-task_done.mp3` | Task done | | confirmation_003.ogg, glass_004.ogg |
-| `sfx-task_blocked.mp3` | Task blocked | impactMetal_001.ogg, forceField_004.ogg | error_006.ogg |
-| `sfx-decision_answered.mp3` | Decision answered | laserLarge_002.ogg | confirmation_004.ogg, glass_006.ogg |
-| `sfx-decision_open.mp3` | Decision waiting | forceField_003.ogg, lowFrequency_explosion_001.ogg | question_002.ogg |
-| `sfx-session_start.mp3` | Session started | spaceEngineLarge_002.ogg, thrusterFire_003.ogg, forceField_002.ogg, laserLarge_000.ogg, lowFrequency_explosion_000.ogg | |
-| `sfx-stage_done.mp3` | Stage done | forceField_001.ogg, spaceEngineLow_002.ogg, lowFrequency_explosion_000.ogg, explosionCrunch_003.ogg, impactMetal_003.ogg | glass_005.ogg |
+Each loop file holds two identical loop periods; the app loops one period from the middle of the first to the
+middle of the second, so the seam never touches the MP3's encoder delay or padding.
 
-The reverb is generated by the build script (seeded pink noise with an exponential decay), not sampled.
+## Levels
+
+Targets (loudness, LUFS: the EBU R128 momentary maximum, or the whole length for sounds under 400 ms): alerts -14
+(`decision_open`, `task_blocked`, `tool_error`), milestones -18, frequent -20 (`tool_start`, `tool_complete`,
+`handoff`); loops owner -20, waiting -21, disintegrating -26, thinking -28. True peak at most -1 dBTP. The build
+fails when a file is more than 1.5 LU off its target.
 
 ## Rebuild
 
-Extract each archive into its own empty folder (only the audio is read, with ffmpeg; nothing in the archives is
-run), then:
+Needs ffmpeg with libmp3lame on PATH. The sources are in the repo, so no download is needed:
 
 ```
-node scripts/sounds/build.mjs --pack scifi=<Sci-Fi Sounds folder> --pack interface=<Interface Sounds folder> \
-  --work <empty temp folder> [--renders <folder for WAV copies>]
+node scripts/sounds/build.mjs            # writes web/public/sounds/*.mp3 and web/lib/sound/sample-report.json
+node scripts/sounds/build.mjs --check    # only checks the report's levels
 ```
+
+## Earlier sets
+
+Sound set v3 (13 to 16 Nov 2026) used Kenney's CC0 "Sci-Fi Sounds" and "Interface Sounds"; none of those files are
+used any more.
