@@ -227,9 +227,12 @@ export function useTeamModel(): TeamModel {
   const view = panelView(loaded, projects, hasTeamData(state), current !== null)
   const projectName = selected?.name ?? ''
   const shownAnswers = localAnswersFor(localAnswers, selectedId)
+  // The hub's offboard list hides those members from the tree (spec 0.9.8 item 9); declared further down with the
+  // "Selesai kontrak" list, read here through the state it fills
+  const [offboardedRaw, setOffboardedRaw] = useState<OffboardRecord[] | null>(null)
   const vm = useMemo(
-    () => buildTeamVM(state, { now, localAnswers: shownAnswers, projectName }),
-    [state, now, shownAnswers, projectName],
+    () => buildTeamVM(state, { now, localAnswers: shownAnswers, projectName, offboarded: offboardedRaw }),
+    [state, now, shownAnswers, projectName, offboardedRaw],
   )
 
   const fetchRef = useRef<FetchLike>(
@@ -291,7 +294,6 @@ export function useTeamModel(): TeamModel {
 
   // ─── "Selesai kontrak" (offboarded agents of this project) ───
   const [offboarded, setOffboarded] = useState<OffboardedList>({ status: 'loading' })
-  const [offboardedRaw, setOffboardedRaw] = useState<OffboardRecord[] | null>(null)
   const loadOffboarded = useCallback(async () => {
     if (!selectedId) return
     if (FIXTURE) {

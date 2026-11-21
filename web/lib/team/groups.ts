@@ -18,11 +18,15 @@ export interface MemberGroup<T> {
   members: T[]
 }
 
-export function memberGroupOf(m: { phase: 'working' | 'idle' | 'offboarding' }): MemberGroupKey {
+type Groupable = { phase: 'working' | 'idle' | 'offboarding'; retired?: boolean }
+
+/** A coordinator that is not the lead (`retired`, lib/team/lead.ts) goes to Disintegrating whatever its status. */
+export function memberGroupOf(m: Groupable): MemberGroupKey {
+  if (m.retired) return 'leaving'
   return m.phase === 'offboarding' ? 'leaving' : m.phase === 'working' ? 'active' : 'idle'
 }
 
-export function groupMembers<T extends { phase: 'working' | 'idle' | 'offboarding' }>(members: readonly T[]): MemberGroup<T>[] {
+export function groupMembers<T extends Groupable>(members: readonly T[]): MemberGroup<T>[] {
   const by: Record<MemberGroupKey, T[]> = { active: [], idle: [], leaving: [] }
   for (const m of members) by[memberGroupOf(m)].push(m)
   return ORDER.filter((k) => by[k].length > 0).map((k) => ({ key: k, label: MEMBER_GROUP_LABEL[k], members: by[k] }))
