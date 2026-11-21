@@ -14,6 +14,7 @@
 
 import type { SessionInfo } from './bridge-types'
 import { withCloudUpdate } from './cloud-origin'
+import { sessionToShow } from './session-filter'
 
 /** Silence after which a stale cloud session counts as history. Same value as the hub's retire time. */
 export const STALE_HISTORY_MS = 10 * 60_000
@@ -64,6 +65,40 @@ export function listSessions(
     else hiddenCount++
   }
   return { listed, historyCount, hiddenCount }
+}
+
+/**
+ * The "Tampilkan riwayat" toggle is offered whenever the shown project has at least one history session (QA F1),
+ * also when the selected history session is the only one drawn (nothing hidden) or no session is listed at all.
+ */
+export function historyToggleVisible(historyTotal: number, canToggle: boolean): boolean {
+  return canToggle && historyTotal > 0
+}
+
+/** The tab row is drawn when there is a choice to make: two or more listed sessions, or history to toggle. */
+export function showSessionTabRow(listedCount: number, historyTotal: number, canToggle: boolean): boolean {
+  return listedCount > 1 || historyToggleVisible(historyTotal, canToggle)
+}
+
+/** The dot in front of a session tab (QA F6). */
+export interface SessionDot {
+  /** Hollow ring: a disconnected cloud session (not live right now, no green, no pulse). */
+  hollow: boolean
+  /** Filled green "live" dot. */
+  green: boolean
+  /** Pulsing: unseen activity in a session that is not shown. */
+  pulse: boolean
+}
+
+/**
+ * Dot rule. A disconnected (stale) cloud session: hollow. An active session: green, and pulsing while it has unseen
+ * activity and is not the shown one (unchanged). A `completed` session (an ended one, e.g. under history) is never
+ * green and never pulses, whatever its unseen activity: it does not look live.
+ */
+export function sessionDot(s: { status: SessionInfo['status']; stale: boolean; hasActivity: boolean; isSelected: boolean }): SessionDot {
+  if (s.stale) return { hollow: true, green: false, pulse: false }
+  if (s.status === 'completed') return { hollow: false, green: false, pulse: false }
+  return { hollow: false, green: s.status === 'active' || s.hasActivity, pulse: s.hasActivity && !s.isSelected }
 }
 
 /** Live (not stale) before stale, then most recent activity first. */
@@ -149,6 +184,49 @@ export function applySessionStarted(
   return { sessions: [...sessions, incoming], select }
 }
 
+/**
+ * The session to show instead of `replaced` (removed, closed or ended while selected; QA F3): the most recent active
+ * session (mostRecentActive) among the sessions of the SAME project as `replaced`, never one of another project.
+ * Same project means the same `projectId`; a session without a project is replaced only by another one without a
+ * project. Null when that project has no other active session: no selection, the project's empty state.
+ */
+export function replacementInProject(
+  sessions: readonly SessionInfo[],
+  replaced: Pick<SessionInfo, 'id' | 'projectId'>,
+  now: number,
+): string | null {
+  const project = replaced.projectId || undefined
+  const sameProject = sessions.filter((s) => (s.projectId || undefined) === project)
+  return mostRecentActive(sameProject, now, replaced.id)
+}
+
+/**
+ * Selection fix for the shown project (index.tsx): the current one when it is listed, else the project's most recent
+ * listed one (sessionToShow). With nothing listed, a selected session that is not one of the project's sessions
+ * (another project's, or one no longer in the list) is dropped: null, the empty state; the graph never shows another
+ * project's session (QA F3). `undefined`: nothing to change.
+ */
+export function selectionForProject(
+  listed: SessionInfo[],
+  visible: readonly SessionInfo[],
+  selectedId: string | null,
+): string | null | undefined {
+  const next = sessionToShow(listed, selectedId)
+  if (next) return next !== selectedId ? next : undefined
+  if (selectedId && !visible.some((s) => s.id === selectedId)) return null
+  return undefined
+}
+
+/**
+ * What the graph does when the selection changes (index.tsx layout effect): 'clear' when a session was shown and
+ * now none is (removed with no replacement in its project, reset): the simulation restarts empty, nothing of the
+ * gone session stays drawn. 'switch' to another session; 'none' when nothing changed.
+ */
+export function graphChange(prevId: string | null, nextId: string | null): 'clear' | 'switch' | 'none' {
+  if (nextId === null) return prevId !== null ? 'clear' : 'none'
+  return nextId !== prevId ? 'switch' : 'none'
+}
+
 export interface RemovedResult {
   sessions: SessionInfo[]
   /** The selection after the removal (unchanged unless the removed session was selected). */
@@ -156,7 +234,10 @@ export interface RemovedResult {
   selectionChanged: boolean
 }
 
-/** A `session-removed` message (item 6): drop the session; if it was selected, move to the most recent active one. */
+/**
+ * A `session-removed` message (item 6): drop the session; if it was selected, move to the most recent active one of
+ * the same project (replacementInProject), else to no selection (the empty state).
+ */
 export function applySessionRemoved(
   sessions: readonly SessionInfo[],
   sessionId: string,
@@ -166,8 +247,34 @@ export function applySessionRemoved(
   const kept = sessions.filter((s) => s.id !== sessionId)
   const list = kept.length === sessions.length ? (sessions as SessionInfo[]) : kept
   if (selectedId !== sessionId) return { sessions: list, selectedId, selectionChanged: false }
-  const next = mostRecentActive(kept, now)
+  const removed = sessions.find((s) => s.id === sessionId)
+  const next = removed ? replacementInProject(kept, removed, now) : null
   return { sessions: list, selectedId: next, selectionChanged: true }
+}
+
+export interface EndedResult {
+  sessions: SessionInfo[]
+  /** Move the view to this session (null: keep the selection). */
+  moveTo: string | null
+}
+
+/**
+ * A `session-ended` message: the session turns `completed`, so it is history (hidden by default, listed with the
+ * toggle on). If it is the shown CLOUD session (retired because a newer container of the repo went live, QA F1), the
+ * view moves to the most recent active session of the same project, so the ended one leaves the default list. With
+ * none in that project, or for a local session (AC7: a finished local session stays viewable), the view stays.
+ */
+export function applySessionEnded(
+  sessions: readonly SessionInfo[],
+  sessionId: string,
+  selectedId: string | null,
+  now: number,
+): EndedResult {
+  const ended = sessions.find((s) => s.id === sessionId)
+  if (!ended) return { sessions: sessions as SessionInfo[], moveTo: null }
+  const next = sessions.map((s) => (s.id === sessionId ? { ...s, status: 'completed' as const } : s))
+  if (selectedId !== sessionId || ended.origin !== 'cloud') return { sessions: next, moveTo: null }
+  return { sessions: next, moveTo: replacementInProject(next, ended, now) }
 }
 
 /**

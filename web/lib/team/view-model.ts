@@ -11,7 +11,7 @@ import {
 import { memberPhase } from './members'
 import type { TaskStatus, TeamAgent, TeamApproval, TeamState } from './types'
 import type { OffboardRecord } from './offboard'
-import { isOffboardedMember, pickLeadId } from './lead'
+import { isHiddenByOffboard, pickLeadId } from './lead'
 
 export interface BuildOptions {
   now: number
@@ -21,6 +21,8 @@ export interface BuildOptions {
   projectName?: string
   /** The hub's offboard list of this project ("Selesai kontrak"): those members leave the tree (lead.ts). */
   offboarded?: readonly OffboardRecord[] | null
+  /** When the hub last wrote the project's state.json (ISO, team_state `stateMtime`); null/absent when unknown. */
+  stateMtime?: string | null
 }
 
 export interface MemberVM {
@@ -194,8 +196,9 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
   const presentAgents = sortedAgents.filter(([, a]) => memberPhase(a, opts.now).kind !== 'gone')
   // Exactly one lead (AC5); other coordinator entries are retired (lead.ts)
   const leadId = pickLeadId(presentAgents, meta, opts.now)
-  // Members the hub offboarded leave the tree, even when state.json still lists them (spec 0.9.8 item 9)
-  const shownAgents = presentAgents.filter(([id, a]) => id === leadId || !isOffboardedMember(id, a, opts.offboarded))
+  // Members the hub offboarded leave the tree, even when state.json still lists them, unless they work again after
+  // the offboard (spec 0.9.8 item 9, lead.ts isHiddenByOffboard)
+  const shownAgents = presentAgents.filter(([id, a]) => id === leadId || !isHiddenByOffboard(id, a, opts.offboarded, opts.stateMtime))
   const leadEntry = leadId ? shownAgents.find(([id]) => id === leadId) : undefined
   const lead = leadEntry ? buildMember(leadEntry[0], leadEntry[1], taskMap, opts.now, leadId) : null
   const members = shownAgents

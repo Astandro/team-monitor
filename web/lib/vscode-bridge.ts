@@ -17,7 +17,7 @@ type OffboardedCallback = (sessionId: string, agents: string[]) => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
-/** 'removed' carries the session id of a `session-removed` message (hub: cloud session retired or evicted). */
+/** 'removed' carries the session id of a `session-removed` message (hub: cloud session evicted). */
 type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'removed' | 'reset', data: SessionInfo[] | SessionInfo | string | SessionUpdate) => void
 
 class VSCodeBridge {
