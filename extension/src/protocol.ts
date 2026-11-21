@@ -74,9 +74,10 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-list'; sessions: SessionInfo[] }
   | { type: 'session-started'; session: SessionInfo }
   | { type: 'session-ended'; sessionId: string }
-  /** Hub intake (spec 0.9.8 item 5): a cloud session was retired or evicted. The client drops it from its
-   *  session list; if it was selected, it moves to the most recent active session. Sent after the session's
-   *  `session-ended` and after its running sub-agents were finished. Never sent for a local session. */
+  /** Hub intake (spec 0.9.8 item 5): a cloud session was evicted (session or source cap, or its source was
+   *  forgotten after 24 h of silence). Retiring a stale source does not send it: those sessions stay listed as
+   *  completed. The client drops the session from its list; if it was selected, it moves to the most recent
+   *  active session of the same project, or to the empty state. Never sent for a local session. */
   | { type: 'session-removed'; sessionId: string }
   | ({ type: 'session-updated'; sessionId: string; label: string; projectId?: string; prompt?: string; coordinator?: CoordinatorInfo } & CloudOriginFields)
   /** Standalone app with --ingest: the project list changed (a cloud project appeared, or turned stale or live
