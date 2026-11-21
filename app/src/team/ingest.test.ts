@@ -13,7 +13,7 @@ import { buildRegistry } from './config'
 import { funnelEntries, ingestChecks } from './doctor'
 import { createRequestHandler, RemoteAccess, TeamService } from './http'
 import * as crypto from 'crypto'
-import { EPOCH_HEADER, IngestService, jsonTooDeep, MAX_EVENT_BYTES, MAX_JSON_DEPTH, MAX_MESSAGES, mirrorPath, parseEventsBody } from './ingest'
+import { CLOUD_RETIRE_AFTER_MS, cloudRetireAfterMs, EPOCH_HEADER, IngestService, jsonTooDeep, MAX_EVENT_BYTES, MAX_JSON_DEPTH, MAX_MESSAGES, mirrorPath, parseEventsBody } from './ingest'
 import type { CloudIntake, CloudMessage } from '../../../scripts/relay'
 import { setupTeam } from './index'
 import { parseInstallArgs, programArguments, ServiceSpec } from './service'
@@ -75,7 +75,7 @@ interface Ctx {
   remote: RemoteAccess | null
 }
 
-async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boolean; maxSources?: number; maxOutboxWaiters?: number } = {}): Promise<Ctx> {
+async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boolean; maxSources?: number; maxOutboxWaiters?: number; retireAfterMs?: number } = {}): Promise<Ctx> {
   const root = makeTmpDir()
   const home = path.join(root, 'tm')
   fs.mkdirSync(home, { mode: 0o700 })
@@ -88,7 +88,7 @@ async function setup(opts: { ingest?: boolean; remote?: boolean; noRelay?: boole
   if (opts.ingest !== false) {
     ingest = new IngestService({
       home, token: INGEST, team, limiter: new LoginLimiter(5), now: () => clock.t, log: (m) => logs.push(m), sweepMs: 0, outboxPollMs: 50,
-      maxSources: opts.maxSources, maxOutboxWaiters: opts.maxOutboxWaiters,
+      maxSources: opts.maxSources, maxOutboxWaiters: opts.maxOutboxWaiters, cloudRetireAfterMs: opts.retireAfterMs,
     })
     ingest.start()
     if (!opts.noRelay) ingest.attachRelay(relay)
@@ -1142,5 +1142,202 @@ describe('limits and epoch', () => {
     const ok = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 100, messages: [eventMsg()] }, { ...auth(), [EPOCH_HEADER]: String(epoch) })
     assert.equal(ok.status, 200, ok.body)
     assert.equal(ctx.relay.applied.length, before + 1)
+  })
+})
+
+// ─── 0.9.8: one hub project per repo, retiring stale sources, finishing silent sources ─────────────────────
+
+describe('0.9.8 one hub project per repo', () => {
+  const SRC2 = 'cloud-box-2'
+  const SRC3 = 'cloud-box-3'
+  const KEYS: Record<string, string> = { [SRC]: KEY, [SRC2]: OTHER_KEY, [SRC3]: '7a'.repeat(32) }
+  const S2 = '0b1c2d3e-0000-4000-8000-000000000002'
+  const S3 = '0b1c2d3e-0000-4000-8000-000000000003'
+  const post = (ctx: Ctx, sourceId: string, seq: number, sid: string, proj = project) =>
+    send(ctx, 'POST', '/api/ingest/v1/events', { sourceId, project: proj, seq, messages: [startMsg(sid), eventMsg(sid)] }, auth(INGEST, KEYS[sourceId]))
+  const cloudList = async (ctx: Ctx) => (await projects(ctx)).filter((p) => p.origin === 'cloud')
+    .map((p) => ({ id: p.id, name: p.name, sourceId: p.sourceId, stale: p.stale }))
+
+  test('item 1 / AC2: two live sources of one repo share one hub project, each keeps its key and mirror; nobody is retired', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      const r = await post(ctx, SRC2, 1, S2)
+      assert.equal(r.status, 200, r.body) // no 403: each sourceId is bound to its own key
+      // One project for the repo, shown from the source that went live last; the list shape is unchanged.
+      assert.deepEqual(await cloudList(ctx), [{ id: PID, name: 'My Repo', sourceId: SRC2, stale: false }])
+      assert.deepEqual([...new Set(ctx.relay.applied.map((a) => `${a.sourceId} ${a.projectId}`))], [`${SRC} ${PID}`, `${SRC2} ${PID}`])
+      for (const s of [SRC, SRC2]) assert.ok(fs.existsSync(path.join(ctx.home, 'remote', s, '.agent-team')), `mirror of ${s}`)
+      assert.deepEqual(ctx.ingest!.sourceStates().map((s) => [s.sourceId, s.projectId]), [[SRC, PID], [SRC2, PID]])
+      // The keys stay per source: SRC2's key cannot write as SRC.
+      const wrong = await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 2, messages: [eventMsg()] }, auth(INGEST, OTHER_KEY))
+      assert.equal(wrong.status, 403)
+      assert.deepEqual(ctx.relay.retired, [], 'live siblings are never retired')
+
+      // Another repo is another hub project.
+      const other = { id: 'other-repo', name: 'Other' }
+      assert.equal((await post(ctx, SRC3, 1, S3, other)).status, 200)
+      assert.deepEqual((await cloudList(ctx)).map((p) => p.id).sort(), [PID, 'cloud-other-repo'])
+
+      // The project is stale only when every source of it is; the shown source then stays the one seen last.
+      ctx.clock.t += 30_000
+      assert.equal((await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${SRC}`)).status, 200) // SRC seen later
+      ctx.clock.t += 31_000
+      ctx.ingest!.sweep() // SRC2 and SRC3 stale, SRC live
+      assert.deepEqual((await cloudList(ctx)).find((p) => p.id === PID), { id: PID, name: 'My Repo', sourceId: SRC, stale: false })
+      ctx.clock.t += 31_000
+      ctx.ingest!.sweep()
+      assert.deepEqual((await cloudList(ctx)).find((p) => p.id === PID), { id: PID, name: 'My Repo', sourceId: SRC, stale: true })
+      // A request makes it live again from that source.
+      assert.equal((await post(ctx, SRC2, 2, S2)).status, 200)
+      assert.deepEqual((await cloudList(ctx)).find((p) => p.id === PID), { id: PID, name: 'My Repo', sourceId: SRC2, stale: false })
+      assert.deepEqual(ctx.relay.retired, [], 'a source that comes back is not new: nothing retired')
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 1: answers written to the hub project reach the outbox of the source it shows', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC, project, state: sampleState(), watcher: null }, auth(INGEST, KEY))).status, 200)
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC2, project, state: sampleState(), watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
+      const w = ctx.team.watcher(PID)!
+      assert.ok(w, 'one watcher for the hub project')
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC2)
+      assert.equal(path.resolve(w.answersDir).startsWith(path.resolve(path.join(ctx.home, 'remote', SRC2)) + path.sep), true, 'answers go to the mirror of SRC2')
+      // An answer from the hub UI is what SRC2's outbox returns, not SRC's.
+      const a = await request(ctx.port, {
+        method: 'POST', path: '/api/team/answer', body: JSON.stringify({ project: PID, id: 'D1', answer: 'b' }),
+        headers: { ...JSON_H, 'X-Team-Monitor': '1', Origin: `http://127.0.0.1:${ctx.port}` },
+      })
+      assert.equal(a.status, 200, a.body)
+      const out = async (s: string, key: string) => (await send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${s}`, undefined, auth(INGEST, key))).body
+      assert.equal((await out(SRC, KEY)).includes('answers/D1.json'), false)
+      assert.equal((await out(SRC2, OTHER_KEY)).includes('answers/D1.json'), true)
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 1: a source that reports another project id moves to that hub project; the old one goes with its last source', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      const moved = { id: 'renamed-repo', name: 'Renamed' }
+      assert.equal((await post(ctx, SRC, 2, S1, moved)).status, 200)
+      assert.deepEqual(ctx.relay.moved, [[SRC, 'cloud-renamed-repo']])
+      assert.deepEqual(await cloudList(ctx), [{ id: 'cloud-renamed-repo', name: 'Renamed', sourceId: SRC, stale: false }])
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 1: a project id that a local project already has is refused with 409 and registers nothing', async () => {
+    const root = makeTmpDir()
+    const team = new TeamService(buildRegistry([], [makeProject(root, 'cloud-x')]), { pollMs: 60_000 })
+    const relay = new FakeRelay()
+    const ingest = new IngestService({ home: path.join(root, 'tm'), token: INGEST, team, sweepMs: 0, log: () => {} })
+    ingest.start()
+    ingest.attachRelay(relay)
+    const srv = await listen(createRequestHandler({ team, remote: null, ingest, fallback: (_q, r) => { r.writeHead(404); r.end() } }))
+    try {
+      assert.ok(team.watcher('cloud-x') && !team.isCloudProject('cloud-x'), 'a local project with that id')
+      const r = await send({ port: srv.port } as Ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project: { id: 'x', name: 'X' }, seq: 1, messages: [startMsg()] })
+      assert.equal(r.status, 409)
+      assert.deepEqual(ingest.sourceStates(), [])
+      assert.equal(relay.applied.length, 0)
+      assert.ok(!fs.existsSync(path.join(root, 'tm', 'remote', SRC)), 'no mirror')
+    } finally { await srv.close(); ingest.dispose(); team.dispose(); removeTmpDir(root) }
+  })
+
+  test('item 2: a new source of a project retires the stale sources of that project only, after its own messages', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      assert.equal((await post(ctx, SRC3, 1, S3, { id: 'other-repo', name: 'Other' })).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep() // both stale
+      assert.deepEqual(ctx.relay.retired, [])
+      const appliedBefore = ctx.relay.applied.length
+      assert.equal((await post(ctx, SRC2, 1, S2)).status, 200)
+      assert.deepEqual(ctx.relay.retired, [SRC], 'the stale source of the same repo; not the other repo')
+      assert.ok(ctx.relay.applied.slice(appliedBefore).every((a) => a.sourceId === SRC2) && ctx.relay.applied.length > appliedBefore,
+        'the new source was applied (retirement comes after)')
+      assert.deepEqual((await cloudList(ctx)).find((p) => p.id === PID), { id: PID, name: 'My Repo', sourceId: SRC2, stale: false })
+      // The retired source keeps its mirror and binding (24 h removal as before) and may come back.
+      assert.ok(fs.existsSync(path.join(ctx.home, 'remote', SRC)))
+      assert.ok(ctx.ingest!.sourceStates().some((s) => s.sourceId === SRC && s.stale))
+      // Its next request is not "new": it retires nobody.
+      assert.equal((await post(ctx, SRC, 2, S1)).status, 200)
+      assert.deepEqual(ctx.relay.retired, [SRC])
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 2: a new source that first sends its state (PUT state) retires stale siblings too', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep()
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC2, project, state: null, watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
+      assert.deepEqual(ctx.relay.retired, [SRC])
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 3: a source silent for longer than the retire time gets its sub-agents finished once; again after it was live', async () => {
+    const ctx = await setup({ retireAfterMs: 120_000 })
+    try {
+      assert.equal(ctx.ingest!.retireAfterMs, 120_000)
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep()
+      assert.deepEqual(ctx.relay.stale, [[SRC, true]])
+      assert.deepEqual(ctx.relay.finished, [], 'stale is not enough')
+      ctx.clock.t += 60_000
+      ctx.ingest!.sweep()
+      assert.deepEqual(ctx.relay.finished, [SRC])
+      ctx.clock.t += 600_000
+      ctx.ingest!.sweep()
+      assert.deepEqual(ctx.relay.finished, [SRC], 'once per silence')
+      assert.deepEqual(ctx.relay.retired, [], 'finishing is not retiring: the sessions stay listed (stale)')
+      // Live again, then silent again: finished again.
+      assert.equal((await post(ctx, SRC, 2, S1)).status, 200)
+      ctx.clock.t += 121_000
+      ctx.ingest!.sweep()
+      assert.deepEqual(ctx.relay.finished, [SRC, SRC])
+    } finally { await teardown(ctx) }
+  })
+
+  test('item 3: CLOUD_RETIRE_AFTER_MS defaults to 10 minutes; the env var of that name overrides it when it is a whole number > 0', () => {
+    assert.equal(CLOUD_RETIRE_AFTER_MS, 600_000)
+    assert.equal(cloudRetireAfterMs({}), 600_000)
+    assert.equal(cloudRetireAfterMs({ CLOUD_RETIRE_AFTER_MS: '90000' }), 90_000)
+    assert.equal(cloudRetireAfterMs({ CLOUD_RETIRE_AFTER_MS: ' 5000 ' }), 5000)
+    for (const bad of ['', '0', '-5', '1.5', 'abc', '1e6', '99999999999999']) {
+      assert.equal(cloudRetireAfterMs({ CLOUD_RETIRE_AFTER_MS: bad }), 600_000, `"${bad}" ignored`)
+    }
+    const saved = process.env.CLOUD_RETIRE_AFTER_MS
+    process.env.CLOUD_RETIRE_AFTER_MS = '4321'
+    try {
+      const team = new TeamService([], { pollMs: 60_000 })
+      const root = makeTmpDir()
+      try {
+        const svc = new IngestService({ home: root, token: INGEST, team, sweepMs: 0, log: () => {} })
+        assert.equal(svc.retireAfterMs, 4321)
+        assert.equal(new IngestService({ home: root, token: INGEST, team, sweepMs: 0, log: () => {}, cloudRetireAfterMs: 7 }).retireAfterMs, 7, 'the option wins')
+        svc.dispose()
+      } finally { team.dispose(); removeTmpDir(root) }
+    } finally {
+      if (saved === undefined) delete process.env.CLOUD_RETIRE_AFTER_MS
+      else process.env.CLOUD_RETIRE_AFTER_MS = saved
+    }
+  })
+
+  test('item 5: a source removed (capacity or 24 h idle) is forgotten by the relay, which retires and removes its sessions', async () => {
+    const ctx = await setup({ maxSources: 1 })
+    try {
+      assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
+      ctx.clock.t += 11 * 60_000 // a bound source can be evicted for an unknown sourceId once stale for 10 minutes
+      ctx.ingest!.sweep()
+      // The cap is 1; the stale source of the same repo is evicted for the new one (its key binding kept as a tombstone).
+      assert.equal((await post(ctx, SRC2, 1, S2)).status, 200)
+      assert.deepEqual(ctx.relay.forgotten, [SRC])
+      assert.deepEqual(await cloudList(ctx), [{ id: PID, name: 'My Repo', sourceId: SRC2, stale: false }])
+    } finally { await teardown(ctx) }
   })
 })

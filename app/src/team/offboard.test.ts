@@ -216,6 +216,56 @@ describe('offboardAgent / offboardFinished', () => {
     assert.equal(fs.existsSync(path.join(home, OFFBOARD_FILE)), false, 'nothing written')
   })
 
+  test('0.9.8 AC4: a running agent the graph view can finish (orphaned cloud agent) is finished first, then offboarded', () => {
+    const store = new OffboardStore(home)
+    const g = teamGraph()
+    const { view } = fakeGraph(g)
+    const asked: Array<[string, string]> = []
+    view.finishOrphaned = (session, agent) => {
+      asked.push([session, agent])
+      g.observe({ time: 0, type: 'agent_complete', payload: { name: agent, sessionEnded: true }, sessionId: session }, Date.parse('2026-11-13T03:50:00.000Z'))
+      return true
+    }
+    const { record, created } = offboardAgent(store, view, { session: S, agent: MEI }, fixedNow)
+    assert.equal(created, true)
+    assert.deepEqual(asked, [[S, MEI]])
+    assert.equal(record.finishedAt, '2026-11-13T03:50:00.000Z')
+    assert.equal(store.isOffboarded(S, MEI), true)
+    // Finished agents are not asked about.
+    offboardAgent(store, view, { session: S, agent: HIRO }, fixedNow)
+    assert.deepEqual(asked, [[S, MEI]])
+  })
+
+  test('0.9.8: a view that cannot finish the agent (local session, live source) still gives 409 and writes nothing', () => {
+    const store = new OffboardStore(home)
+    const { view } = fakeGraph(teamGraph())
+    view.finishOrphaned = () => false
+    assert.throws(() => offboardAgent(store, view, { session: S, agent: MEI }), (e: unknown) => (e as OffboardError).status === 409)
+    assert.equal(fs.existsSync(path.join(home, OFFBOARD_FILE)), false)
+  })
+
+  test('0.9.8 item 4: finishFirst (the container offboarded it) wins over finishOrphaned and is used for running agents only', () => {
+    const store = new OffboardStore(home)
+    const g = teamGraph()
+    const { view } = fakeGraph(g)
+    let orphanedAsked = 0
+    view.finishOrphaned = () => { orphanedAsked++; return false }
+    const first: string[] = []
+    const finishFirst = (session: string, agent: string) => {
+      first.push(agent)
+      g.observe({ time: 0, type: 'agent_complete', payload: { name: agent }, sessionId: session }, Date.parse('2026-11-13T03:55:00.000Z'))
+      return true
+    }
+    assert.equal(offboardAgent(store, view, { session: S, agent: MEI }, fixedNow, finishFirst).created, true)
+    assert.equal(offboardAgent(store, view, { session: S, agent: REN }, fixedNow, finishFirst).created, true)
+    assert.deepEqual(first, [MEI])
+    assert.equal(orphanedAsked, 0)
+    // finishFirst answering false (not running there): 409 as before.
+    g.observe({ time: 0, type: 'agent_spawn', payload: { name: 'Late (QA Engineer): x', parent: 'orchestrator' }, sessionId: S }, 6)
+    assert.throws(() => offboardAgent(store, view, { session: S, agent: 'Late (QA Engineer): x' }, fixedNow, () => false),
+      (e: unknown) => (e as OffboardError).status === 409)
+  })
+
   test('offboardFinished takes every finished sub-agent once, never running ones or the Orchestrator', () => {
     const store = new OffboardStore(home)
     const { view, announced } = fakeGraph(teamGraph())
