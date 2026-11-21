@@ -177,6 +177,10 @@ export interface TopBarProps {
   sessionsWithActivity: Set<string>
   onSelectSession: (id: string) => void
   onCloseSession: (id: string) => void
+  /** History sessions of the shown project (completed, or stale for 10 minutes): the "Tampilkan riwayat" toggle */
+  historyCount?: number
+  showHistory?: boolean
+  onToggleHistory?: () => void
   // Connection
   isVSCode: boolean
   connectionStatus: ConnectionStatus
@@ -214,6 +218,7 @@ export interface TopBarLayout {
 export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
+  historyCount = 0, showHistory = false, onToggleHistory,
   isVSCode, connectionStatus,
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline,
@@ -222,6 +227,8 @@ export const TopBar = memo(function TopBar({
   onLayout, children,
 }: TopBarProps) {
   useGraphTheme()
+  // Tabs when there is a choice to make: two or more listed sessions, or hidden/shown history to toggle
+  const showTabs = sessions.length > 1 || (historyCount > 0 && !!onToggleHistory)
   const rootRef = useRef<HTMLDivElement>(null)
   const barsRef = useRef<HTMLDivElement>(null)
   const [compact, setCompact] = useState(false)
@@ -260,7 +267,7 @@ export const TopBar = memo(function TopBar({
       // on the right. The card's slot has a fixed height, so an opened card floats over the graph instead of pushing
       // the row down (the auto-fit keeps the graph below this row).
       <div ref={rootRef} className="absolute top-3 left-3 right-3 flex flex-col gap-2 font-mono text-[10px] pointer-events-none" style={{ zIndex: Z.info }}>
-        {sessions.length > 1 && (
+        {showTabs && (
           <div className="w-full pointer-events-auto">
             <SessionTabs
               sessions={sessions}
@@ -268,6 +275,9 @@ export const TopBar = memo(function TopBar({
               sessionsWithActivity={sessionsWithActivity}
               onSelectSession={onSelectSession}
               onCloseSession={onCloseSession}
+              historyCount={historyCount}
+              showHistory={showHistory}
+              onToggleHistory={onToggleHistory}
             />
           </div>
         )}
@@ -306,7 +316,7 @@ export const TopBar = memo(function TopBar({
     <div ref={rootRef} className="absolute top-3 left-3 right-3 flex flex-col gap-2 font-mono text-[10px] pointer-events-none" style={{ zIndex: Z.info }}>
       <div ref={barsRef} className="flex flex-col gap-2">
       {/* Session tabs: own row, each tab keeps a readable width and wraps its title */}
-      {sessions.length > 1 && (
+      {showTabs && (
         <div className="w-full pointer-events-auto">
           <SessionTabs
             sessions={sessions}
@@ -314,6 +324,9 @@ export const TopBar = memo(function TopBar({
             sessionsWithActivity={sessionsWithActivity}
             onSelectSession={onSelectSession}
             onCloseSession={onCloseSession}
+            historyCount={historyCount}
+            showHistory={showHistory}
+            onToggleHistory={onToggleHistory}
           />
         </div>
       )}

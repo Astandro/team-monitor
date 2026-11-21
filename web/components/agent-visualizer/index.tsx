@@ -30,6 +30,7 @@ import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { sessionsForProject, sessionToShow } from "@/lib/session-filter"
+import { listSessions } from "@/lib/session-list"
 import { agentIdentity, identityLine, parseCoordinator } from "@/lib/agent-identity"
 import { canOffboard, finishedSubAgents, offboardAgent, offboardAllFinished, type OffboardResult } from "@/lib/team/offboard"
 import type { PostFetch } from "@/lib/team/post"
@@ -53,12 +54,30 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
   useGraphTheme()
 
   const visibleSessions = useMemo(() => sessionsForProject(bridge.sessions, projectId), [bridge.sessions, projectId])
-  // Keep the shown session inside the chosen project: switch to its most recent one when needed
   const { selectedSessionId, selectSession } = bridge
+  // History (completed, or a cloud session stale for 10 minutes) is hidden unless "Tampilkan riwayat" is on; the
+  // selected session always stays listed (lib/session-list.ts). The clock only ticks while a stale session is listed.
+  const [showHistory, setShowHistory] = useState(false)
+  const [listNow, setListNow] = useState(() => Date.now())
+  const anyStale = visibleSessions.some(s => s.stale === true)
   useEffect(() => {
-    const next = sessionToShow(visibleSessions, selectedSessionId)
+    if (!anyStale) return
+    setListNow(Date.now())
+    const t = setInterval(() => setListNow(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [anyStale])
+  const { listed: listedSessions, historyCount: allHistory, hiddenCount } = useMemo(
+    () => listSessions(visibleSessions, { showHistory, now: listNow, selectedId: selectedSessionId }),
+    [visibleSessions, showHistory, listNow, selectedSessionId],
+  )
+  // The toggle counts what it would reveal (hidden ones) while off, and what it would hide while on
+  const historyCount = showHistory ? allHistory : hiddenCount
+  const toggleHistory = useCallback(() => setShowHistory(v => !v), [])
+  // Keep the shown session inside the chosen project: switch to its most recent listed one when needed
+  useEffect(() => {
+    const next = sessionToShow(listedSessions, selectedSessionId)
     if (next && next !== selectedSessionId) selectSession(next)
-  }, [visibleSessions, selectedSessionId, selectSession])
+  }, [listedSessions, selectedSessionId, selectSession])
 
   const {
     frameRef,
@@ -148,9 +167,12 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
   const prevSelectedRef = useRef<string | null>(null)
   useLayoutEffect(() => {
     if (bridge.selectedSessionId === null && prevSelectedRef.current !== null) {
-      // Bridge reset (panel reopened / relay restarted): cached snapshots are stale
+      // Bridge reset (panel reopened / relay restarted), or the shown session was removed with no active one left:
+      // cached snapshots are stale, and the graph must not keep drawing the session that is gone (empty state)
       sessionCacheRef.current.clear()
       prevSelectedRef.current = null
+      setIsReviewing(false)
+      restart()
       return
     }
     if (bridge.selectedSessionId && bridge.selectedSessionId !== prevSelectedRef.current) {
@@ -194,6 +216,27 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     bridge.flushSessionEvents(sid)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
   }, [offboardRevision])
+
+  // A session-list arrived while a session was shown (stream reconnected, hub restarted): the bridge emptied every
+  // buffer and the server is replaying them. Snapshots point into the old buffers, so they go; the shown session is
+  // rebuilt from the replay (same as a cold start), keeping one node per agent and one coordinator (AC5, AC6).
+  const replayRevision = bridge.replayRevision
+  useLayoutEffect(() => {
+    if (replayRevision === 0) return
+    sessionCacheRef.current.clear()
+    const sid = bridge.selectedSessionId
+    if (!sid) return
+    setIsReviewing(false)
+    restart()
+    bridge.flushSessionEvents(sid)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
+  }, [replayRevision])
+
+  // A session the bridge dropped (session-removed, or closed) must not come back from a stale snapshot
+  useEffect(() => {
+    const ids = new Set(bridge.sessions.map(s => s.id))
+    for (const id of [...sessionCacheRef.current.keys()]) if (!ids.has(id)) sessionCacheRef.current.delete(id)
+  }, [bridge.sessions])
 
   // Offboarding works in the standalone app (it has the endpoints), on live data, with a session shown
   const offboardSession = !bridge.isVSCode && !bridge.useMockData ? bridge.selectedSessionId : null
@@ -546,7 +589,10 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
 
       {/* Top bar: session tabs + info/controls */}
       <TopBar
-        sessions={visibleSessions}
+        sessions={listedSessions}
+        historyCount={historyCount}
+        showHistory={showHistory}
+        onToggleHistory={toggleHistory}
         selectedSessionId={bridge.selectedSessionId}
         sessionsWithActivity={bridge.sessionsWithActivity}
         onSelectSession={bridge.selectSession}

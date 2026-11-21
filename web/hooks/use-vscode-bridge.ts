@@ -6,6 +6,7 @@ import { SimulationEvent } from '@/lib/agent-types'
 import type { SessionUpdate } from '@/lib/bridge-types'
 import { withCloudUpdate } from '@/lib/cloud-origin'
 import { dropOffboardedEvents, OFFBOARDED_EVENT } from '@/lib/team/offboard'
+import { applySessionRemoved, applySessionStarted, dedupeSessions, initialSelection, touchActivity } from '@/lib/session-list'
 
 /** Bumped when agents of a session were offboarded; the visualizer rebuilds that session from its buffer. */
 export interface OffboardRevision {
@@ -46,6 +47,12 @@ interface BridgeHookResult {
   offboardRevision: OffboardRevision | null
   /** Drop offboarded agents' buffered events (server message, or our own POST answered 200) */
   applyOffboarded: (sessionId: string, agents: string[]) => void
+  /**
+   * Bumped when a session-list arrived while a session was already shown (stream reconnected, hub restarted): every
+   * buffer was emptied because the server replays all events after the list. The visualizer drops its cached
+   * snapshots and rebuilds the shown session from the replay, so nothing is drawn twice.
+   */
+  replayRevision: number
 }
 
 /**
@@ -67,7 +74,16 @@ export function useVSCodeBridge(): BridgeHookResult {
   const [, setEventVersion] = useState(0) // trigger re-render on new events
 
   // Session state
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessions, setSessionsState] = useState<SessionInfo[]>([])
+  /** The list as last set, synchronously: the session handlers decide the selection from it (no side effects
+   *  inside a React state updater). Every change goes through setSessions below. */
+  const sessionsRef = useRef<SessionInfo[]>([])
+  const setSessions = useCallback((next: SessionInfo[] | ((prev: SessionInfo[]) => SessionInfo[])) => {
+    const value = typeof next === 'function' ? next(sessionsRef.current) : next
+    if (value === sessionsRef.current) return
+    sessionsRef.current = value
+    setSessionsState(value)
+  }, [])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const selectedSessionIdRef = useRef<string | null>(null)
   const sessionEventsRef = useRef<Map<string, SimulationEvent[]>>(new Map())
@@ -76,6 +92,10 @@ export function useVSCodeBridge(): BridgeHookResult {
   const sessionSwitchPendingRef = useRef(false)
   const [sessionsWithActivity, setSessionsWithActivity] = useState<Set<string>>(new Set())
   const [offboardRevision, setOffboardRevision] = useState<OffboardRevision | null>(null)
+  const [replayRevision, setReplayRevision] = useState(0)
+  /** Every session id this page has seen (list or started). A session-started for one of them is a replay or a
+   *  resume, never a reason to move the view (spec 0.9.8 item 8). Cleared only by a reset. */
+  const knownSessionIdsRef = useRef<Set<string>>(new Set())
 
   const applyOffboarded = useCallback((sessionId: string, agents: string[]) => {
     if (agents.length === 0) return
@@ -153,13 +173,11 @@ export function useVSCodeBridge(): BridgeHookResult {
         const buf = sessionEventsRef.current.get(event.sessionId) || []
         buf.push(simEvent)
         sessionEventsRef.current.set(event.sessionId, buf)
-        // Keep lastActivityTime roughly current (throttled: one state update per 5s per session)
+        // Keep lastActivityTime roughly current (throttled: one state update per 5s per session; not for a stale
+        // cloud session, whose events are a replay: lib/session-list.ts)
         const now = Date.now()
-        setSessions(prev => {
-          const s = prev.find(x => x.id === event.sessionId)
-          if (!s || now - s.lastActivityTime < 5000) return prev
-          return prev.map(x => x.id === event.sessionId ? { ...x, lastActivityTime: now } : x)
-        })
+        const sid = event.sessionId
+        setSessions(prev => touchActivity(prev, sid, now))
       }
 
       // Deliver to pending if session matches (ref is always current).
@@ -215,22 +233,29 @@ export function useVSCodeBridge(): BridgeHookResult {
         sessionEventsRef.current.clear()
         setSessionsWithActivity(new Set())
         dismissedSessionsRef.current.clear()
+        knownSessionIdsRef.current.clear()
         setEventVersion(v => v + 1)
         return
       }
       if (type === 'list') {
-        const sessionList = data as SessionInfo[]
+        const sessionList = dedupeSessions(Array.isArray(data) ? (data as SessionInfo[]) : [])
         setSessions(sessionList)
-        // Auto-select: prefer active sessions, then most recently active.
+        for (const s of sessionList) knownSessionIdsRef.current.add(s.id)
+        if (selectedSessionIdRef.current) {
+          // A list while a session is shown: the stream reconnected (hub restart). The server replays every
+          // session's events right after it, so drop the buffers instead of appending the replay to them (nothing
+          // drawn twice) and let the visualizer rebuild the shown session from the replay. The selection stays
+          // (spec 0.9.8 AC6: the view does not jump).
+          sessionEventsRef.current.clear()
+          pendingEventsRef.current.length = 0
+          sessionSwitchPendingRef.current = true
+          setReplayRevision(v => v + 1)
+          return
+        }
+        // Auto-select: the most recent active session; never a stale cloud one (lib/session-list.ts).
         // Only set selection — useLayoutEffect handles flushing events.
-        if (!selectedSessionIdRef.current && sessionList.length > 0) {
-          const sorted = [...sessionList].sort((a, b) => {
-            const aActive = a.status === 'active' ? 1 : 0
-            const bActive = b.status === 'active' ? 1 : 0
-            if (aActive !== bActive) return bActive - aActive
-            return b.lastActivityTime - a.lastActivityTime
-          })
-          const autoId = sorted[0].id
+        const autoId = initialSelection(sessionList, Date.now())
+        if (autoId) {
           sessionSwitchPendingRef.current = true
           pendingEventsRef.current.length = 0
           selectedSessionIdRef.current = autoId
@@ -238,23 +263,19 @@ export function useVSCodeBridge(): BridgeHookResult {
         }
       } else if (type === 'started') {
         const session = data as SessionInfo
-        // Resume after inactivity re-sends 'started' for a session we may already
-        // be showing. Re-arming the switch for the same id would set
-        // sessionSwitchPendingRef without anything ever clearing it (the layout
-        // effect only runs when the selection changes), freezing event delivery.
-        const alreadySelected = session.id === selectedSessionIdRef.current
-        setSessions(prev => {
-          const existing = prev.find(s => s.id === session.id)
-          if (existing) {
-            // Session resumed after inactivity — mark active again (a cloud session also takes the message's
-            // stale flag: a resumed source is live again)
-            return prev.map(s => s.id === session.id
-              ? withCloudUpdate({ ...s, status: 'active' as const, lastActivityTime: Date.now() }, session)
-              : s)
-          }
-          return [...prev, session]
+        if (!session || typeof session.id !== 'string') return
+        // A replay (hub restart, 409 epoch) or a stale session never moves the view, and a known id is updated in
+        // place, never doubled (spec 0.9.8 item 8). Re-arming the switch for the already-selected id would set
+        // sessionSwitchPendingRef without anything ever clearing it (the layout effect only runs when the
+        // selection changes), freezing event delivery: applySessionStarted never selects it.
+        const result = applySessionStarted(sessionsRef.current, session, {
+          selectedId: selectedSessionIdRef.current,
+          known: knownSessionIdsRef.current,
+          now: Date.now(),
         })
-        if (alreadySelected) return
+        knownSessionIdsRef.current.add(session.id)
+        setSessions(result.sessions)
+        if (!result.select) return
         // Auto-select newly started session.
         // Set switch-pending flag to prevent the animation frame from processing
         // events in the wrong simulation state before useLayoutEffect swaps it.
@@ -262,6 +283,26 @@ export function useVSCodeBridge(): BridgeHookResult {
         pendingEventsRef.current.length = 0
         selectedSessionIdRef.current = session.id
         setSelectedSessionId(session.id)
+      } else if (type === 'removed') {
+        // Hub retired or evicted a cloud session (spec 0.9.8 item 6): it leaves the list and its buffer; the view
+        // moves to the most recent active session, or to no selection (the empty state).
+        const sessionId = data as string
+        const result = applySessionRemoved(sessionsRef.current, sessionId, selectedSessionIdRef.current, Date.now())
+        setSessions(result.sessions)
+        sessionEventsRef.current.delete(sessionId)
+        dismissedSessionsRef.current.delete(sessionId)
+        setSessionsWithActivity(prev => {
+          if (!prev.has(sessionId)) return prev
+          const next = new Set(prev)
+          next.delete(sessionId)
+          return next
+        })
+        if (!result.selectionChanged) return
+        pendingEventsRef.current.length = 0
+        // With no next session nothing is flushed, so nothing would clear the pending flag: only set it for a switch
+        sessionSwitchPendingRef.current = result.selectedId !== null
+        selectedSessionIdRef.current = result.selectedId
+        setSelectedSessionId(result.selectedId)
       } else if (type === 'updated') {
         const update = data as SessionUpdate
         const { sessionId, label, projectId, prompt, coordinator } = update
@@ -293,7 +334,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       unsubSession()
       unsubOffboarded()
     }
-  }, [applyOffboarded])
+  }, [applyOffboarded, setSessions])
 
   const consumeEvents = useCallback(() => {
     // Clear in-place so stale closures in animation callbacks
@@ -347,7 +388,7 @@ export function useVSCodeBridge(): BridgeHookResult {
       next.delete(sessionId)
       return next
     })
-  }, [])
+  }, [setSessions])
 
   const bridgeOpenFile = useCallback((filePath: string, line?: number) => {
     vscodeBridge?.openFile(filePath, line)
@@ -371,5 +412,6 @@ export function useVSCodeBridge(): BridgeHookResult {
     removeSession,
     offboardRevision,
     applyOffboarded,
+    replayRevision,
   }
 }

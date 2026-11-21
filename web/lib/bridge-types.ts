@@ -42,4 +42,14 @@ export interface SessionUpdate extends CloudFields {
   coordinator?: { name: string; role: string }
 }
 
+/**
+ * `session-removed` (hub intake, spec 0.9.8 item 5/6): a cloud session was retired or evicted. Arrives after its
+ * `session-ended`; never sent for a local session. The client drops it from the list; if it was selected, the view
+ * moves to the most recent active session (web/lib/session-list.ts applySessionRemoved).
+ */
+export interface SessionRemovedMessage {
+  type: 'session-removed'
+  sessionId: string
+}
+
 export type ConnectionStatus = 'connected' | 'disconnected' | 'watching'
