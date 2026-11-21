@@ -227,6 +227,24 @@ export function graphChange(prevId: string | null, nextId: string | null): 'clea
   return nextId !== prevId ? 'switch' : 'none'
 }
 
+/** What the graph keeps of a session it leaves: its drawing, and how many of its buffered events that drawing shows. */
+export interface CachedGraph<S> {
+  snapshot: S
+  eventCount: number
+}
+
+/**
+ * The cache entry for the session the graph leaves (index.tsx layout effect, QA N1). Coming back restores the
+ * snapshot and draws only the events buffered after `eventCount`. Null (forget it; the next visit rebuilds the session
+ * from its whole buffer) when `undrawn`: its events were handed to the simulation but no animation frame took them
+ * yet, so the snapshot does not show them, and counting them as shown would skip them for good. That is the page
+ * loaded a few seconds after a session started: the session is auto-selected from session-list and flushed, and in
+ * the same React commit the team panel's project (another one, with a listed session) moves the view away.
+ */
+export function cacheOnLeave<S>(snapshot: S, eventCount: number, undrawn: boolean): CachedGraph<S> | null {
+  return undrawn ? null : { snapshot, eventCount }
+}
+
 export interface RemovedResult {
   sessions: SessionInfo[]
   /** The selection after the removal (unchanged unless the removed session was selected). */
