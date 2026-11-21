@@ -488,6 +488,10 @@ interface CloudSession {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Retired (spec 0.9.8 item 2): ended, its sub-agents finished and `session-removed` sent. Kept for the offboard
+   *  endpoints and auto offboarding, but left out of the session list and the replay. Cleared when its source sends
+   *  anything about it again (the session is announced afresh then). */
+  retired?: boolean
 }
 
 /** Messages the intake hands over, already shape-checked and capped by the caller (app/src/team/ingest.ts). */
@@ -632,14 +636,77 @@ function trimCloudBuffers(s: CloudSession): void {
   }
 }
 
-/** Remove a cloud session with its buffer and agents. Viewers are told it ended if it was still active. */
+/** `time` of the last buffered event of a session (hub-made events keep the session's clock), else 0. */
+function lastEventTime(sessionId: string): number {
+  const buf = eventBuffer.get(sessionId)
+  const t = buf && buf.length ? buf[buf.length - 1].time : 0
+  return typeof t === 'number' && Number.isFinite(t) ? t : 0
+}
+
+/** Finish one sub-agent of a cloud session on the hub: an `agent_complete` like a received one (finishedAt and
+ *  autoOffboardAt added by broadcastEvent). `sessionEnded`: finished because its session or container ended. */
+function finishCloudAgent(s: CloudSession, name: string, sessionEnded: boolean): void {
+  broadcastEvent({
+    time: lastEventTime(s.id), type: 'agent_complete',
+    payload: sessionEnded ? { name, sessionEnded: true } : { name },
+    sessionId: s.id,
+  })
+}
+
+/**
+ * The cloud counterpart of finishRunningSubagents (spec 0.9.8 item 3): every sub-agent of the session still running
+ * on the graph gets an `agent_complete` with `sessionEnded: true`, so the offboard endpoints, auto offboarding and
+ * the UI see it finished. Returns how many were finished.
+ */
+function finishCloudSubagents(s: CloudSession): number {
+  const names = graphAgents.runningSubagents(s.id)
+  for (const name of names) finishCloudAgent(s, name, true)
+  return names.length
+}
+
+/**
+ * Retire a cloud session (spec 0.9.8 items 2, 3, 5): its running sub-agents are finished, it ends (`session-ended`
+ * when it was active) and viewers get `session-removed`. It stays known to the graph (offboarding, auto offboarding)
+ * but no longer appears in the session list or the replay. Nothing is sent for one retired already.
+ */
+function retireCloudSession(s: CloudSession): boolean {
+  if (s.retired) return false
+  finishCloudSubagents(s)
+  if (s.status === 'active') {
+    s.status = 'completed'
+    broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
+  }
+  s.retired = true
+  broadcast(JSON.stringify({ type: 'session-removed', sessionId: s.id }))
+  return true
+}
+
+/** Retire every session of a source (a newer source of the same project went live). Returns how many. */
+function retireCloudSource(sourceId: string): number {
+  let n = 0
+  for (const s of [...cloudSessions.values()]) if (s.sourceId === sourceId && retireCloudSession(s)) n++
+  return n
+}
+
+/** Finish the running sub-agents of every session of a source (stale longer than CLOUD_RETIRE_AFTER_MS). */
+function finishCloudSource(sourceId: string): number {
+  let n = 0
+  for (const s of [...cloudSessions.values()]) if (s.sourceId === sourceId) n += finishCloudSubagents(s)
+  return n
+}
+
+/**
+ * Remove a cloud session with its buffer and agents. Like a retirement first (spec 0.9.8 items 3 and 5): running
+ * sub-agents finished, `session-ended` if it was still active, then `session-removed` (unless it was retired
+ * already, which sent both).
+ */
 function evictCloudSession(s: CloudSession): void {
+  retireCloudSession(s)
   cloudSessions.delete(s.id)
   eventBuffer.delete(s.id)
   cloudTotalBytes -= cloudBuffers.get(s.id)?.total ?? 0
   cloudBuffers.delete(s.id)
   graphAgents.forget(s.id)
-  if (s.status === 'active') broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
   if (verbose) cloudLog.line('cloud-evict', s.sourceId, `[cloud] evicted session ${s.id.slice(0, SESSION_ID_DISPLAY)} of ${s.sourceId}`)
 }
 
@@ -656,7 +723,8 @@ function makeCloudRoom(sessionIds: string[], leaving?: string): boolean {
   if (leaving !== undefined) for (const s of cloudSessions.values()) if (s.sourceId === leaving) goingAway++
   const need = cloudSessions.size - goingAway + fresh.size - cloudLimits.maxSessions
   if (need <= 0) return true
-  const rank = (s: CloudSession) => (staleSources.has(s.sourceId) ? (s.status === 'completed' ? 0 : 1) : 2)
+  // Retired sessions (no longer listed anywhere) go first.
+  const rank = (s: CloudSession) => (s.retired ? -1 : staleSources.has(s.sourceId) ? (s.status === 'completed' ? 0 : 1) : 2)
   const candidates = [...cloudSessions.values()]
     .filter((s) => s.sourceId !== leaving && (s.status === 'completed' || staleSources.has(s.sourceId)))
     .sort((a, b) => rank(a) - rank(b)
@@ -712,12 +780,16 @@ function claimCloudSession(sessionId: string, sourceId: string, projectId: strin
 function applyCloudMessages(sourceId: string, projectId: string, messages: CloudMessage[]): { applied: number; ignored: number } {
   let applied = 0
   let ignored = 0
+  // A retired session its source talks about again is back: announced afresh (session-started), like a new one.
+  const fresh = (id: string) => !cloudSessions.has(id) || cloudSessions.get(id)!.retired === true
+  const revive = (s: CloudSession) => { if (s.retired) s.retired = false }
   for (const m of messages) {
     const now = Date.now()
     if (m.type === 'session-started') {
       const isNew = !cloudSessions.has(m.session.id)
       const s = claimCloudSession(m.session.id, sourceId, projectId, now)
       if (!s) { ignored++; continue }
+      revive(s)
       s.label = m.session.label
       s.prompt = m.session.prompt
       s.coordinator = m.session.coordinator
@@ -727,9 +799,10 @@ function applyCloudMessages(sourceId: string, projectId: string, messages: Cloud
       broadcast(JSON.stringify({ type: 'session-started', session: cloudView(s) }))
       applied++
     } else if (m.type === 'session-updated') {
-      const isNew = !cloudSessions.has(m.sessionId)
+      const isNew = fresh(m.sessionId)
       const s = claimCloudSession(m.sessionId, sourceId, projectId, now)
       if (!s) { ignored++; continue }
+      revive(s)
       s.label = m.label
       s.prompt = m.prompt
       s.coordinator = m.coordinator
@@ -740,14 +813,16 @@ function applyCloudMessages(sourceId: string, projectId: string, messages: Cloud
       const s = cloudSessions.get(m.sessionId)
       if (!s || s.sourceId !== sourceId) { ignored++; continue }
       s.status = 'completed'
-      broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
+      // A retired session ended already as far as viewers know; it stays removed.
+      if (!s.retired) broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
       applied++
     } else {
       const events = m.type === 'agent-event' ? [m.event] : m.events
       for (const event of events) {
-        const isNew = !cloudSessions.has(event.sessionId)
+        const isNew = fresh(event.sessionId)
         const s = claimCloudSession(event.sessionId, sourceId, projectId, now)
         if (!s) { ignored++; continue }
+        revive(s)
         // A session that was only seen through its events (e.g. the hub restarted) is announced first.
         if (isNew) broadcast(JSON.stringify({ type: 'session-started', session: cloudView(s) }))
         s.lastActivityTime = now
@@ -763,7 +838,29 @@ function setCloudSourceStale(sourceId: string, stale: boolean): void {
   if (staleSources.has(sourceId) === stale) return
   if (stale) { staleSources.add(sourceId); staleSince.set(sourceId, Date.now()) }
   else { staleSources.delete(sourceId); staleSince.delete(sourceId) }
-  for (const s of cloudSessions.values()) if (s.sourceId === sourceId) broadcastCloudUpdated(s)
+  for (const s of cloudSessions.values()) if (s.sourceId === sourceId && !s.retired) broadcastCloudUpdated(s)
+}
+
+/** The source now belongs to another hub project (it reported another project id). */
+function moveCloudSource(sourceId: string, projectId: string): void {
+  for (const s of cloudSessions.values()) {
+    if (s.sourceId !== sourceId || s.projectId === projectId) continue
+    s.projectId = projectId
+    if (!s.retired) broadcastCloudUpdated(s)
+  }
+}
+
+/** Finish a running sub-agent of a cloud session (true when it was running and is finished now). `orphanedOnly`:
+ *  only when its source is stale or the session retired (its container no longer reports). */
+function finishCloudAgentIfRunning(sessionId: string, name: string, orphanedOnly: boolean): boolean {
+  const s = cloudSessions.get(sessionId)
+  if (!s) return false
+  const orphaned = staleSources.has(s.sourceId) || s.retired === true
+  if (orphanedOnly && !orphaned) return false
+  const agent = graphAgents.agent(sessionId, name)
+  if (!agent || agent.isMain || agent.status !== 'running') return false
+  finishCloudAgent(s, name, orphaned)
+  return true
 }
 
 // ─── Discovery file ─────────────────────────────────────────────────────────
@@ -818,8 +915,18 @@ export interface CloudIntake {
    *  when not enough sessions can be evicted (nothing is evicted then): the caller refuses the request. `leaving`:
    *  a source the caller removes right after, whose sessions count as room. */
   makeRoom(sessionIds: string[], leaving?: string): boolean
-  /** Forget every session (and buffer) of a source the hub removed. */
+  /** Forget every session (and buffer) of a source the hub removed. Each one is retired first (sub-agents finished,
+   *  `session-ended`, `session-removed`). */
   forgetSource(sourceId: string): void
+  /** Retire every session of a source (spec 0.9.8 item 2): running sub-agents finished, `session-ended`, then
+   *  `session-removed`; left out of the session list and replay from then on. Returns how many were retired. */
+  retireSource(sourceId: string): number
+  /** Finish the running sub-agents of every session of a source (spec 0.9.8 item 3). Returns how many. */
+  finishSource(sourceId: string): number
+  /** Finish one running sub-agent of a cloud session (spec 0.9.8 item 4); false when it is not running there. */
+  finishAgent(sessionId: string, agent: string): boolean
+  /** The source's sessions now belong to hub project `projectId` (it reported another project id). */
+  moveSource(sourceId: string, projectId: string): void
   /** Tell open graph streams that GET /api/team/projects changed (`projects-changed`). */
   announceProjectsChanged(): void
 }
@@ -974,7 +1081,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
-      for (const s of cloudSessions.values()) sessionList.push(cloudView(s))
+      // Retired cloud sessions were removed from every viewer (session-removed): not listed, not replayed.
+      for (const s of cloudSessions.values()) if (!s.retired) sessionList.push(cloudView(s))
       if (sessionList.length > 0) {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
@@ -1020,6 +1128,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       agents: (sessionId) => (sessions.has(sessionId) || cloudSessions.has(sessionId) ? graphAgents.agents(sessionId) : null),
       sessionProject: (sessionId) => sessionProjects.get(sessionId)?.id || cloudSessions.get(sessionId)?.projectId || null,
       announceOffboarded,
+      finishOrphaned: (sessionId, agent) => finishCloudAgentIfRunning(sessionId, agent, true),
       sessions: () => [...sessions.keys(), ...cloudSessions.keys()],
       onAgentsChanged: (listener) => {
         agentsChangedListeners.add(listener)
@@ -1033,6 +1142,10 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       sourceOf: (sessionId) => cloudSessions.get(sessionId)?.sourceId ?? null,
       makeRoom: makeCloudRoom,
       forgetSource: forgetCloudSource,
+      retireSource: retireCloudSource,
+      finishSource: finishCloudSource,
+      finishAgent: (sessionId, agent) => finishCloudAgentIfRunning(sessionId, agent, false),
+      moveSource: moveCloudSource,
       announceProjectsChanged: () => broadcast(JSON.stringify({ type: 'projects-changed' })),
     },
 

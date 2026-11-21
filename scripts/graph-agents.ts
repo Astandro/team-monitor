@@ -163,6 +163,12 @@ export interface GraphView {
   sessionProject(sessionId: string): string | null
   /** Tell open graph streams that these agents were offboarded (`agents-offboarded` message). */
   announceOffboarded(sessionId: string, agents: string[]): void
+  /**
+   * Spec 0.9.8 (AC4): a sub-agent still `running` in a cloud session whose container no longer reports (source
+   * stale, or the session retired) is finished on the hub first (`agent_complete`, `sessionEnded: true`), so it can
+   * be offboarded. True when it was finished now; false for local sessions, live sources and agents not running.
+   */
+  finishOrphaned?(sessionId: string, agent: string): boolean
 }
 
 /** What the auto offboarder needs on top of `GraphView` (implemented by the relay; spec ui-cleanup item 6). */

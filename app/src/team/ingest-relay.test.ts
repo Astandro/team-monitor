@@ -44,7 +44,8 @@ after(async () => {
 const TOKEN = 'ef'.repeat(32)
 const SRC = 'cloud-box-7'
 const OTHER = 'cloud-box-8'
-const PID = `cloud-${SRC}`
+/** Hub project of the repo (`project.id` "repo"; spec 0.9.8 item 1: one hub project per repo, not per source). */
+const PID = 'cloud-repo'
 const S = '5a6b7c8d-0000-4000-8000-0000000000c1'
 const HIRO = 'Hiro (Frontend Engineer): panel'
 

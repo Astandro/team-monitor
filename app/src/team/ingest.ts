@@ -21,11 +21,15 @@
  *   503 when not enough can be).
  * - Events go into the relay as cloud sessions (scripts/relay.ts): same buffer, replay, offboarding and auto
  *   offboarding as local sessions; session list entries and lifecycle messages carry origin/sourceId/stale.
- * - State is mirrored to `<team home>/remote/<sourceId>/.agent-team/` (atomic writes) and that folder is registered
- *   at runtime as project `cloud-<sourceId>`. Answers and chat messages written there by the existing endpoints are
- *   what the outbox returns.
+ * - State is mirrored to `<team home>/remote/<sourceId>/.agent-team/` (atomic writes). Every source of the same repo
+ *   (same `project.id`) belongs to one hub project `cloud-<project.id>` (spec 0.9.8 item 1), registered at runtime;
+ *   it shows the mirror of one of them (the newest live source, else the one seen last). Answers and chat messages
+ *   written there by the existing endpoints are what that source's outbox returns.
  * - A source with no request for 60 s is stale; the next request makes it live again. At start, mirrors with no
  *   request for 24 hours are removed (also while running) and the others come back as stale projects.
+ * - Spec 0.9.8 items 2-3: when a new source of a project registers, the project's stale sources are retired (their
+ *   sessions end, running sub-agents finish, viewers get `session-removed`). A source silent for longer than
+ *   CLOUD_RETIRE_AFTER_MS (default 10 minutes, env CLOUD_RETIRE_AFTER_MS) gets its running sub-agents finished.
  * - Everything received is untrusted data: size-capped while reading, shape-checked, and never used in a path
  *   except the validated sourceId (the answer and inbox names the outbox lists come from this machine's disk and
  *   are matched against their patterns).
@@ -56,6 +60,18 @@ export const MAX_MESSAGES = 500
 export const MAX_BATCH_EVENTS = 5000
 export const MAX_STATE_BODY_BYTES = 1024 * 1024
 export const STALE_AFTER_MS = 60_000
+/** A source silent this long (counted from its last request) gets the running sub-agents of its sessions finished
+ *  (spec 0.9.8 item 3). Overridden by the env var of the same name (milliseconds, a whole number > 0). */
+export const CLOUD_RETIRE_AFTER_MS = 10 * 60_000
+export const CLOUD_RETIRE_AFTER_ENV = 'CLOUD_RETIRE_AFTER_MS'
+
+/** CLOUD_RETIRE_AFTER_MS from the environment, or the default when unset or not a whole number > 0. */
+export function cloudRetireAfterMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[CLOUD_RETIRE_AFTER_ENV]
+  if (raw === undefined || !/^[0-9]{1,12}$/.test(raw.trim())) return CLOUD_RETIRE_AFTER_MS
+  const n = Number(raw.trim())
+  return n > 0 ? n : CLOUD_RETIRE_AFTER_MS
+}
 /** A source silent this long is removed with its mirror (at start and by the stale sweep). */
 export const MIRROR_MAX_IDLE_MS = 24 * 60 * 60 * 1000
 export const MAX_OUTBOX_WAIT_S = 25
@@ -375,9 +391,9 @@ function sameHash(a: string, b: string): boolean {
 
 interface Source {
   id: string
-  /** Hub registry id: `cloud-<sourceId>`. */
+  /** Hub registry id of its project: `cloud-<remoteProjectId>`, shared by every source of the same repo. */
   projectId: string
-  /** The project id the container reported (informational). */
+  /** The project id the container reported. */
   remoteProjectId: string
   name: string
   root: string
@@ -385,6 +401,10 @@ interface Source {
   lastSeq: number
   lastSeen: number
   stale: boolean
+  /** When it last turned live (registered, or a request after being stale); the newest live source is shown. */
+  liveSince: number
+  /** Its running sub-agents were finished for silence (CLOUD_RETIRE_AFTER_MS); cleared when it is live again. */
+  subagentsFinished: boolean
   /** sha256 of the source key bound to this sourceId; null until the first request with a key (old mirrors). */
   keyHash: string | null
   lastTouch: number
@@ -422,6 +442,8 @@ export interface IngestOptions {
   maxTombstones?: number
   /** Default UNBOUND_EVICT_MS. */
   unboundEvictMs?: number
+  /** Default: env CLOUD_RETIRE_AFTER_MS, else CLOUD_RETIRE_AFTER_MS (10 minutes). */
+  cloudRetireAfterMs?: number
 }
 
 export class IngestService implements IngestHandler {
@@ -438,6 +460,7 @@ export class IngestService implements IngestHandler {
   private readonly maxSources: number
   private readonly maxWaiters: number
   private readonly unboundEvictMs: number
+  readonly retireAfterMs: number
   /** Changes at every start: a cursor from before a restart reads as "from the beginning", and a forwarder that sees
    *  a new epoch (EPOCH_HEADER) sends its sessions and their history again. */
   readonly epoch = crypto.randomBytes(4).toString('hex')
@@ -470,7 +493,41 @@ export class IngestService implements IngestHandler {
     this.maxSources = opts.maxSources ?? MAX_SOURCES
     this.maxWaiters = opts.maxOutboxWaiters ?? MAX_OUTBOX_WAITERS
     this.unboundEvictMs = opts.unboundEvictMs ?? UNBOUND_EVICT_MS
-    this.team.cloudStale = (sourceId) => this.sources.get(sourceId)?.stale ?? true
+    this.retireAfterMs = opts.cloudRetireAfterMs ?? cloudRetireAfterMs()
+    // A project is stale only when every source of it is.
+    this.team.cloudStale = (sourceId) => {
+      const src = this.sources.get(sourceId)
+      return src ? this.membersOf(src.projectId).every((s) => s.stale) : true
+    }
+  }
+
+  /** The sources of one hub project. */
+  private membersOf(projectId: string): Source[] {
+    return [...this.sources.values()].filter((s) => s.projectId === projectId)
+  }
+
+  /**
+   * Keep a hub project pointed at the right mirror (spec 0.9.8 item 1). `prefer`: a source that just registered live
+   * (it is shown from now on). Otherwise the shown source stays while it is live; when it is stale or gone, the best
+   * other one is shown (live first, the newest to turn live; else the one seen last). No source left: the project
+   * leaves the list.
+   */
+  private updateProject(projectId: string, prefer?: Source): void {
+    const members = this.membersOf(projectId)
+    if (!members.length) { this.team.removeCloudProject(projectId); return }
+    const shownId = this.team.cloudSourceOf(projectId)
+    const shown = members.find((s) => s.id === shownId)
+    const better = (a: Source, b: Source) => (a.stale !== b.stale ? (a.stale ? b : a)
+      : !a.stale ? (b.liveSince > a.liveSince ? b : a) : (b.lastSeen > a.lastSeen ? b : a))
+    let next = shown
+    if (prefer && !prefer.stale) next = prefer
+    else if (!shown || shown.stale) next = members.reduce(better)
+    if (!next) return
+    if (!this.team.isCloudProject(projectId)) {
+      this.team.addCloudProject({ id: projectId, name: next.name, path: next.root }, next.id)
+      return
+    }
+    if (next !== shown) this.team.setCloudProjectSource(projectId, next.root, next.id)
   }
 
   /** The relay's cloud intake (server.ts, once the relay runs). Until then the events route answers 503. */
@@ -541,8 +598,9 @@ export class IngestService implements IngestHandler {
     for (const finish of [...this.waiters]) finish()
   }
 
-  /** Mark sources with no request for `staleMs` as stale and tell the relay and the open streams; remove sources
-   *  silent for longer than the mirror idle limit (24 hours) with their mirror. */
+  /** Mark sources with no request for `staleMs` as stale and tell the relay and the open streams; finish the running
+   *  sub-agents of sources silent for longer than `retireAfterMs`; remove sources silent for longer than the mirror
+   *  idle limit (24 hours) with their mirror. */
   sweep(): void {
     const now = this.now()
     let changed = false
@@ -553,9 +611,15 @@ export class IngestService implements IngestHandler {
         continue
       }
       const stale = now - s.lastSeen > this.staleMs
+      if (stale && !s.subagentsFinished && now - s.lastSeen > this.retireAfterMs && this.relay) {
+        s.subagentsFinished = true
+        const n = this.relay.finishSource(s.id)
+        if (n) this.limitedLog.line('finish-silent', s.id, `[ingest] source ${s.id} silent for ${Math.round((now - s.lastSeen) / 1000)} s: ${n} running sub-agent(s) finished`)
+      }
       if (stale === s.stale) continue
       s.stale = stale
       this.relay?.setStale(s.id, stale)
+      this.updateProject(s.projectId)
       changed = true
     }
     this.tombstones.flush()
@@ -676,8 +740,9 @@ export class IngestService implements IngestHandler {
     const sessionCap = () => new IngestError(503, 'hub at capacity: the cloud session limit is reached and not enough ended or stale sessions can be evicted; retry later',
       `cloud session cap reached, events of ${input.sourceId} not applied`, CAPACITY_RETRY_S, 'capacity-sessions')
     let src = this.sources.get(input.sourceId)
+    const isNew = !src
     if (!src) {
-      const victim = this.roomForSource(input.sourceId)
+      const victim = this.roomForSource(input.sourceId, input.project)
       if (!relay.makeRoom(IngestService.sessionIdsOf(input.messages), victim?.id)) throw sessionCap()
       src = this.touch(input.sourceId, input.project, keyHash, victim)
     } else {
@@ -693,21 +758,30 @@ export class IngestService implements IngestHandler {
       applied += r.applied
       ignored += r.ignored
     }
+    // After its own sessions are on the graph, so a viewer whose selected session is removed can move to the new one.
+    if (isNew) this.retireStaleSiblings(src)
     sendJSON(res, 200, { ok: true, seq: input.seq, applied, ignored })
   }
 
-  /** The source offboarded these agents: record them in this monitor's store too (finished agents only). */
+  /**
+   * The source offboarded these agents: record them in this monitor's store too. The container only offboards
+   * finished agents, so one still running here (its completion never arrived) is finished first (spec 0.9.8 item 4).
+   * Any other refusal (unknown agent, the Orchestrator, a failed save) is logged, one line per source per minute.
+   */
   private offboardRemote(src: Source, session: string, agents: string[]): { applied: number; ignored: number } {
     let applied = 0
     let ignored = 0
+    const relay = this.relay
     for (const agent of agents) {
-      if (!this.team.offboard || this.relay?.sourceOf(session) !== src.id) { ignored++; continue }
+      if (!this.team.offboard || !relay || relay.sourceOf(session) !== src.id) { ignored++; continue }
       try {
-        offboardAgent(this.team.offboard, this.team.graph, { session, agent })
+        offboardAgent(this.team.offboard, this.team.graph, { session, agent }, undefined, (s, a) => relay.finishAgent(s, a))
         applied++
       } catch (e) {
         if (!(e instanceof OffboardError)) throw e
         ignored++
+        this.limitedLog.line('offboard-remote', src.id,
+          `[ingest] offboarding from ${src.id} not applied (${e.status}): ${e.message}${e.detail ? ` (${e.detail})` : ''}`)
       }
     }
     return { applied, ignored }
@@ -716,7 +790,9 @@ export class IngestService implements IngestHandler {
   private async handleState(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const input = parseStateBody(await this.readJson(req, MAX_STATE_BODY_BYTES))
     const keyHash = this.checkSourceKey(req, input.sourceId)
+    const isNew = !this.sources.has(input.sourceId)
     const src = this.touch(input.sourceId, input.project, keyHash)
+    if (isNew) this.retireStaleSiblings(src)
     const stateFile = path.join(src.teamDir, 'state.json')
     if (input.state === null) {
       unlinkFile(stateFile)
@@ -857,7 +933,7 @@ export class IngestService implements IngestHandler {
     let changed = false
     if (!src) {
       try {
-        src = this.register(sourceId, project, false, this.now(), keyHash, victim === undefined ? this.roomForSource(sourceId) : victim)
+        src = this.register(sourceId, project, false, this.now(), keyHash, victim === undefined ? this.roomForSource(sourceId, project) : victim)
         // Its source.json holds the binding again; the tombstone goes once that is written.
         if (src.lastTouch === src.lastSeen) this.tombstones.remove(sourceId)
       } finally {
@@ -868,9 +944,21 @@ export class IngestService implements IngestHandler {
       src.keyHash = keyHash
       src.lastTouch = 0 // write source.json (with the bound key's hash) now
     }
-    if (src.name !== project.name || src.remoteProjectId !== project.id) {
-      src.name = project.name
+    if (src.remoteProjectId !== project.id) {
+      // Another repo now: the source moves to that repo's hub project (refused first if a local project has its id).
+      const to = IngestService.hubProjectId(project.id)
+      this.checkHubProjectId(to)
+      const from = src.projectId
       src.remoteProjectId = project.id
+      src.projectId = to
+      this.relay?.moveSource(src.id, to)
+      this.updateProject(from)
+      this.updateProject(to, src.stale ? undefined : src)
+      src.lastTouch = 0
+      changed = true
+    }
+    if (src.name !== project.name) {
+      src.name = project.name
       this.team.renameCloudProject(src.projectId, project.name)
       src.lastTouch = 0 // rewrite source.json now
       changed = true
@@ -887,9 +975,39 @@ export class IngestService implements IngestHandler {
     if (now - src.lastTouch >= SOURCE_TOUCH_MS) this.writeSourceFile(src)
     if (!src.stale) return false
     src.stale = false
+    src.liveSince = now
+    src.subagentsFinished = false
     this.relay?.setStale(src.id, false)
+    this.updateProject(src.projectId)
     this.relay?.announceProjectsChanged()
     return true
+  }
+
+  /** The hub project of a reported project id (spec 0.9.8 item 1). */
+  static hubProjectId(remoteProjectId: string): string {
+    return `cloud-${remoteProjectId}`
+  }
+
+  /** 409 when a local project already has this hub project id. */
+  private checkHubProjectId(projectId: string): void {
+    if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
+      throw new IngestError(409, `a local project already has the id ${projectId}`)
+    }
+  }
+
+  /**
+   * Spec 0.9.8 item 2: a new source of a project went live, so the project's stale sources are retired: every
+   * session of theirs ends, its running sub-agents finish and viewers get `session-removed`. The sources themselves
+   * (mirror, key binding) stay until the usual 24 hour idle removal; one that reports again is live as before.
+   */
+  private retireStaleSiblings(src: Source): void {
+    const relay = this.relay
+    if (!relay) return
+    for (const s of this.membersOf(src.projectId)) {
+      if (s === src || !s.stale) continue
+      const n = relay.retireSource(s.id)
+      if (n) this.limitedLog.line('retire', s.id, `[ingest] source ${s.id} retired (${n} session(s)): ${src.id} of the same project went live`)
+    }
   }
 
   /** Remove a mirror folder (a plain directory under remoteDir only). True when it is gone. */
@@ -914,23 +1032,22 @@ export class IngestService implements IngestHandler {
     this.sources.delete(src.id)
     if (src.keyHash) this.tombstones.add(src.id, src.keyHash)
     this.relay?.forgetSource(src.id)
-    this.team.removeCloudProject(src.projectId)
+    // The project shows another source of it now, or leaves the list with its last source.
+    this.updateProject(src.projectId)
     this.removeMirror(src.root)
     this.limitedLog.line(`evict-${why}`, '', `[ingest] removed source ${src.id} (${why === 'idle' ? 'silent for more than 24 hours' : 'longest stale, room for a new source'})`)
   }
 
   /**
-   * Checks before a new source is registered, changing nothing: its project id is free, and there is room under the
+   * Checks before a new source is registered, changing nothing: its hub project id (`cloud-<project.id>`) is not a
+   * local project's, and there is room under the
    * source cap. Returns the source to evict for it (null: room without eviction). At the cap the source stale
    * longest is chosen; never a live one. A request for a sourceId that is not bound yet (no tombstone) may evict a
    * source with a bound key only once that source has been stale for UNBOUND_EVICT_MS (10 minutes); an unbound
    * (pre-key) mirror, or any stale source for a returning bound sourceId, as soon as it is stale. 503 otherwise.
    */
-  private roomForSource(sourceId: string): Source | null {
-    const projectId = `cloud-${sourceId}`
-    if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
-      throw new IngestError(409, `a local project already has the id ${projectId}`)
-    }
+  private roomForSource(sourceId: string, project: IngestProject): Source | null {
+    this.checkHubProjectId(IngestService.hubProjectId(project.id))
     if (this.sources.size < this.maxSources) return null
     const now = this.now()
     const returning = this.tombstones.get(sourceId) !== null
@@ -949,10 +1066,8 @@ export class IngestService implements IngestHandler {
 
   /** Register a source; `victim` (from roomForSource) is evicted first. */
   private register(sourceId: string, project: IngestProject, stale: boolean, lastSeen: number, keyHash: string | null, victim: Source | null): Source {
-    const projectId = `cloud-${sourceId}`
-    if (this.team.watcher(projectId) && !this.team.isCloudProject(projectId)) {
-      throw new IngestError(409, `a local project already has the id ${projectId}`)
-    }
+    const projectId = IngestService.hubProjectId(project.id)
+    this.checkHubProjectId(projectId)
     if (victim) this.evictSource(victim, 'capacity')
     if (this.sources.size >= this.maxSources) throw new IngestError(503, `hub at capacity: ${this.maxSources} sources; retry later`, undefined, CAPACITY_RETRY_S)
     ensurePlainDir(this.remoteDir)
@@ -962,10 +1077,11 @@ export class IngestService implements IngestHandler {
     ensurePlainDir(teamDir)
     const src: Source = {
       id: sourceId, projectId, remoteProjectId: project.id, name: project.name, root, teamDir,
-      lastSeq: -1, lastSeen, stale, keyHash, lastTouch: stale ? lastSeen : 0, lastWatcherKey: null, outbox: [], outboxSeen: new Set(),
+      lastSeq: -1, lastSeen, stale, liveSince: lastSeen, subagentsFinished: false, keyHash, lastTouch: stale ? lastSeen : 0,
+      lastWatcherKey: null, outbox: [], outboxSeen: new Set(),
     }
     this.sources.set(sourceId, src)
-    this.team.addCloudProject({ id: projectId, name: project.name, path: root }, sourceId)
+    this.updateProject(projectId, stale ? undefined : src)
     if (!stale) this.writeSourceFile(src)
     return src
   }
