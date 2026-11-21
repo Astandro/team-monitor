@@ -30,7 +30,7 @@ import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { sessionsForProject } from "@/lib/session-filter"
-import { graphChange, listSessions, replacementInProject, selectionForProject } from "@/lib/session-list"
+import { cacheOnLeave, graphChange, listSessions, replacementInProject, selectionForProject } from "@/lib/session-list"
 import { agentIdentity, identityLine, parseCoordinator } from "@/lib/agent-identity"
 import { canOffboard, finishedSubAgents, offboardAgent, offboardAllFinished, type OffboardResult } from "@/lib/team/offboard"
 import type { PostFetch } from "@/lib/team/post"
@@ -81,6 +81,18 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     if (next !== undefined) selectSession(next)
   }, [listedSessions, visibleSessions, selectedSessionId, selectSession])
 
+  // The session whose flushed events no animation frame has taken yet (null: none). Leaving it then must not cache
+  // its snapshot as up to date (lib/session-list.ts cacheOnLeave, QA N1). Cleared when a frame takes the events.
+  const undrawnRef = useRef<string | null>(null)
+  const { consumeEvents, pendingEvents: bridgePending } = bridge
+  const onExternalEventsConsumed = useCallback(() => {
+    undrawnRef.current = null
+    consumeEvents()
+  }, [consumeEvents])
+  const noteFlushed = useCallback((sid: string) => {
+    undrawnRef.current = bridgePending.length > 0 ? sid : null
+  }, [bridgePending])
+
   const {
     frameRef,
     agents,
@@ -106,7 +118,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
   } = useAgentSimulation({
     useMockData: bridge.useMockData,
     externalEvents: bridge.pendingEvents,
-    onExternalEventsConsumed: bridge.consumeEvents,
+    onExternalEventsConsumed,
     sessionFilter: bridge.selectedSessionId,
     // Pass the ref that's updated synchronously in session-started handler,
     // so the animation frame never uses a stale filter value.
@@ -174,6 +186,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
       // cached snapshots are stale, and the graph must not keep drawing the session that is gone (empty state)
       sessionCacheRef.current.clear()
       prevSelectedRef.current = null
+      undrawnRef.current = null
       setIsReviewing(false)
       restart()
       return
@@ -181,12 +194,12 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     if (change === 'switch' && bridge.selectedSessionId) {
       // Review/scrub state is per-component, not per-session: the incoming tab is restored live
       setIsReviewing(false)
-      // Save outgoing session state (if any)
-      if (prevSelectedRef.current !== null) {
-        sessionCacheRef.current.set(prevSelectedRef.current, {
-          snapshot: saveSnapshot(),
-          eventCount: bridge.getSessionEventCount(prevSelectedRef.current),
-        })
+      // Save outgoing session state (if any); not when its flushed events were never drawn (QA N1)
+      const prev = prevSelectedRef.current
+      if (prev !== null) {
+        const entry = cacheOnLeave(saveSnapshot(), bridge.getSessionEventCount(prev), undrawnRef.current === prev)
+        if (entry) sessionCacheRef.current.set(prev, entry)
+        else sessionCacheRef.current.delete(prev)
       }
 
       // Restore or cold-start the incoming session, then flush events.
@@ -200,10 +213,11 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
         restart()
         bridge.flushSessionEvents(bridge.selectedSessionId)
       }
+      noteFlushed(bridge.selectedSessionId)
 
       prevSelectedRef.current = bridge.selectedSessionId
     }
-  }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount])
+  }, [bridge.selectedSessionId, restart, bridge.flushSessionEvents, saveSnapshot, restoreSnapshot, bridge.getSessionEventCount, noteFlushed])
 
   // Offboarded agents (D22): their events are already out of the session buffer; rebuild the shown session
   // from it (same as a cold start), and forget the cached snapshot of any other session it touched.
@@ -217,6 +231,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     setIsReviewing(false)
     restart()
     bridge.flushSessionEvents(sid)
+    noteFlushed(sid)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
   }, [offboardRevision])
 
@@ -232,6 +247,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     setIsReviewing(false)
     restart()
     bridge.flushSessionEvents(sid)
+    noteFlushed(sid)
   // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per revision only
   }, [replayRevision])
 

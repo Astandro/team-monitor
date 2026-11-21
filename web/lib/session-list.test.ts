@@ -5,6 +5,8 @@ import {
   applySessionEnded,
   applySessionRemoved,
   applySessionStarted,
+  cacheOnLeave,
+  type CachedGraph,
   dedupeSessions,
   graphChange,
   historyToggleLabel,
@@ -371,4 +373,167 @@ test('first selection from a list: most recent active live session, never a stal
   assert.equal(initialSelection([cloud('dead', NOW - 30 * MIN, true)], NOW), null)
   assert.equal(initialSelection([cloud('blip', NOW - MIN, true)], NOW), 'blip', 'briefly stale and nothing live: shown')
   assert.equal(initialSelection([], NOW), null)
+})
+
+// ─── QA N1: page opened a few seconds after a project's only session started ─
+//
+// A model of the page with the same rules index.tsx and the bridge use: the selection fix for the panel's project
+// (selectionForProject), the graph change (graphChange), and the snapshot cache (cacheOnLeave). `drawn` is what the
+// simulation shows; `pending` is what was flushed to it and not yet taken by an animation frame (`frame`).
+
+interface PageModel {
+  sessions: SessionInfo[]
+  buffers: Map<string, string[]>
+  selected: string | null
+  prev: string | null
+  drawn: string[]
+  pending: string[]
+  undrawn: string | null
+  cache: Map<string, CachedGraph<string[]>>
+}
+
+const page = (sessions: SessionInfo[]): PageModel => ({
+  sessions,
+  buffers: new Map(sessions.map((s) => [s.id, [`${s.id}:orchestrator`, `${s.id}:sub-agent`]])),
+  selected: null, prev: null, drawn: [], pending: [], undrawn: null, cache: new Map(),
+})
+
+/** bridge.selectSession / auto-select, then the index.tsx layout effect in the same commit. */
+function select(p: PageModel, id: string | null): void {
+  p.pending = []
+  p.selected = id
+  const change = graphChange(p.prev, p.selected)
+  if (change === 'clear') {
+    p.cache.clear(); p.prev = null; p.undrawn = null; p.drawn = []
+    return
+  }
+  if (change !== 'switch' || !p.selected) return
+  if (p.prev !== null) {
+    const entry = cacheOnLeave([...p.drawn], p.buffers.get(p.prev)?.length ?? 0, p.undrawn === p.prev)
+    if (entry) p.cache.set(p.prev, entry)
+    else p.cache.delete(p.prev)
+  }
+  const buf = p.buffers.get(p.selected) ?? []
+  const cached = p.cache.get(p.selected)
+  p.drawn = cached ? [...cached.snapshot] : []
+  p.pending = buf.slice(cached ? cached.eventCount : 0)
+  p.undrawn = p.pending.length > 0 ? p.selected : null
+  p.prev = p.selected
+}
+
+/** The index.tsx effect that keeps the view inside the panel's project. */
+function panelProject(p: PageModel, projectId: string | null, now: number): void {
+  const visible = sessionsForProject(p.sessions, projectId)
+  const { listed } = listSessions(visible, { showHistory: false, now, selectedId: p.selected })
+  const next = selectionForProject(listed, visible, p.selected)
+  if (next !== undefined) select(p, next)
+}
+
+/** An animation frame takes the flushed events. */
+function frame(p: PageModel): void {
+  p.drawn.push(...p.pending)
+  p.pending = []
+  p.undrawn = null
+}
+
+const SEC = 1000
+// zeta's only session started 3 s ago; alpha (the panel's default: first project with a state) has a session that went
+// stale 9 min 53 s ago: still listed, not history yet.
+const zetaOnly = () => cloud('zeta1', NOW - 3 * SEC, false, { projectId: 'cloud-zeta' })
+const alphaBlip = () => cloud('alpha1', NOW - 9 * MIN - 53 * SEC, true, { projectId: 'cloud-alpha' })
+
+test('N1: page opened 3 s after the only session started, panel on another project first, then zeta picked: the session is drawn', () => {
+  const p = page([alphaBlip(), zetaOnly()])
+  // session-list + replay: the newest active session of any project is auto-selected and flushed
+  select(p, initialSelection(p.sessions, NOW))
+  assert.equal(p.selected, 'zeta1')
+  // same React commit, before any animation frame: the panel's project (alpha) moves the view to alpha's session
+  panelProject(p, 'cloud-alpha', NOW)
+  assert.equal(p.selected, 'alpha1')
+  frame(p)
+  // the owner picks zeta in the team panel
+  panelProject(p, 'cloud-zeta', NOW + 4 * SEC)
+  frame(p)
+  assert.equal(p.selected, 'zeta1')
+  assert.deepEqual(p.drawn, ['zeta1:orchestrator', 'zeta1:sub-agent'], 'not the empty state "Menunggu sesi agent"')
+})
+
+test('N1: leaving a session whose flushed events were not drawn yet forgets its snapshot; a drawn one is kept', () => {
+  assert.equal(cacheOnLeave(['x'], 2, true), null)
+  assert.deepEqual(cacheOnLeave(['x', 'y'], 2, false), { snapshot: ['x', 'y'], eventCount: 2 })
+})
+
+test('N1: page opened 35 s after the start (alpha now history, F3 clears the graph), or with a frame before the move: shown once', () => {
+  // 35 s later alpha1 is silent for over 10 minutes: alpha lists nothing, the selection is dropped (F3), graph cleared
+  const late = page([alphaBlip(), cloud('zeta1', NOW + 32 * SEC - 35 * SEC, false, { projectId: 'cloud-zeta' })])
+  select(late, initialSelection(late.sessions, NOW + 32 * SEC))
+  panelProject(late, 'cloud-alpha', NOW + 32 * SEC)
+  assert.equal(late.selected, null, 'nothing of zeta is shown under alpha (F3)')
+  assert.deepEqual(late.drawn, [])
+  panelProject(late, 'cloud-zeta', NOW + 36 * SEC)
+  frame(late)
+  assert.deepEqual(late.drawn, ['zeta1:orchestrator', 'zeta1:sub-agent'])
+
+  // a frame drew zeta before the panel moved away: its snapshot is kept, coming back draws only what came after
+  const p = page([alphaBlip(), zetaOnly()])
+  select(p, initialSelection(p.sessions, NOW))
+  frame(p)
+  panelProject(p, 'cloud-alpha', NOW)
+  frame(p)
+  p.buffers.get('zeta1')!.push('zeta1:tool')
+  panelProject(p, 'cloud-zeta', NOW + 4 * SEC)
+  frame(p)
+  assert.deepEqual(p.drawn, ['zeta1:orchestrator', 'zeta1:sub-agent', 'zeta1:tool'], 'nothing drawn twice (item 8)')
+})
+
+test('N1: zeta open and empty, then its session starts or its project becomes known: shown without a reload', () => {
+  // the page is on zeta with nothing to show
+  const p = page([alphaBlip()])
+  panelProject(p, 'cloud-zeta', NOW)
+  assert.equal(p.selected, null)
+  // a new live session starts: added and selected (item 8 allows it: never seen, not stale)
+  const started = applySessionStarted(p.sessions, zetaOnly(), ctx(p.selected, p.sessions.map((s) => s.id)))
+  assert.equal(started.select, true)
+  p.sessions = started.sessions
+  p.buffers.set('zeta1', ['zeta1:orchestrator', 'zeta1:sub-agent'])
+  select(p, 'zeta1')
+  panelProject(p, 'cloud-zeta', NOW)
+  frame(p)
+  assert.deepEqual(p.drawn, ['zeta1:orchestrator', 'zeta1:sub-agent'])
+
+  // a session listed under another project id moves to zeta (session-updated): the zeta view picks it up
+  const q = page([alphaBlip(), cloud('zeta1', NOW - 3 * SEC, false, { projectId: 'cloud-elsewhere' })])
+  panelProject(q, 'cloud-zeta', NOW)
+  assert.equal(q.selected, null)
+  q.sessions = q.sessions.map((s) => (s.id === 'zeta1' ? { ...s, projectId: 'cloud-zeta' } : s))
+  panelProject(q, 'cloud-zeta', NOW)
+  frame(q)
+  assert.equal(q.selected, 'zeta1')
+  assert.deepEqual(q.drawn, ['zeta1:orchestrator', 'zeta1:sub-agent'])
+})
+
+test('N1 neighbours: F3 and item 8 still hold around the fix', () => {
+  const p = page([alphaBlip(), zetaOnly()])
+  select(p, initialSelection(p.sessions, NOW))
+  panelProject(p, 'cloud-alpha', NOW)
+  panelProject(p, 'cloud-zeta', NOW)
+  frame(p)
+  // F3: switching the panel to a project with no session empties the graph; nothing of zeta stays drawn
+  panelProject(p, 'cloud-nu', NOW)
+  assert.equal(p.selected, null)
+  assert.deepEqual(p.drawn, [])
+  // item 8: a replayed session-started for a known session, or a stale new one, never moves the view
+  panelProject(p, 'cloud-alpha', NOW)
+  assert.equal(p.selected, 'alpha1')
+  assert.equal(applySessionStarted(p.sessions, zetaOnly(), ctx(p.selected, ['alpha1', 'zeta1'])).select, false)
+  assert.equal(applySessionStarted(p.sessions, cloud('old', NOW - 20 * MIN, true), ctx(p.selected, ['alpha1', 'zeta1'])).select, false)
+  // removing zeta's only session while it is shown: the empty state, never alpha's session (F3)
+  panelProject(p, 'cloud-zeta', NOW)
+  frame(p)
+  const removed = applySessionRemoved(p.sessions, 'zeta1', p.selected, NOW)
+  assert.equal(removed.selectedId, null)
+  p.sessions = removed.sessions
+  p.buffers.delete('zeta1')
+  select(p, removed.selectedId)
+  assert.deepEqual(p.drawn, [])
 })
