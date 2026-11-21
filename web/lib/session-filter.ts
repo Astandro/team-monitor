@@ -7,14 +7,15 @@ export function sessionsForProject(sessions: SessionInfo[], projectId: string | 
   return sessions.filter((s) => !s.projectId || s.projectId === projectId)
 }
 
-/** Which session to show: the current one when it is listed, else the most recent active listed one, else the most
- *  recent listed one; null when nothing is listed or nothing needs to change. */
+/** Which session to show: the current one when it is listed, else the most recent active listed one (a live one before
+ *  a stale cloud one), else the most recent listed one; null when nothing is listed or nothing needs to change. */
 export function sessionToShow(listed: SessionInfo[], selectedId: string | null): string | null {
   if (listed.length === 0) return null
   if (selectedId && listed.some((s) => s.id === selectedId)) return selectedId
+  const rank = (s: SessionInfo) => (s.status === 'active' ? (s.stale === true ? 1 : 2) : 0)
   const sorted = [...listed].sort((a, b) => {
-    const aActive = a.status === 'active' ? 1 : 0
-    const bActive = b.status === 'active' ? 1 : 0
+    const aActive = rank(a)
+    const bActive = rank(b)
     if (aActive !== bActive) return bActive - aActive
     return b.lastActivityTime - a.lastActivityTime
   })

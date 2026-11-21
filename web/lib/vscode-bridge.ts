@@ -10,13 +10,15 @@ export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
 import type { AgentEvent, SessionInfo, SessionUpdate, ConnectionStatus } from './bridge-types'
 import { parseOffboardedMessage } from './team/offboard'
 import { cloudFields } from './cloud-origin'
+import { parseSessionRemoved } from './session-list'
 
 type InitCallback = () => void
 type OffboardedCallback = (sessionId: string, agents: string[]) => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
-type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | SessionUpdate) => void
+/** 'removed' carries the session id of a `session-removed` message (hub: cloud session retired or evicted). */
+type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'removed' | 'reset', data: SessionInfo[] | SessionInfo | string | SessionUpdate) => void
 
 class VSCodeBridge {
   private _isVSCode = false
@@ -99,6 +101,15 @@ class VSCodeBridge {
           cb('ended', data.sessionId)
         }
         break
+
+      case 'session-removed': {
+        const sessionId = parseSessionRemoved(data)
+        if (!sessionId) break
+        for (const cb of this.sessionListeners) {
+          cb('removed', sessionId)
+        }
+        break
+      }
 
       case 'session-updated':
         for (const cb of this.sessionListeners) {

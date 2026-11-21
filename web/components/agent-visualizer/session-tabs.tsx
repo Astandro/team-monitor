@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { COLORS } from '@/lib/colors'
 import type { SessionInfo } from '@/lib/vscode-bridge'
 import { CLOUD_LABEL, originHint, originMarks, STALE_LABEL } from '@/lib/cloud-origin'
+import { HISTORY_HINT, historyToggleLabel } from '@/lib/session-list'
 
 /** Small text tag after a tab's title: "Cloud", or "Terputus" (dashed: not live right now, not an error). */
 function OriginTag({ dashed, children }: { dashed?: boolean; children: React.ReactNode }) {
@@ -30,6 +31,10 @@ interface SessionTabsProps {
   sessionsWithActivity: Set<string>
   onSelectSession: (id: string) => void
   onCloseSession: (id: string) => void
+  /** History sessions (completed, or a cloud session stale for 10 minutes); 0 hides the toggle */
+  historyCount?: number
+  showHistory?: boolean
+  onToggleHistory?: () => void
 }
 
 export function SessionTabs({
@@ -38,6 +43,9 @@ export function SessionTabs({
   sessionsWithActivity,
   onSelectSession,
   onCloseSession,
+  historyCount = 0,
+  showHistory = false,
+  onToggleHistory,
 }: SessionTabsProps) {
   const buttonRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
 
@@ -116,6 +124,25 @@ export function SessionTabs({
           </button>
         )
       })}
+      {onToggleHistory && historyCount > 0 && (
+        // Same size and colours as a tab; the dashed border (as on "Terputus") says it is not a session
+        <button
+          type="button"
+          onClick={onToggleHistory}
+          aria-pressed={showHistory}
+          title={HISTORY_HINT}
+          className="px-1.5 py-0.5 rounded transition-all flex items-center"
+          style={{
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            background: COLORS.tabInactiveBg,
+            border: `1px dashed ${showHistory ? COLORS.tabSelectedBorder : COLORS.tabInactiveBorder}`,
+            color: showHistory ? COLORS.holoBright : COLORS.textMuted,
+          }}
+        >
+          {historyToggleLabel(showHistory, historyCount)}
+        </button>
+      )}
     </div>
   )
 }

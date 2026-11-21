@@ -10,6 +10,8 @@ import {
 } from './labels'
 import { memberPhase } from './members'
 import type { TaskStatus, TeamAgent, TeamApproval, TeamState } from './types'
+import type { OffboardRecord } from './offboard'
+import { isOffboardedMember, pickLeadId } from './lead'
 
 export interface BuildOptions {
   now: number
@@ -17,6 +19,8 @@ export interface BuildOptions {
   localAnswers?: Record<string, string>
   /** Fallback title when meta.title is empty. */
   projectName?: string
+  /** The hub's offboard list of this project ("Selesai kontrak"): those members leave the tree (lead.ts). */
+  offboarded?: readonly OffboardRecord[] | null
 }
 
 export interface MemberVM {
@@ -28,6 +32,8 @@ export interface MemberVM {
   tone: AvatarTone
   /** The team lead: its bot avatar has the lead look (web/lib/bot-avatar.ts) */
   isLead: boolean
+  /** A coordinator entry that is not the lead (lead.ts): drawn in the Disintegrating group, not under the lead. */
+  retired: boolean
   working: boolean
   task: string
   /** 'offboarding': retired, breaking up over the hour after finishedAt (see members.ts). */
@@ -114,7 +120,13 @@ function initialOf(nick: string): string {
   return ch ? ch.toUpperCase() : '?'
 }
 
-function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: string }>, now: number): MemberVM {
+function buildMember(
+  id: string,
+  a: TeamAgent,
+  tasks: Record<string, { title?: string }>,
+  now: number,
+  leadId: string | null,
+): MemberVM {
   const nick = str(a.nick) || str(a.name) || 'Anggota tim'
   const name = str(a.name)
   const model = str(a.model)
@@ -131,7 +143,8 @@ function buildMember(id: string, a: TeamAgent, tasks: Record<string, { title?: s
     role: name,
     initial: initialOf(nick),
     tone: avatarTone(a.desk, a.model),
-    isLead: a.desk === 'coordinator',
+    isLead: id === leadId,
+    retired: a.desk === 'coordinator' && id !== leadId,
     working,
     task: working ? asTask || rawTask : '',
     phase: offboarding ? 'offboarding' : working ? 'working' : 'idle',
@@ -178,14 +191,18 @@ export function buildTeamVM(state: TeamState | null | undefined, opts: BuildOpti
 
   const sortedAgents = agents.slice().sort(byOrderThenKey)
   // The tree shows the current team only: a member past finishedAt + 60 min is gone even if still in the file.
-  const shownAgents = sortedAgents.filter(([, a]) => memberPhase(a, opts.now).kind !== 'gone')
-  const leadEntry = shownAgents.find(([, a]) => a.desk === 'coordinator')
-  const lead = leadEntry ? buildMember(leadEntry[0], leadEntry[1], taskMap, opts.now) : null
+  const presentAgents = sortedAgents.filter(([, a]) => memberPhase(a, opts.now).kind !== 'gone')
+  // Exactly one lead (AC5); other coordinator entries are retired (lead.ts)
+  const leadId = pickLeadId(presentAgents, meta, opts.now)
+  // Members the hub offboarded leave the tree, even when state.json still lists them (spec 0.9.8 item 9)
+  const shownAgents = presentAgents.filter(([id, a]) => id === leadId || !isOffboardedMember(id, a, opts.offboarded))
+  const leadEntry = leadId ? shownAgents.find(([id]) => id === leadId) : undefined
+  const lead = leadEntry ? buildMember(leadEntry[0], leadEntry[1], taskMap, opts.now, leadId) : null
   const members = shownAgents
-    .filter(([id]) => !leadEntry || id !== leadEntry[0])
-    .map(([id, a]) => buildMember(id, a, taskMap, opts.now))
+    .filter(([id]) => id !== leadId)
+    .map(([id, a]) => buildMember(id, a, taskMap, opts.now, leadId))
   // Task rows still name whoever did them, gone or not.
-  const byAgent = new Map(sortedAgents.map(([id, a]) => [id, buildMember(id, a, taskMap, opts.now)]))
+  const byAgent = new Map(sortedAgents.map(([id, a]) => [id, buildMember(id, a, taskMap, opts.now, leadId)]))
 
   const taskEntries = entries(s.tasks).sort((a, b) => {
     const d = num(a[1].order) - num(b[1].order)
