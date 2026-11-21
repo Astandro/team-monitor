@@ -18,7 +18,7 @@ import type { CloudIntake, CloudMessage } from '../../../scripts/relay'
 import { setupTeam } from './index'
 import { parseInstallArgs, programArguments, ServiceSpec } from './service'
 import { waitForAnswer } from './wait-answer'
-import { listen, makeProject, makeTmpDir, removeTmpDir, request, Resp, sampleState } from './test-helpers'
+import { listen, makeProject, makeTmpDir, removeTmpDir, request, Resp, sampleState, waitFor } from './test-helpers'
 import { TombstoneStore } from './ingest-tombstones'
 
 const INGEST = 'cd'.repeat(32)
@@ -840,8 +840,9 @@ describe('capacity', () => {
       assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-a')))
       assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-c')))
       assert.deepEqual(ctx.relay.forgotten, ['box-b'])
-      // One hub project for the repo (spec 0.9.8 item 1), shown from the source that registered last.
-      assert.deepEqual((await projects(ctx)).filter((p) => p.origin === 'cloud').map((p) => [p.id, p.sourceId]), [[PID, 'box-d']])
+      // One hub project for the repo (spec 0.9.8 item 1), still shown from box-a: it is live, so a new source does not
+      // take it over (item 5a, F4).
+      assert.deepEqual((await projects(ctx)).filter((p) => p.origin === 'cloud').map((p) => [p.id, p.sourceId]), [[PID, 'box-a']])
     } finally { await teardown(ctx) }
   })
 
@@ -1164,8 +1165,9 @@ describe('0.9.8 one hub project per repo', () => {
       assert.equal((await post(ctx, SRC, 1, S1)).status, 200)
       const r = await post(ctx, SRC2, 1, S2)
       assert.equal(r.status, 200, r.body) // no 403: each sourceId is bound to its own key
-      // One project for the repo, shown from the source that went live last; the list shape is unchanged.
-      assert.deepEqual(await cloudList(ctx), [{ id: PID, name: 'My Repo', sourceId: SRC2, stale: false }])
+      // One project for the repo, still shown from the first source (live: a new one does not take it over, item 5a);
+      // the list shape is unchanged.
+      assert.deepEqual(await cloudList(ctx), [{ id: PID, name: 'My Repo', sourceId: SRC, stale: false }])
       assert.deepEqual([...new Set(ctx.relay.applied.map((a) => `${a.sourceId} ${a.projectId}`))], [`${SRC} ${PID}`, `${SRC2} ${PID}`])
       for (const s of [SRC, SRC2]) assert.ok(fs.existsSync(path.join(ctx.home, 'remote', s, '.agent-team')), `mirror of ${s}`)
       assert.deepEqual(ctx.ingest!.sourceStates().map((s) => [s.sourceId, s.projectId]), [[SRC, PID], [SRC2, PID]])
@@ -1202,8 +1204,17 @@ describe('0.9.8 one hub project per repo', () => {
       assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC2, project, state: sampleState(), watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
       const w = ctx.team.watcher(PID)!
       assert.ok(w, 'one watcher for the hub project')
+      // SRC is live with a state: SRC2 does not take the project over (item 5a, F4). SRC goes stale, SRC2 is live
+      // with a state: the project now shows SRC2.
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep()
+      assert.equal((await send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId: SRC2, project, state: sampleState(), watcher: null }, auth(INGEST, OTHER_KEY))).status, 200)
+      ctx.ingest!.sweep()
       assert.equal(ctx.team.cloudSourceOf(PID), SRC2)
-      assert.equal(path.resolve(w.answersDir).startsWith(path.resolve(path.join(ctx.home, 'remote', SRC2)) + path.sep), true, 'answers go to the mirror of SRC2')
+      const w2 = ctx.team.watcher(PID)!
+      assert.notEqual(w2, w, 'a new watcher on the other mirror')
+      assert.equal(path.resolve(w2.answersDir).startsWith(path.resolve(path.join(ctx.home, 'remote', SRC2)) + path.sep), true, 'answers go to the mirror of SRC2')
       // An answer from the hub UI is what SRC2's outbox returns, not SRC's.
       const a = await request(ctx.port, {
         method: 'POST', path: '/api/team/answer', body: JSON.stringify({ project: PID, id: 'D1', answer: 'b' }),
@@ -1338,6 +1349,136 @@ describe('0.9.8 one hub project per repo', () => {
       assert.equal((await post(ctx, SRC2, 1, S2)).status, 200)
       assert.deepEqual(ctx.relay.forgotten, [SRC])
       assert.deepEqual(await cloudList(ctx), [{ id: PID, name: 'My Repo', sourceId: SRC2, stale: false }])
+    } finally { await teardown(ctx) }
+  })
+})
+
+describe('0.9.8 fix round: shown source (F4) and stateMtime (F2)', () => {
+  const SRC2 = 'cloud-box-2'
+  const SRC3 = 'cloud-box-3'
+  const KEYS: Record<string, string> = { [SRC]: KEY, [SRC2]: OTHER_KEY, [SRC3]: '7a'.repeat(32) }
+  const titled = (t: string) => sampleState({ meta: { title: t } })
+  const put = (ctx: Ctx, sourceId: string, state: unknown) =>
+    send(ctx, 'PUT', '/api/ingest/v1/state', { sourceId, project, state, watcher: null }, auth(INGEST, KEYS[sourceId]))
+  const seen = (ctx: Ctx, sourceId: string) => send(ctx, 'GET', `/api/ingest/v1/outbox?sourceId=${sourceId}`, undefined, auth(INGEST, KEYS[sourceId]))
+  const stateOf = async (ctx: Ctx) => JSON.parse((await request(ctx.port, { path: `/api/team/state?project=${PID}` })).body) as
+    { state: { meta: { title: string } } | null; stateMtime: string | null; updatedAt: string }
+  /** An open /api/team/events stream: its team_state messages and whether the server ended it. */
+  function teamStream(port: number) {
+    const msgs: Array<Record<string, unknown>> = []
+    let ended = false
+    const req = http.request({ host: '127.0.0.1', port, path: `/api/team/events?project=${PID}`, headers: { Host: `localhost:${port}` } })
+    let buf = ''
+    req.on('response', (res) => {
+      res.setEncoding('utf-8')
+      res.on('data', (c: string) => {
+        buf += c
+        let i
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, i)
+          buf = buf.slice(i + 2)
+          if (chunk.startsWith('data: ')) msgs.push(JSON.parse(chunk.slice(6)))
+        }
+      })
+      res.on('end', () => { ended = true })
+      res.on('close', () => { ended = true })
+    })
+    req.on('error', () => { ended = true })
+    req.end()
+    return { msgs, ended: () => ended, close: () => req.destroy() }
+  }
+
+  test('F4: the shown source stays while it is live with a state; once stale, a live source with a state is shown and open streams are closed', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await put(ctx, SRC, titled('from box-1'))).status, 200)
+      const s1 = teamStream(ctx.port)
+      await waitFor(() => s1.msgs.length >= 1)
+      assert.equal((s1.msgs[0].state as { meta: { title: string } }).meta.title, 'from box-1')
+
+      // A second live source with a state, and a third (newest, no state) register: neither takes the project over.
+      assert.equal((await put(ctx, SRC2, titled('from box-2'))).status, 200)
+      ctx.clock.t += 1000
+      assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC3, project, seq: 1, messages: [] }, auth(INGEST, KEYS[SRC3]))).status, 200)
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC)
+      assert.equal((await stateOf(ctx)).state!.meta.title, 'from box-1')
+      // SRC writes again while live: still shown, the stream stays open.
+      assert.equal((await put(ctx, SRC, titled('box-1 again'))).status, 200)
+      await waitFor(() => s1.msgs.some((m) => (m.state as { meta: { title: string } } | null)?.meta.title === 'box-1 again'))
+      assert.equal(s1.ended(), false, 'no switch: the open stream is kept')
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC)
+
+      // SRC goes stale while SRC2 (with a state) and SRC3 (newer, no state) stay live: SRC2 is shown.
+      ctx.clock.t += 31_000
+      assert.equal((await seen(ctx, SRC2)).status, 200)
+      ctx.clock.t += 1000
+      assert.equal((await seen(ctx, SRC3)).status, 200)
+      ctx.clock.t += 30_000
+      ctx.ingest!.sweep()
+      assert.deepEqual(ctx.ingest!.sourceStates().map((s) => [s.sourceId, s.stale]), [[SRC, true], [SRC2, false], [SRC3, false]])
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC2, 'a live source with a state before the newer one without')
+      await waitFor(() => s1.ended())
+      // A reconnecting viewer (EventSource does) reads the new mirror.
+      const s2 = teamStream(ctx.port)
+      try {
+        await waitFor(() => s2.msgs.length >= 1)
+        assert.equal((s2.msgs[0].state as { meta: { title: string } }).meta.title, 'from box-2')
+        assert.equal(s2.msgs[0].stateMtime, fs.statSync(path.join(ctx.home, 'remote', SRC2, '.agent-team', 'state.json')).mtime.toISOString())
+        // SRC comes back live: SRC2 is live, so the project does not switch back.
+        assert.equal((await seen(ctx, SRC)).status, 200)
+        assert.equal(ctx.team.cloudSourceOf(PID), SRC2)
+        await new Promise((r) => setTimeout(r, 50))
+        assert.equal(s2.ended(), false)
+      } finally { s2.close() }
+      s1.close()
+    } finally { await teardown(ctx) }
+  })
+
+  test('F4: when the shown source is stale and no live source has a state, a live one is shown anyway; all stale: kept', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await put(ctx, SRC, titled('from box-1'))).status, 200)
+      ctx.clock.t += 61_000
+      ctx.ingest!.sweep()
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC, 'every source stale: the shown one stays')
+      assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC2, project, seq: 1, messages: [] }, auth(INGEST, KEYS[SRC2]))).status, 200)
+      assert.equal(ctx.team.cloudSourceOf(PID), SRC2, 'live before stale')
+    } finally { await teardown(ctx) }
+  })
+
+  test('F2: the served stateMtime is the mirror file time; an identical PUT does not rewrite it; null without a state', async () => {
+    const ctx = await setup()
+    try {
+      assert.equal((await send(ctx, 'POST', '/api/ingest/v1/events', { sourceId: SRC, project, seq: 1, messages: [] })).status, 200)
+      let snap = await stateOf(ctx)
+      assert.equal(snap.stateMtime, null, 'no state file yet')
+      assert.equal((await put(ctx, SRC, titled('one'))).status, 200)
+      const file = path.join(ctx.home, 'remote', SRC, '.agent-team', 'state.json')
+      const old = new Date('2026-11-20T01:02:03.456Z')
+      fs.utimesSync(file, old, old)
+      ctx.team.watcher(PID)!.refresh()
+      snap = await stateOf(ctx)
+      assert.equal(snap.stateMtime, old.toISOString())
+      // The forwarder sends the same state again (heartbeat, hub restart): not rewritten, stateMtime unchanged.
+      assert.equal((await put(ctx, SRC, titled('one'))).status, 200)
+      assert.equal(fs.statSync(file).mtime.toISOString(), old.toISOString())
+      assert.equal((await stateOf(ctx)).stateMtime, old.toISOString())
+      // The team stream carries it too.
+      const s = teamStream(ctx.port)
+      try {
+        await waitFor(() => s.msgs.length >= 1)
+        assert.equal(s.msgs[0].type, 'team_state')
+        assert.equal(s.msgs[0].stateMtime, old.toISOString())
+      } finally { s.close() }
+      // Another state is written: stateMtime is the new file time.
+      assert.equal((await put(ctx, SRC, titled('two'))).status, 200)
+      snap = await stateOf(ctx)
+      assert.equal(snap.state!.meta.title, 'two')
+      assert.equal(snap.stateMtime, fs.statSync(file).mtime.toISOString())
+      assert.notEqual(snap.stateMtime, old.toISOString())
+      // The state removed: null.
+      assert.equal((await put(ctx, SRC, null)).status, 200)
+      assert.equal((await stateOf(ctx)).stateMtime, null)
     } finally { await teardown(ctx) }
   })
 })

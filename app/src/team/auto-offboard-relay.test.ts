@@ -174,6 +174,9 @@ test('relay: catch-up at start, finishedAt on the stream, deadline sweep announc
   const meiOrder = msgs.indexOf(meiDone!)
   const mainOrder = msgs.findIndex((m, i) => i >= before && m.type === 'agent-event' && (m.event as { payload: { name: string } }).payload.name === 'orchestrator')
   assert.ok(meiOrder < mainOrder, 'sub-agents finish before the Orchestrator')
+  // 0.9.8 (F7): a local session that ends is never removed from viewers (session-removed is for cloud evictions).
+  await until(() => msgs.some((m) => m.type === 'session-ended' && m.sessionId === S), 'session-ended')
+  assert.ok(!msgs.some((m) => m.type === 'session-removed'), 'no session-removed for a local session')
 
   // Mei writes again (a resume): she runs again, so her clock does not count while she works.
   fs.appendFileSync(meiFile, line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x3', content: 'ok' }] } }))

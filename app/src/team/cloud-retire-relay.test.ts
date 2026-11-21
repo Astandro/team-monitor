@@ -1,6 +1,7 @@
 /**
  * Spec 0.9.8 items 2-5 through the real relay: a stale source is retired when a new source of the same repo goes
- * live (sub-agents finished, `session-ended`, then `session-removed`; not listed or replayed afterwards); a source
+ * live (sub-agents finished, `session-ended`; revised for F1: no `session-removed`, still listed as completed and
+ * replayed); a source
  * silent for longer than CLOUD_RETIRE_AFTER_MS gets its sub-agents finished (session still listed, stale); a manual
  * offboard of a running cloud sub-agent succeeds once its source is stale (AC4); `agents-offboarded` from a container
  * for an agent still running on the hub finishes it first; a removed source's sessions get `session-removed` once.
@@ -161,14 +162,15 @@ test('0.9.8: retire stale siblings, finish silent sources, AC4 manual offboard, 
 
   const mark = live.msgs.length
   await post('box-b', 'alpha', start(SB, []))
-  await until(() => live.msgs.slice(mark).some((m) => m.type === 'session-removed'), 'session-removed')
+  await until(() => live.msgs.slice(mark).some((m) => m.type === 'session-ended' && m.sessionId === SA), 'session-ended')
+  await new Promise((r) => setTimeout(r, 50))
   const after1 = live.msgs.slice(mark)
   const iDone = after1.findIndex((m) => m.type === 'agent-event' && (m.event as { sessionId: string; type: string; payload: { name: string } }).sessionId === SA
     && (m.event as { type: string }).type === 'agent_complete' && (m.event as { payload: { name: string } }).payload.name === HIRO)
   const iEnded = after1.findIndex((m) => m.type === 'session-ended' && m.sessionId === SA)
-  const iRemoved = after1.findIndex((m) => m.type === 'session-removed' && m.sessionId === SA)
-  assert.ok(iDone >= 0 && iEnded > iDone && iRemoved > iEnded, `order: sub-agent finished ${iDone}, ended ${iEnded}, removed ${iRemoved}`)
-  assert.deepEqual(after1[iRemoved], { type: 'session-removed', sessionId: SA }, 'exactly the contract shape')
+  assert.ok(iDone >= 0 && iEnded > iDone, `order: sub-agent finished ${iDone}, ended ${iEnded}`)
+  // F1 (option A): retiring does not remove the session.
+  assert.ok(!live.msgs.some((m) => m.type === 'session-removed'), 'no session-removed on retire')
   const done = (after1[iDone].event as { payload: Record<string, unknown> }).payload
   assert.equal(done.sessionEnded, true)
   assert.equal(done.finished, true)
@@ -179,10 +181,12 @@ test('0.9.8: retire stale siblings, finish silent sources, AC4 manual offboard, 
   assert.ok(!live.msgs.some((m) => m.type === 'session-removed' && (m.sessionId === SC || m.sessionId === SB)))
   assert.equal(status(SC, HIRO), 'running')
 
-  // A client connecting (reload) after the retirement: SA is neither listed nor replayed (AC3, AC5).
+  // A client connecting (reload) after the retirement: SA is still listed, as completed (history), and replayed (F1).
   let snap = await snapshot(port)
-  assert.deepEqual(snap.list.map((s) => s.id).sort(), [SB, SC, SD].sort())
-  assert.ok(!snap.replayed.has(SA), 'a retired session is not replayed')
+  assert.deepEqual(snap.list.map((s) => s.id).sort(), [SA, SB, SC, SD].sort())
+  assert.equal(snap.list.find((s) => s.id === SA)!.status, 'completed')
+  assert.equal(snap.list.find((s) => s.id === SA)!.stale, true)
+  assert.ok(snap.replayed.has(SA), 'a retired session is replayed (as far as the hub keeps it)')
   assert.ok(snap.replayed.has(SB) && snap.replayed.has(SC))
   // One hub project for alpha, shown from box-b.
   assert.deepEqual(team.list().filter((p) => p.id === 'cloud-alpha').map((p) => [p.sourceId, p.stale]), [['box-b', false]])
@@ -244,20 +248,21 @@ test('0.9.8: retire stale siblings, finish silent sources, AC4 manual offboard, 
   snap = await snapshot(port)
   assert.equal(snap.list.filter((s) => s.id === SD).length, 1)
 
-  // ── Item 5 on eviction: every source silent for 24 h is removed; each remaining session gets one
-  //    session-removed (after its session-ended); SA, retired already, gets no second one. ─────────────────────
+  // ── Item 5 on eviction: every source silent for 24 h is removed; each session, the retired SA included, gets
+  //    exactly one session-removed (after its session-ended); SA ended already, so it gets no second one. ───────
   const markE = live.msgs.length
   clock.t += 25 * 60 * MIN
   ingest.sweep()
-  await until(() => live.msgs.slice(markE).filter((m) => m.type === 'session-removed').length === 3, 'three removals')
+  await until(() => live.msgs.slice(markE).filter((m) => m.type === 'session-removed').length === 4, 'four removals')
   const tail = live.msgs.slice(markE)
-  for (const s of [SB, SC, SD]) {
+  for (const s of [SA, SB, SC, SD]) {
     assert.equal(tail.filter((m) => m.type === 'session-removed' && m.sessionId === s).length, 1, `one removal for ${s}`)
+    assert.deepEqual(tail.find((m) => m.type === 'session-removed' && m.sessionId === s), { type: 'session-removed', sessionId: s }, 'exactly the contract shape')
     const iEnd = tail.findIndex((m) => m.type === 'session-ended' && m.sessionId === s)
     const iRem = tail.findIndex((m) => m.type === 'session-removed' && m.sessionId === s)
     if (iEnd >= 0) assert.ok(iEnd < iRem, `${s}: ended before removed`)
   }
-  assert.ok(!tail.some((m) => m.type === 'session-removed' && m.sessionId === SA))
+  assert.ok(!tail.some((m) => m.type === 'session-ended' && m.sessionId === SA), 'SA ended at its retirement already')
   assert.equal(live.msgs.filter((m) => m.type === 'session-removed' && m.sessionId === SA).length, 1)
   snap = await snapshot(port)
   assert.deepEqual(snap.list, [])

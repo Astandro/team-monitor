@@ -34,7 +34,8 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void
  * One entry of `GET /api/team/projects`. Cloud projects (hub intake, `--ingest`) also carry `origin: "cloud"`,
  * their `sourceId` and `stale` (true while the source has sent nothing for 60 s); local projects omit all three.
  * Since 0.9.8 one cloud project (`cloud-<project id>`) groups every source of the same repo: `sourceId` is the
- * source whose mirror it shows (the newest live one), `stale` is true only when every source of it is stale.
+ * source whose mirror it shows (kept while it is live; another one, live with a state first, only once it is stale
+ * or gone), `stale` is true only when every source of it is stale.
  */
 export interface TeamProjectInfo {
   id: string
@@ -599,7 +600,7 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
   const send = (snap: TeamSnapshot) => {
     res.write(`data: ${JSON.stringify({
       type: 'team_state', project: snap.project, state: snap.state, error: snap.error, updatedAt: snap.updatedAt,
-      chat: snap.chat, watcher: snap.watcher,
+      stateMtime: snap.stateMtime, chat: snap.chat, watcher: snap.watcher,
     })}\n\n`)
   }
   send(w.snapshot())
