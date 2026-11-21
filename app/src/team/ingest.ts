@@ -23,12 +23,14 @@
  *   offboarding as local sessions; session list entries and lifecycle messages carry origin/sourceId/stale.
  * - State is mirrored to `<team home>/remote/<sourceId>/.agent-team/` (atomic writes). Every source of the same repo
  *   (same `project.id`) belongs to one hub project `cloud-<project.id>` (spec 0.9.8 item 1), registered at runtime;
- *   it shows the mirror of one of them (the newest live source, else the one seen last). Answers and chat messages
- *   written there by the existing endpoints are what that source's outbox returns.
+ *   it shows the mirror of one of them, and keeps showing it while it is live (spec 0.9.8 item 5a, F4); see
+ *   updateProject. Answers and chat messages written there by the existing endpoints are what that source's outbox
+ *   returns.
  * - A source with no request for 60 s is stale; the next request makes it live again. At start, mirrors with no
  *   request for 24 hours are removed (also while running) and the others come back as stale projects.
  * - Spec 0.9.8 items 2-3: when a new source of a project registers, the project's stale sources are retired (their
- *   sessions end, running sub-agents finish, viewers get `session-removed`). A source silent for longer than
+ *   sessions end and running sub-agents finish; the sessions stay listed as `completed`, no `session-removed`, which
+ *   is sent only when a session is evicted: caps or source removal). A source silent for longer than
  *   CLOUD_RETIRE_AFTER_MS (default 10 minutes, env CLOUD_RETIRE_AFTER_MS) gets its running sub-agents finished.
  * - Everything received is untrusted data: size-capped while reading, shape-checked, and never used in a path
  *   except the validated sourceId (the answer and inbox names the outbox lists come from this machine's disk and
@@ -45,6 +47,7 @@ import { LogLimiter } from '../../../scripts/log-limit'
 import { LoginLimiter, tokenMatches } from './auth'
 import { TOMBSTONE_FILE, TombstoneStore } from './ingest-tombstones'
 import { INBOX_FILE_RE, MAX_INBOX_FILE_BYTES } from './chat'
+import { hasState } from './config'
 import { HEARTBEAT_FILE, EndReason, HeartbeatRecord, writeHeartbeat } from './heartbeat'
 import { BodyError, clientKey, closeAfter, IngestHandler, mediaType, readBody, sendError, sendJSON, TeamService } from './http'
 import { MAX_AGENT_NAME_CHARS, OffboardError, SESSION_ID_RE, offboardAgent } from './offboard'
@@ -401,7 +404,8 @@ interface Source {
   lastSeq: number
   lastSeen: number
   stale: boolean
-  /** When it last turned live (registered, or a request after being stale); the newest live source is shown. */
+  /** When it last turned live (registered, or a request after being stale); when the shown source of its project
+   *  goes stale, the newest live one is preferred (updateProject). */
   liveSince: number
   /** Its running sub-agents were finished for silence (CLOUD_RETIRE_AFTER_MS); cleared when it is live again. */
   subagentsFinished: boolean
@@ -507,21 +511,25 @@ export class IngestService implements IngestHandler {
   }
 
   /**
-   * Keep a hub project pointed at the right mirror (spec 0.9.8 item 1). `prefer`: a source that just registered live
-   * (it is shown from now on). Otherwise the shown source stays while it is live; when it is stale or gone, the best
-   * other one is shown (live first, the newest to turn live; else the one seen last). No source left: the project
-   * leaves the list.
+   * Keep a hub project pointed at the right mirror (spec 0.9.8 items 1 and 5a, F4). The shown source stays while it
+   * is live, whatever other source of the project registers or turns live. Only when it is stale or gone is another
+   * one chosen: live before stale, then one with a state.json before one without, then (live) the newest to turn
+   * live or (stale) the one seen last; on a tie the shown one stays. No source left: the project leaves the list.
    */
-  private updateProject(projectId: string, prefer?: Source): void {
+  private updateProject(projectId: string): void {
     const members = this.membersOf(projectId)
     if (!members.length) { this.team.removeCloudProject(projectId); return }
     const shownId = this.team.cloudSourceOf(projectId)
     const shown = members.find((s) => s.id === shownId)
-    const better = (a: Source, b: Source) => (a.stale !== b.stale ? (a.stale ? b : a)
-      : !a.stale ? (b.liveSince > a.liveSince ? b : a) : (b.lastSeen > a.lastSeen ? b : a))
+    const score = (s: Source): number[] => [s.stale ? 0 : 1, hasState(s.root) ? 1 : 0, s.stale ? s.lastSeen : s.liveSince]
+    const better = (a: Source, b: Source) => {
+      const x = score(a)
+      const y = score(b)
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] > x[i] ? b : a
+      return a
+    }
     let next = shown
-    if (prefer && !prefer.stale) next = prefer
-    else if (!shown || shown.stale) next = members.reduce(better)
+    if (!shown || shown.stale) next = (shown ? [shown, ...members.filter((s) => s !== shown)] : members).reduce(better)
     if (!next) return
     if (!this.team.isCloudProject(projectId)) {
       this.team.addCloudProject({ id: projectId, name: next.name, path: next.root }, next.id)
@@ -758,7 +766,7 @@ export class IngestService implements IngestHandler {
       applied += r.applied
       ignored += r.ignored
     }
-    // After its own sessions are on the graph, so a viewer whose selected session is removed can move to the new one.
+    // After its own sessions are on the graph, so a viewer whose selected session ends can move to the new one.
     if (isNew) this.retireStaleSiblings(src)
     sendJSON(res, 200, { ok: true, seq: input.seq, applied, ignored })
   }
@@ -800,7 +808,9 @@ export class IngestService implements IngestHandler {
       const text = JSON.stringify(input.state)
       if (Buffer.byteLength(text) > MAX_STATE_BYTES) throw new IngestError(413, `state larger than ${MAX_STATE_BYTES} bytes`)
       try {
-        writeFileAtomic(stateFile, text + '\n', 0o600)
+        // The forwarder sends the state again with every heartbeat and after a hub restart: the same content is not
+        // rewritten, so the mirror's mtime (served as `stateMtime`, F2) is when the state last really changed.
+        if (readSmall(stateFile, MAX_STATE_BYTES + 1) !== text + '\n') writeFileAtomic(stateFile, text + '\n', 0o600)
       } catch (e) {
         throw new IngestError(500, 'cannot write state', `cannot write ${stateFile}: ${(e as Error).message}`, undefined, 'state-write')
       }
@@ -953,7 +963,7 @@ export class IngestService implements IngestHandler {
       src.projectId = to
       this.relay?.moveSource(src.id, to)
       this.updateProject(from)
-      this.updateProject(to, src.stale ? undefined : src)
+      this.updateProject(to)
       src.lastTouch = 0
       changed = true
     }
@@ -997,8 +1007,10 @@ export class IngestService implements IngestHandler {
 
   /**
    * Spec 0.9.8 item 2: a new source of a project went live, so the project's stale sources are retired: every
-   * session of theirs ends, its running sub-agents finish and viewers get `session-removed`. The sources themselves
-   * (mirror, key binding) stay until the usual 24 hour idle removal; one that reports again is live as before.
+   * session of theirs ends and its running sub-agents finish. The sessions stay listed as `completed` (history; no
+   * `session-removed`, F1). The sources themselves (mirror, key binding) stay until the usual 24 hour idle removal
+   * or a capacity eviction, which removes their sessions (`session-removed`); one that reports again is live as
+   * before and its sessions are announced again.
    */
   private retireStaleSiblings(src: Source): void {
     const relay = this.relay
@@ -1081,7 +1093,7 @@ export class IngestService implements IngestHandler {
       lastWatcherKey: null, outbox: [], outboxSeen: new Set(),
     }
     this.sources.set(sourceId, src)
-    this.updateProject(projectId, stale ? undefined : src)
+    this.updateProject(projectId)
     if (!stale) this.writeSourceFile(src)
     return src
   }

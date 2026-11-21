@@ -30,7 +30,12 @@ export interface TeamSnapshot {
   project: string
   state: TeamState | null
   error: string | null
+  /** When the served content last changed (this watcher's clock; a new watcher starts at its own start time). */
   updatedAt: string
+  /** Spec 0.9.8 item 5b (F2): ISO time `state.json` was last written on this machine's disk (the file's mtime; for a
+   *  cloud project, the mirror of the source it shows). Null when there is no state file. Not the load time, so it
+   *  stays put across hub restarts and watcher swaps. */
+  stateMtime: string | null
   /** Chat thread, oldest first. */
   chat: ChatEntry[]
   /** Is the coordinator's background watcher alive ("Sora lagi nggak aktif" when not). */
@@ -71,6 +76,7 @@ export class TeamStateWatcher {
   private chat: ChatEntry[] = []
   private watcherStatus: WatcherStatus = { alive: false, since: null }
   private updatedAt = new Date().toISOString()
+  private stateMtime: string | null = null
   private lastPayload = ''
   private lastSignature = ''
 
@@ -125,7 +131,7 @@ export class TeamStateWatcher {
   snapshot(): TeamSnapshot {
     return {
       project: this.projectId, state: this.overlaid(), error: this.error, updatedAt: this.updatedAt,
-      chat: this.chat, watcher: this.watcherStatus,
+      stateMtime: this.stateMtime, chat: this.chat, watcher: this.watcherStatus,
     }
   }
 
@@ -205,6 +211,7 @@ export class TeamStateWatcher {
 
     const snap = this.snapshot()
     const payload = JSON.stringify([snap.state, snap.error, snap.chat, snap.watcher])
+    // A rewrite with the same content is not pushed (stateMtime is current in the next snapshot served or pushed).
     if (payload === this.lastPayload) return
     this.lastPayload = payload
     this.updatedAt = new Date().toISOString()
@@ -223,12 +230,14 @@ export class TeamStateWatcher {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.raw = null
         this.error = null
+        this.stateMtime = null
       } else {
         this.fail('state.json cannot be read', `${file}: ${(e as Error).message}`)
       }
       return
     }
-    if (!st.isFile()) { this.fail('state.json is not a file', file); return }
+    if (!st.isFile()) { this.stateMtime = null; this.fail('state.json is not a file', file); return }
+    this.stateMtime = st.mtime.toISOString()
     if (st.size > MAX_STATE_BYTES) { this.fail(TOO_LARGE, `${file}: ${st.size} bytes`); return }
     let text: string
     try {

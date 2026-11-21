@@ -488,10 +488,13 @@ interface CloudSession {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
-  /** Retired (spec 0.9.8 item 2): ended, its sub-agents finished and `session-removed` sent. Kept for the offboard
-   *  endpoints and auto offboarding, but left out of the session list and the replay. Cleared when its source sends
-   *  anything about it again (the session is announced afresh then). */
+  /** Retired (spec 0.9.8 item 2, revised for F1): ended and its sub-agents finished because a newer source of the
+   *  same project went live. It stays listed and replayed as `completed` (history) until it is really evicted (caps,
+   *  24 h source removal), which is when `session-removed` is sent. Cleared when its source sends anything about it
+   *  again (the session is announced afresh then). */
   retired?: boolean
+  /** The retirement ended it (it was `active`): it is active again if its source talks about it again. */
+  endedByRetire?: boolean
 }
 
 /** Messages the intake hands over, already shape-checked and capped by the caller (app/src/team/ingest.ts). */
@@ -665,19 +668,20 @@ function finishCloudSubagents(s: CloudSession): number {
 }
 
 /**
- * Retire a cloud session (spec 0.9.8 items 2, 3, 5): its running sub-agents are finished, it ends (`session-ended`
- * when it was active) and viewers get `session-removed`. It stays known to the graph (offboarding, auto offboarding)
- * but no longer appears in the session list or the replay. Nothing is sent for one retired already.
+ * Retire a cloud session (spec 0.9.8 items 2, 3; revised for F1): its running sub-agents are finished and it ends
+ * (`session-ended` when it was active). No `session-removed`: it stays in the session list and the replay as
+ * `completed`, so viewers can show it as history, until it is evicted (evictCloudSession). Nothing is sent for one
+ * retired already.
  */
 function retireCloudSession(s: CloudSession): boolean {
   if (s.retired) return false
   finishCloudSubagents(s)
   if (s.status === 'active') {
     s.status = 'completed'
+    s.endedByRetire = true
     broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
   }
   s.retired = true
-  broadcast(JSON.stringify({ type: 'session-removed', sessionId: s.id }))
   return true
 }
 
@@ -696,9 +700,9 @@ function finishCloudSource(sourceId: string): number {
 }
 
 /**
- * Remove a cloud session with its buffer and agents. Like a retirement first (spec 0.9.8 items 3 and 5): running
- * sub-agents finished, `session-ended` if it was still active, then `session-removed` (unless it was retired
- * already, which sent both).
+ * Remove a cloud session with its buffer and agents (spec 0.9.8 items 3 and 5): running sub-agents finished and
+ * `session-ended` if it was still active (both done already for a retired one), then `session-removed`. This is the
+ * only place `session-removed` is sent, once per session (it is gone afterwards); local sessions never come here.
  */
 function evictCloudSession(s: CloudSession): void {
   retireCloudSession(s)
@@ -707,6 +711,7 @@ function evictCloudSession(s: CloudSession): void {
   cloudTotalBytes -= cloudBuffers.get(s.id)?.total ?? 0
   cloudBuffers.delete(s.id)
   graphAgents.forget(s.id)
+  broadcast(JSON.stringify({ type: 'session-removed', sessionId: s.id }))
   if (verbose) cloudLog.line('cloud-evict', s.sourceId, `[cloud] evicted session ${s.id.slice(0, SESSION_ID_DISPLAY)} of ${s.sourceId}`)
 }
 
@@ -723,7 +728,7 @@ function makeCloudRoom(sessionIds: string[], leaving?: string): boolean {
   if (leaving !== undefined) for (const s of cloudSessions.values()) if (s.sourceId === leaving) goingAway++
   const need = cloudSessions.size - goingAway + fresh.size - cloudLimits.maxSessions
   if (need <= 0) return true
-  // Retired sessions (no longer listed anywhere) go first.
+  // Retired sessions (ended, a newer source of their project took over; listed as history only) go first.
   const rank = (s: CloudSession) => (s.retired ? -1 : staleSources.has(s.sourceId) ? (s.status === 'completed' ? 0 : 1) : 2)
   const candidates = [...cloudSessions.values()]
     .filter((s) => s.sourceId !== leaving && (s.status === 'completed' || staleSources.has(s.sourceId)))
@@ -780,9 +785,15 @@ function claimCloudSession(sessionId: string, sourceId: string, projectId: strin
 function applyCloudMessages(sourceId: string, projectId: string, messages: CloudMessage[]): { applied: number; ignored: number } {
   let applied = 0
   let ignored = 0
-  // A retired session its source talks about again is back: announced afresh (session-started), like a new one.
+  // A retired session its source talks about again is back: active again when the retirement had ended it, and
+  // announced afresh (session-started, same id: viewers update the entry they list).
   const fresh = (id: string) => !cloudSessions.has(id) || cloudSessions.get(id)!.retired === true
-  const revive = (s: CloudSession) => { if (s.retired) s.retired = false }
+  const revive = (s: CloudSession) => {
+    if (!s.retired) return
+    s.retired = false
+    if (s.endedByRetire) s.status = 'active'
+    s.endedByRetire = false
+  }
   for (const m of messages) {
     const now = Date.now()
     if (m.type === 'session-started') {
@@ -813,7 +824,8 @@ function applyCloudMessages(sourceId: string, projectId: string, messages: Cloud
       const s = cloudSessions.get(m.sessionId)
       if (!s || s.sourceId !== sourceId) { ignored++; continue }
       s.status = 'completed'
-      // A retired session ended already as far as viewers know; it stays removed.
+      s.endedByRetire = false // its container ended it too: it stays ended if it is revived
+      // A retired session ended already as far as viewers know (not sent twice).
       if (!s.retired) broadcast(JSON.stringify({ type: 'session-ended', sessionId: s.id }))
       applied++
     } else {
@@ -838,7 +850,7 @@ function setCloudSourceStale(sourceId: string, stale: boolean): void {
   if (staleSources.has(sourceId) === stale) return
   if (stale) { staleSources.add(sourceId); staleSince.set(sourceId, Date.now()) }
   else { staleSources.delete(sourceId); staleSince.delete(sourceId) }
-  for (const s of cloudSessions.values()) if (s.sourceId === sourceId && !s.retired) broadcastCloudUpdated(s)
+  for (const s of cloudSessions.values()) if (s.sourceId === sourceId) broadcastCloudUpdated(s)
 }
 
 /** The source now belongs to another hub project (it reported another project id). */
@@ -846,7 +858,7 @@ function moveCloudSource(sourceId: string, projectId: string): void {
   for (const s of cloudSessions.values()) {
     if (s.sourceId !== sourceId || s.projectId === projectId) continue
     s.projectId = projectId
-    if (!s.retired) broadcastCloudUpdated(s)
+    broadcastCloudUpdated(s)
   }
 }
 
@@ -915,11 +927,12 @@ export interface CloudIntake {
    *  when not enough sessions can be evicted (nothing is evicted then): the caller refuses the request. `leaving`:
    *  a source the caller removes right after, whose sessions count as room. */
   makeRoom(sessionIds: string[], leaving?: string): boolean
-  /** Forget every session (and buffer) of a source the hub removed. Each one is retired first (sub-agents finished,
-   *  `session-ended`, `session-removed`). */
+  /** Forget every session (and buffer) of a source the hub removed: each one gets its sub-agents finished and
+   *  `session-ended` (if not done already), then `session-removed`. Evictions at the cap (makeRoom) do the same. */
   forgetSource(sourceId: string): void
-  /** Retire every session of a source (spec 0.9.8 item 2): running sub-agents finished, `session-ended`, then
-   *  `session-removed`; left out of the session list and replay from then on. Returns how many were retired. */
+  /** Retire every session of a source (spec 0.9.8 item 2, revised for F1): running sub-agents finished and
+   *  `session-ended`; no `session-removed`: the sessions stay in the session list and replay as `completed` until
+   *  they are evicted. Returns how many were retired. */
   retireSource(sourceId: string): number
   /** Finish the running sub-agents of every session of a source (spec 0.9.8 item 3). Returns how many. */
   finishSource(sourceId: string): number
@@ -1081,8 +1094,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
-      // Retired cloud sessions were removed from every viewer (session-removed): not listed, not replayed.
-      for (const s of cloudSessions.values()) if (!s.retired) sessionList.push(cloudView(s))
+      // Every cloud session the hub keeps, retired ones included (ended, `completed`: history for the client).
+      for (const s of cloudSessions.values()) sessionList.push(cloudView(s))
       if (sessionList.length > 0) {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }

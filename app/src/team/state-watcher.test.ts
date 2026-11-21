@@ -193,3 +193,58 @@ test('no event is pushed when nothing changed', withWatcher(async ({ project, ev
   await new Promise((r) => setTimeout(r, 150))
   assert.equal(events.length, before)
 }))
+
+// ─── Spec 0.9.8 item 5b (F2): stateMtime ────────────────────────────────────
+
+test('stateMtime is the mtime of state.json, null without one, and the same for a new watcher (restart)', async () => {
+  const root = makeTmpDir()
+  try {
+    const project = makeProject(root, 'proj')
+    const file = path.join(project, '.agent-team', 'state.json')
+    const written = new Date('2026-11-20T03:04:05.678Z')
+    fs.utimesSync(file, written, written)
+    const w1 = new TeamStateWatcher({ projectId: 'proj', projectPath: project, debounceMs: 10, pollMs: 60_000 })
+    w1.start()
+    const s1 = w1.snapshot()
+    assert.equal(s1.stateMtime, written.toISOString(), 'the file time, not the load time')
+    assert.equal(s1.stateMtime, fs.statSync(file).mtime.toISOString())
+    w1.dispose()
+
+    // A later watcher (hub restart, or a cloud project's watcher swapped): same stateMtime, while updatedAt is new.
+    await new Promise((r) => setTimeout(r, 20))
+    const w2 = new TeamStateWatcher({ projectId: 'proj', projectPath: project, debounceMs: 10, pollMs: 60_000 })
+    w2.start()
+    try {
+      assert.equal(w2.snapshot().stateMtime, written.toISOString())
+      assert.notEqual(w2.snapshot().updatedAt, s1.updatedAt)
+
+      // A change carries the new mtime in the pushed snapshot.
+      const events: TeamSnapshot[] = []
+      w2.onChange((s) => events.push(s))
+      writeState(project, sampleState({ meta: { title: 'Baru' } }))
+      w2.refresh()
+      const pushed = events.find((e) => title(e) === 'Baru')
+      assert.ok(pushed)
+      assert.equal(pushed!.stateMtime, fs.statSync(file).mtime.toISOString())
+      assert.notEqual(pushed!.stateMtime, written.toISOString())
+
+      // No state file: null.
+      fs.unlinkSync(file)
+      w2.refresh()
+      assert.equal(w2.snapshot().stateMtime, null)
+      assert.equal(w2.snapshot().state, null)
+    } finally {
+      w2.dispose()
+    }
+
+    // A project that never had a state file.
+    const empty = path.join(root, 'empty')
+    fs.mkdirSync(path.join(empty, '.agent-team'), { recursive: true })
+    const w3 = new TeamStateWatcher({ projectId: 'empty', projectPath: empty, debounceMs: 10, pollMs: 60_000 })
+    w3.start()
+    assert.equal(w3.snapshot().stateMtime, null)
+    w3.dispose()
+  } finally {
+    removeTmpDir(root)
+  }
+})
