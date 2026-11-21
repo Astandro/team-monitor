@@ -252,7 +252,8 @@ export function useVSCodeBridge(): BridgeHookResult {
           setReplayRevision(v => v + 1)
           return
         }
-        // Auto-select: the most recent active session; never a stale cloud one (lib/session-list.ts).
+        // Auto-select: the most recent active session, live before stale; never one stale for 10 minutes
+        // (lib/session-list.ts initialSelection).
         // Only set selection — useLayoutEffect handles flushing events.
         const autoId = initialSelection(sessionList, Date.now())
         if (autoId) {

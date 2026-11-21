@@ -85,9 +85,10 @@ export function mostRecentActive(sessions: readonly SessionInfo[], now: number, 
 }
 
 /**
- * First selection from a session-list (page load, reconnect): the most recent active session; with none, the most
- * recent session that is not stale (a finished local session stays viewable as before). A stale cloud session is
- * never picked on its own (AC6). Null when nothing qualifies.
+ * First selection from a session-list (page load): the most recent active session, a live one before a briefly stale
+ * one (mostRecentActive); with none, the most recent session that is not stale (a finished local session stays
+ * viewable as before). A cloud session stale for 10 minutes or more is never picked (AC6); a briefly stale one only
+ * when no live session exists (the tabs would show it anyway, lib/session-filter.ts). Null when nothing qualifies.
  */
 export function initialSelection(sessions: readonly SessionInfo[], now: number): string | null {
   const active = mostRecentActive(sessions, now)

@@ -215,5 +215,6 @@ test('first selection from a list: most recent active live session, never a stal
   assert.equal(initialSelection([cloud('dead', NOW - 30 * MIN, true), S('done', 'completed', NOW - 50 * MIN)], NOW), 'done',
     'a finished local session is still shown as before')
   assert.equal(initialSelection([cloud('dead', NOW - 30 * MIN, true)], NOW), null)
+  assert.equal(initialSelection([cloud('blip', NOW - MIN, true)], NOW), 'blip', 'briefly stale and nothing live: shown')
   assert.equal(initialSelection([], NOW), null)
 })
