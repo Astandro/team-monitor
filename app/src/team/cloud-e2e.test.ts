@@ -209,7 +209,8 @@ test('cloud mode end to end: container monitor + forwarder to a hub on another p
     assert.equal(seen.session?.origin, 'cloud')
     assert.equal(seen.session?.sourceId, SOURCE)
 
-    const projectId = `cloud-${SOURCE}`
+    // 0.9.8: one hub project per repo, named after the project id the forwarder reports (not the source id).
+    const projectId = `cloud-${path.basename(project)}`
     await waitAsync(async () => {
       const r = await request(hubPort, { path: '/api/team/projects' })
       return (JSON.parse(r.body).projects as Array<{ id: string }>).some((p) => p.id === projectId)
