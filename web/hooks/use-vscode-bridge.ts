@@ -6,7 +6,7 @@ import { SimulationEvent } from '@/lib/agent-types'
 import type { SessionUpdate } from '@/lib/bridge-types'
 import { withCloudUpdate } from '@/lib/cloud-origin'
 import { dropOffboardedEvents, OFFBOARDED_EVENT } from '@/lib/team/offboard'
-import { applySessionRemoved, applySessionStarted, dedupeSessions, initialSelection, touchActivity } from '@/lib/session-list'
+import { applySessionEnded, applySessionRemoved, applySessionStarted, dedupeSessions, initialSelection, touchActivity } from '@/lib/session-list'
 
 /** Bumped when agents of a session were offboarded; the visualizer rebuilds that session from its buffer. */
 export interface OffboardRevision {
@@ -285,8 +285,8 @@ export function useVSCodeBridge(): BridgeHookResult {
         selectedSessionIdRef.current = session.id
         setSelectedSessionId(session.id)
       } else if (type === 'removed') {
-        // Hub retired or evicted a cloud session (spec 0.9.8 item 6): it leaves the list and its buffer; the view
-        // moves to the most recent active session, or to no selection (the empty state).
+        // Hub evicted a cloud session (spec 0.9.8 item 6): it leaves the list and its buffer; the view moves to the
+        // most recent active session of the same project (QA F3), or to no selection (the empty state).
         const sessionId = data as string
         const result = applySessionRemoved(sessionsRef.current, sessionId, selectedSessionIdRef.current, Date.now())
         setSessions(result.sessions)
@@ -318,10 +318,24 @@ export function useVSCodeBridge(): BridgeHookResult {
             : s
         ))
       } else if (type === 'ended') {
+        // The session becomes history (completed). A shown cloud session that ended (retired by a newer container
+        // of the repo) hands the view to the most recent active session of the same project (QA F1,
+        // lib/session-list.ts applySessionEnded); with none, or for a local session, the view stays on it.
         const sessionId = data as string
-        setSessions(prev => prev.map(s =>
-          s.id === sessionId ? { ...s, status: 'completed' as const } : s
-        ))
+        const result = applySessionEnded(sessionsRef.current, sessionId, selectedSessionIdRef.current, Date.now())
+        setSessions(result.sessions)
+        if (!result.moveTo) return
+        sessionSwitchPendingRef.current = true
+        pendingEventsRef.current.length = 0
+        selectedSessionIdRef.current = result.moveTo
+        setSelectedSessionId(result.moveTo)
+        const moved = result.moveTo
+        setSessionsWithActivity(prev => {
+          if (!prev.has(moved)) return prev
+          const next = new Set(prev)
+          next.delete(moved)
+          return next
+        })
       }
     })
 
@@ -346,8 +360,9 @@ export function useVSCodeBridge(): BridgeHookResult {
   /** Switch session selection. Does NOT flush events — call flushSessionEvents
    *  from useLayoutEffect after the simulation state has been saved/swapped. */
   const selectSession = useCallback((sessionId: string | null) => {
-    // Block event delivery to pending until the simulation state is swapped
-    sessionSwitchPendingRef.current = true
+    // Block event delivery to pending until the simulation state is swapped. No selection (empty state): nothing is
+    // flushed, so nothing would clear the flag; nothing is delivered without a selection anyway.
+    sessionSwitchPendingRef.current = sessionId !== null
     pendingEventsRef.current.length = 0
     selectedSessionIdRef.current = sessionId
     setSelectedSessionId(sessionId)

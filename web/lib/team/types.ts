@@ -96,6 +96,8 @@ export interface TeamStatePayload {
   state?: TeamState | null
   error?: string | null
   updatedAt?: string
+  /** When the hub last wrote this project's state.json (ISO); null without a state file, absent from an older hub. */
+  stateMtime?: string | null
   /** Chat thread, oldest first (spec-chat). Next to `state`, so it works when state.json is missing. */
   chat?: ChatEntry[]
   /** Is the coordinator's inbox watcher running. */

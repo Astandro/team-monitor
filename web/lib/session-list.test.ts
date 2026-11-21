@@ -2,20 +2,27 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { SessionInfo } from './bridge-types'
 import {
+  applySessionEnded,
   applySessionRemoved,
   applySessionStarted,
   dedupeSessions,
+  graphChange,
   historyToggleLabel,
+  historyToggleVisible,
   initialSelection,
   isHistorySession,
   isLongStale,
   listSessions,
   mostRecentActive,
   parseSessionRemoved,
+  replacementInProject,
+  selectionForProject,
+  sessionDot,
+  showSessionTabRow,
   STALE_HISTORY_MS,
   touchActivity,
 } from './session-list'
-import { sessionToShow } from './session-filter'
+import { sessionsForProject, sessionToShow } from './session-filter'
 
 const NOW = Date.parse('2026-11-21T10:00:00Z')
 const MIN = 60_000
@@ -139,6 +146,153 @@ test('removing an unknown id changes nothing (same array)', () => {
   const r = applySessionRemoved(list, 'zzz', 'a', NOW)
   assert.equal(r.sessions, list)
   assert.equal(r.selectionChanged, false)
+})
+
+// ─── QA F3: the replacement stays inside the project ────────────────────────
+
+test('F3: the replacement is the most recent active session of the SAME project only', () => {
+  const list = [
+    S('nuNewest', 'active', NOW, { projectId: 'nu' }),
+    S('muOld', 'active', NOW - 9 * MIN, { projectId: 'mu' }),
+    cloud('muBlip', NOW - MIN, true, { projectId: 'mu' }),
+    S('muLive', 'active', NOW - 5 * MIN, { projectId: 'mu' }),
+    S('muDone', 'completed', NOW, { projectId: 'mu' }),
+    cloud('mu1', NOW - 30 * MIN, true, { projectId: 'mu' }),
+  ]
+  assert.equal(replacementInProject(list, { id: 'mu1', projectId: 'mu' }, NOW), 'muLive', 'live before stale, then newest')
+  assert.equal(replacementInProject(list.filter((s) => s.id !== 'muLive' && s.id !== 'muOld'), { id: 'mu1', projectId: 'mu' }, NOW), 'muBlip')
+  // nothing else active in mu: null, even though nu has a newer live session
+  assert.equal(replacementInProject([list[0], list[4], list[5]], { id: 'mu1', projectId: 'mu' }, NOW), null)
+  // a session without a project is replaced only by another one without a project
+  assert.equal(replacementInProject([list[0], S('free', 'active', NOW - MIN)], { id: 'x' }, NOW), 'free')
+  assert.equal(replacementInProject([list[0]], { id: 'x' }, NOW), null)
+})
+
+test('F3: removing the last session of project mu never selects a session of another project', () => {
+  const list = [S('other', 'active', NOW, { projectId: 'nu' }), cloud('mu1', NOW - 2 * MIN, true, { projectId: 'mu' })]
+  const r = applySessionRemoved(list, 'mu1', 'mu1', NOW)
+  assert.equal(r.selectionChanged, true)
+  assert.equal(r.selectedId, null)
+  assert.deepEqual(r.sessions.map((s) => s.id), ['other'])
+  // the graph is cleared: a shown session followed by no selection restarts the simulation empty
+  assert.equal(graphChange('mu1', r.selectedId), 'clear')
+  // and the project view keeps no selection (the other project's session is not listed in mu)
+  const visible = sessionsForProject(r.sessions, 'mu')
+  const { listed } = listSessions(visible, { showHistory: false, now: NOW, selectedId: null })
+  assert.equal(selectionForProject(listed, visible, null), undefined)
+})
+
+test('F3: removing the selected session with another one left in its project moves there', () => {
+  const list = [
+    S('other', 'active', NOW, { projectId: 'nu' }),
+    S('mu2', 'active', NOW - 3 * MIN, { projectId: 'mu' }),
+    cloud('mu1', NOW - 2 * MIN, true, { projectId: 'mu' }),
+  ]
+  const r = applySessionRemoved(list, 'mu1', 'mu1', NOW)
+  assert.equal(r.selectedId, 'mu2')
+  assert.equal(graphChange('mu1', 'mu2'), 'switch')
+})
+
+test('F3: a selected session of another project is dropped when the shown project lists nothing', () => {
+  const sessions = [S('other', 'active', NOW, { projectId: 'nu' })]
+  const visible = sessionsForProject(sessions, 'mu')
+  assert.equal(selectionForProject([], visible, 'other'), null)
+  // a listed session of the project is taken instead (unchanged rule)
+  const mu = [S('mu2', 'active', NOW, { projectId: 'mu' })]
+  assert.equal(selectionForProject(mu, mu, 'other'), 'mu2')
+  assert.equal(selectionForProject(mu, mu, 'mu2'), undefined)
+  // a selected history session of the project stays (it is listed while selected)
+  const done = [S('muDone', 'completed', NOW, { projectId: 'mu' })]
+  const l = listSessions(done, { showHistory: false, now: NOW, selectedId: 'muDone' }).listed
+  assert.equal(selectionForProject(l, done, 'muDone'), undefined)
+})
+
+test('graph change on a selection change: clear, switch or nothing', () => {
+  assert.equal(graphChange('a', null), 'clear')
+  assert.equal(graphChange(null, null), 'none')
+  assert.equal(graphChange(null, 'a'), 'switch')
+  assert.equal(graphChange('a', 'b'), 'switch')
+  assert.equal(graphChange('a', 'a'), 'none')
+})
+
+// ─── QA F1: a retired (completed) session is reachable under "Tampilkan riwayat" ─
+
+test('F1: the toggle is offered whenever the project has a history session, with zero or one tab listed', () => {
+  assert.equal(historyToggleVisible(1, true), true)
+  assert.equal(historyToggleVisible(0, true), false)
+  assert.equal(historyToggleVisible(3, false), false, 'no handler: no toggle')
+  assert.equal(showSessionTabRow(1, 1, true), true, 'one tab plus history: the row shows')
+  assert.equal(showSessionTabRow(0, 1, true), true, 'nothing listed, only history: the row shows the toggle')
+  assert.equal(showSessionTabRow(1, 0, true), false, 'one tab, no history: no row (unchanged)')
+  assert.equal(showSessionTabRow(2, 0, true), true)
+})
+
+test('F1: fresh page load, S1 retired arrives completed in session-list: hidden by default, listed with the toggle', () => {
+  const list = [
+    cloud('S1', NOW - 12 * MIN, true, { status: 'completed', projectId: 'alpha' }),
+    cloud('S2', NOW, false, { projectId: 'alpha' }),
+  ]
+  const sel = initialSelection(list, NOW)
+  assert.equal(sel, 'S2')
+  const off = listSessions(list, { showHistory: false, now: NOW, selectedId: sel })
+  assert.deepEqual(off.listed.map((s) => s.id), ['S2'])
+  assert.equal(off.historyCount, 1)
+  assert.equal(showSessionTabRow(off.listed.length, off.historyCount, true), true, 'QA saw no row here')
+  assert.equal(historyToggleLabel(false, off.hiddenCount), 'Tampilkan riwayat (1)')
+  const on = listSessions(list, { showHistory: true, now: NOW, selectedId: sel })
+  assert.deepEqual(on.listed.map((s) => s.id), ['S1', 'S2'])
+})
+
+test('F1: S1 selected while the page is open turns completed (session-ended): the view moves to S2 of the same project', () => {
+  const list = [
+    S('nuNewer', 'active', NOW, { projectId: 'nu' }),
+    cloud('S1', NOW - 2 * MIN, true, { projectId: 'alpha' }),
+    cloud('S2', NOW - MIN, false, { projectId: 'alpha' }),
+  ]
+  const r = applySessionEnded(list, 'S1', 'S1', NOW)
+  assert.equal(r.sessions.find((s) => s.id === 'S1')!.status, 'completed')
+  assert.equal(r.moveTo, 'S2', 'same project, not the newer session of nu')
+  const alpha = sessionsForProject(r.sessions, 'alpha')
+  const off = listSessions(alpha, { showHistory: false, now: NOW, selectedId: r.moveTo })
+  assert.deepEqual(off.listed.map((s) => s.id), ['S2'], 'S1 left the default list')
+  assert.equal(showSessionTabRow(off.listed.length, off.historyCount, true), true)
+  assert.deepEqual(listSessions(alpha, { showHistory: true, now: NOW, selectedId: r.moveTo }).listed.map((s) => s.id), ['S1', 'S2'])
+})
+
+test('F1: session-ended of an unselected session, of the only session, or of a local one keeps the view', () => {
+  const list = [cloud('S1', NOW - 2 * MIN, true, { projectId: 'alpha' }), cloud('S2', NOW, false, { projectId: 'alpha' })]
+  const unselected = applySessionEnded(list, 'S1', 'S2', NOW)
+  assert.equal(unselected.moveTo, null)
+  assert.equal(unselected.sessions.find((s) => s.id === 'S1')!.status, 'completed')
+  // only S1 in the project: the view stays on it (listed while selected), the toggle is still offered
+  const alone = applySessionEnded([list[0]], 'S1', 'S1', NOW)
+  assert.equal(alone.moveTo, null)
+  const l = listSessions(alone.sessions, { showHistory: false, now: NOW, selectedId: 'S1' })
+  assert.deepEqual(l.listed.map((s) => s.id), ['S1'])
+  assert.equal(showSessionTabRow(l.listed.length, l.historyCount, true), true)
+  // a local session that ends stays shown (AC7)
+  const local = applySessionEnded([S('loc', 'active', NOW), S('loc2', 'active', NOW)], 'loc', 'loc', NOW)
+  assert.equal(local.moveTo, null)
+  // unknown id: nothing changes
+  assert.equal(applySessionEnded(list, 'zzz', 'S2', NOW).sessions, list)
+})
+
+// ─── QA F6: the tab dot ──────────────────────────────────────────────────────
+
+test('F6: a completed session never has the green live dot, whatever its unseen activity', () => {
+  for (const hasActivity of [false, true]) {
+    for (const isSelected of [false, true]) {
+      assert.deepEqual(sessionDot({ status: 'completed', stale: false, hasActivity, isSelected }), { hollow: false, green: false, pulse: false })
+    }
+  }
+})
+
+test('F6: active and stale dots unchanged', () => {
+  assert.deepEqual(sessionDot({ status: 'active', stale: false, hasActivity: false, isSelected: true }), { hollow: false, green: true, pulse: false })
+  assert.deepEqual(sessionDot({ status: 'active', stale: false, hasActivity: true, isSelected: false }), { hollow: false, green: true, pulse: true })
+  assert.deepEqual(sessionDot({ status: 'active', stale: false, hasActivity: true, isSelected: true }), { hollow: false, green: true, pulse: false })
+  assert.deepEqual(sessionDot({ status: 'active', stale: true, hasActivity: true, isSelected: false }), { hollow: true, green: false, pulse: false })
+  assert.deepEqual(sessionDot({ status: 'completed', stale: true, hasActivity: true, isSelected: false }), { hollow: true, green: false, pulse: false })
 })
 
 // ─── Item 8: no jump to a stale or known session, no doubles ────────────────

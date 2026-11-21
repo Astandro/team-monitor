@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { COLORS } from '@/lib/colors'
 import type { SessionInfo } from '@/lib/vscode-bridge'
 import { CLOUD_LABEL, originHint, originMarks, STALE_LABEL } from '@/lib/cloud-origin'
-import { HISTORY_HINT, historyToggleLabel } from '@/lib/session-list'
+import { HISTORY_HINT, historyToggleLabel, historyToggleVisible, sessionDot } from '@/lib/session-list'
 
 /** Small text tag after a tab's title: "Cloud", or "Terputus" (dashed: not live right now, not an error). */
 function OriginTag({ dashed, children }: { dashed?: boolean; children: React.ReactNode }) {
@@ -31,8 +31,10 @@ interface SessionTabsProps {
   sessionsWithActivity: Set<string>
   onSelectSession: (id: string) => void
   onCloseSession: (id: string) => void
-  /** History sessions (completed, or a cloud session stale for 10 minutes); 0 hides the toggle */
+  /** History sessions the toggle would reveal (off) or hide (on): the number in its label */
   historyCount?: number
+  /** All history sessions of the shown project (completed, or a cloud session stale for 10 minutes); 0 hides the toggle */
+  historyTotal?: number
   showHistory?: boolean
   onToggleHistory?: () => void
 }
@@ -44,6 +46,7 @@ export function SessionTabs({
   onSelectSession,
   onCloseSession,
   historyCount = 0,
+  historyTotal = historyCount,
   showHistory = false,
   onToggleHistory,
 }: SessionTabsProps) {
@@ -66,12 +69,11 @@ export function SessionTabs({
     <div className="flex flex-wrap gap-1">
       {sessions.map(session => {
         const isSelected = session.id === selectedSessionId
-        const isActive = session.status === 'active'
         const hasActivity = sessionsWithActivity.has(session.id)
         const marks = originMarks(session)
-        // Green dot: session is active, OR has unseen background activity. A disconnected cloud session is not
-        // live right now: its dot goes hollow instead (no green, no pulse) until the container reports again.
-        const showGreen = (isActive || hasActivity) && !marks.stale
+        // Green dot: an active session. A disconnected cloud session is not live right now: hollow (no green, no
+        // pulse) until the container reports again. An ended (completed) session is never green (lib/session-list.ts)
+        const dot = sessionDot({ status: session.status, stale: marks.stale, hasActivity, isSelected })
         const hint = originHint(marks)
         const title = [session.prompt ? `Prompt pertama: ${session.prompt}` : '', hint].filter(Boolean).join('\n')
         return (
@@ -96,13 +98,13 @@ export function SessionTabs({
           >
             <span
               className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={marks.stale ? {
+              style={dot.hollow ? {
                 background: 'transparent',
                 border: `1px solid ${COLORS.textMuted}`,
               } : {
-                background: showGreen ? COLORS.complete : COLORS.idle + '40',
-                boxShadow: showGreen ? `0 0 4px ${COLORS.complete}` : 'none',
-                animation: hasActivity && !isSelected ? 'pulse 1.5s infinite' : 'none',
+                background: dot.green ? COLORS.complete : COLORS.idle + '40',
+                boxShadow: dot.green ? `0 0 4px ${COLORS.complete}` : 'none',
+                animation: dot.pulse ? 'pulse 1.5s infinite' : 'none',
               }}
             />
             {session.label}
@@ -124,7 +126,7 @@ export function SessionTabs({
           </button>
         )
       })}
-      {onToggleHistory && historyCount > 0 && (
+      {onToggleHistory && historyToggleVisible(historyTotal, true) && (
         // Same size and colours as a tab; the dashed border (as on "Terputus") says it is not a session
         <button
           type="button"

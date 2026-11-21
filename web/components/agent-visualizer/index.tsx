@@ -29,8 +29,8 @@ import { TopBar, type TopBarLayout } from "./top-bar"
 import { setCostPanelTop } from "./canvas/draw-cost"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useGraphTheme } from "@/hooks/use-graph-theme"
-import { sessionsForProject, sessionToShow } from "@/lib/session-filter"
-import { listSessions } from "@/lib/session-list"
+import { sessionsForProject } from "@/lib/session-filter"
+import { graphChange, listSessions, replacementInProject, selectionForProject } from "@/lib/session-list"
 import { agentIdentity, identityLine, parseCoordinator } from "@/lib/agent-identity"
 import { canOffboard, finishedSubAgents, offboardAgent, offboardAllFinished, type OffboardResult } from "@/lib/team/offboard"
 import type { PostFetch } from "@/lib/team/post"
@@ -70,14 +70,16 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     () => listSessions(visibleSessions, { showHistory, now: listNow, selectedId: selectedSessionId }),
     [visibleSessions, showHistory, listNow, selectedSessionId],
   )
-  // The toggle counts what it would reveal (hidden ones) while off, and what it would hide while on
+  // The toggle counts what it would reveal (hidden ones) while off, and what it would hide while on. It is offered
+  // whenever the project has any history session (allHistory), also with zero or one tab listed (QA F1).
   const historyCount = showHistory ? allHistory : hiddenCount
   const toggleHistory = useCallback(() => setShowHistory(v => !v), [])
-  // Keep the shown session inside the chosen project: switch to its most recent listed one when needed
+  // Keep the shown session inside the chosen project: switch to its most recent listed one when needed. With nothing
+  // listed, a selected session of another project is dropped (empty state): the graph never shows it here (QA F3).
   useEffect(() => {
-    const next = sessionToShow(listedSessions, selectedSessionId)
-    if (next && next !== selectedSessionId) selectSession(next)
-  }, [listedSessions, selectedSessionId, selectSession])
+    const next = selectionForProject(listedSessions, visibleSessions, selectedSessionId)
+    if (next !== undefined) selectSession(next)
+  }, [listedSessions, visibleSessions, selectedSessionId, selectSession])
 
   const {
     frameRef,
@@ -166,7 +168,8 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
   const sessionCacheRef = useRef<Map<string, { snapshot: ReturnType<typeof saveSnapshot>; eventCount: number }>>(new Map())
   const prevSelectedRef = useRef<string | null>(null)
   useLayoutEffect(() => {
-    if (bridge.selectedSessionId === null && prevSelectedRef.current !== null) {
+    const change = graphChange(prevSelectedRef.current, bridge.selectedSessionId)
+    if (change === 'clear') {
       // Bridge reset (panel reopened / relay restarted), or the shown session was removed with no active one left:
       // cached snapshots are stale, and the graph must not keep drawing the session that is gone (empty state)
       sessionCacheRef.current.clear()
@@ -175,7 +178,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
       restart()
       return
     }
-    if (bridge.selectedSessionId && bridge.selectedSessionId !== prevSelectedRef.current) {
+    if (change === 'switch' && bridge.selectedSessionId) {
       // Review/scrub state is per-component, not per-session: the incoming tab is restored live
       setIsReviewing(false)
       // Save outgoing session state (if any)
@@ -417,10 +420,10 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
     bridge.removeSession(id)
     sessionCacheRef.current.delete(id)
     if (bridge.selectedSessionId === id) {
+      // The replacement comes from the same project only (QA F3); none: no selection, the project's empty state
+      const closed = bridge.sessions.find(s => s.id === id)
       const remaining = bridge.sessions.filter(s => s.id !== id)
-      if (remaining.length > 0) {
-        bridge.selectSession(remaining[remaining.length - 1].id)
-      }
+      bridge.selectSession(closed ? replacementInProject(remaining, closed, Date.now()) : null)
     }
   }, [bridge])
 
@@ -591,6 +594,7 @@ export function AgentVisualizer({ projectId = null, active = true, ownerAsks = N
       <TopBar
         sessions={listedSessions}
         historyCount={historyCount}
+        historyTotal={allHistory}
         showHistory={showHistory}
         onToggleHistory={toggleHistory}
         selectedSessionId={bridge.selectedSessionId}

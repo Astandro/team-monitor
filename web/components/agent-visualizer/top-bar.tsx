@@ -9,6 +9,7 @@ import { useGraphTheme } from "@/hooks/use-graph-theme"
 import { formatTokens } from "@/lib/utils"
 import { agentCost } from "./canvas/draw-cost"
 import { SessionTabs } from "./session-tabs"
+import { showSessionTabRow } from "@/lib/session-list"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 import type { OffboardResult } from "@/lib/team/offboard"
 import { OffboardButton } from "./offboard-button"
@@ -179,6 +180,8 @@ export interface TopBarProps {
   onCloseSession: (id: string) => void
   /** History sessions of the shown project (completed, or stale for 10 minutes): the "Tampilkan riwayat" toggle */
   historyCount?: number
+  /** All history sessions of the shown project (selected one included): > 0 offers the toggle (QA F1) */
+  historyTotal?: number
   showHistory?: boolean
   onToggleHistory?: () => void
   // Connection
@@ -218,7 +221,7 @@ export interface TopBarLayout {
 export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
-  historyCount = 0, showHistory = false, onToggleHistory,
+  historyCount = 0, historyTotal = historyCount, showHistory = false, onToggleHistory,
   isVSCode, connectionStatus,
   agentCount, totalTokens,
   showFileAttention, showTranscript, showCostOverlay, showTimeline,
@@ -227,8 +230,8 @@ export const TopBar = memo(function TopBar({
   onLayout, children,
 }: TopBarProps) {
   useGraphTheme()
-  // Tabs when there is a choice to make: two or more listed sessions, or hidden/shown history to toggle
-  const showTabs = sessions.length > 1 || (historyCount > 0 && !!onToggleHistory)
+  // Tabs when there is a choice to make: two or more listed sessions, or any history to toggle (lib/session-list.ts)
+  const showTabs = showSessionTabRow(sessions.length, historyTotal, !!onToggleHistory)
   const rootRef = useRef<HTMLDivElement>(null)
   const barsRef = useRef<HTMLDivElement>(null)
   const [compact, setCompact] = useState(false)
@@ -276,6 +279,7 @@ export const TopBar = memo(function TopBar({
               onSelectSession={onSelectSession}
               onCloseSession={onCloseSession}
               historyCount={historyCount}
+              historyTotal={historyTotal}
               showHistory={showHistory}
               onToggleHistory={onToggleHistory}
             />
@@ -325,6 +329,7 @@ export const TopBar = memo(function TopBar({
             onSelectSession={onSelectSession}
             onCloseSession={onCloseSession}
             historyCount={historyCount}
+            historyTotal={historyTotal}
             showHistory={showHistory}
             onToggleHistory={onToggleHistory}
           />

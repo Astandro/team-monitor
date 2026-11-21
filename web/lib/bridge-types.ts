@@ -43,9 +43,10 @@ export interface SessionUpdate extends CloudFields {
 }
 
 /**
- * `session-removed` (hub intake, spec 0.9.8 item 5/6): a cloud session was retired or evicted. Arrives after its
- * `session-ended`; never sent for a local session. The client drops it from the list; if it was selected, the view
- * moves to the most recent active session (web/lib/session-list.ts applySessionRemoved).
+ * `session-removed` (hub intake, spec 0.9.8 item 5/6, revised): a cloud session was evicted (capacity, or the 24 h
+ * mirror expired); a retired one only ends and stays listed as completed. Never sent for a local session. The client
+ * drops it from the list; if it was selected, the view moves to the most recent active session of the same project,
+ * else to the empty state (web/lib/session-list.ts applySessionRemoved).
  */
 export interface SessionRemovedMessage {
   type: 'session-removed'

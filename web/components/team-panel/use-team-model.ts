@@ -184,6 +184,8 @@ export function useTeamModel(): TeamModel {
             state: data.state ?? null,
             error: data.error ?? null,
             updatedAt: data.updatedAt,
+            // Absent (older hub) counts as null: no evidence that an offboarded member works again (lead.ts)
+            stateMtime: typeof data.stateMtime === 'string' ? data.stateMtime : null,
             chat: Array.isArray(data.chat) ? data.chat : [],
             watcher: data.watcher,
           })
@@ -230,9 +232,10 @@ export function useTeamModel(): TeamModel {
   // The hub's offboard list hides those members from the tree (spec 0.9.8 item 9); declared further down with the
   // "Selesai kontrak" list, read here through the state it fills
   const [offboardedRaw, setOffboardedRaw] = useState<OffboardRecord[] | null>(null)
+  const stateMtime = current?.stateMtime ?? null
   const vm = useMemo(
-    () => buildTeamVM(state, { now, localAnswers: shownAnswers, projectName, offboarded: offboardedRaw }),
-    [state, now, shownAnswers, projectName, offboardedRaw],
+    () => buildTeamVM(state, { now, localAnswers: shownAnswers, projectName, offboarded: offboardedRaw, stateMtime }),
+    [state, now, shownAnswers, projectName, offboardedRaw, stateMtime],
   )
 
   const fetchRef = useRef<FetchLike>(
