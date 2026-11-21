@@ -24,7 +24,8 @@ import { TombstoneStore } from './ingest-tombstones'
 const INGEST = 'cd'.repeat(32)
 const LOGIN = 'ab'.repeat(32)
 const SRC = 'cloud-box-1'
-const PID = `cloud-${SRC}`
+/** Hub project of the test repo (`project.id` "my-repo"; spec 0.9.8 item 1: one hub project per repo). */
+const PID = 'cloud-my-repo'
 const S1 = '0b1c2d3e-0000-4000-8000-000000000001'
 
 class FakeRelay implements CloudIntake {
@@ -35,8 +36,18 @@ class FakeRelay implements CloudIntake {
   /** makeRoom's answer (false: every session live and the cap reached). */
   room = true
   forgotten: string[] = []
+  retired: string[] = []
+  finished: string[] = []
+  finishedAgents: Array<[string, string]> = []
+  moved: Array<[string, string]> = []
+  /** finishAgent's answer. */
+  agentRunning = false
   makeRoom(_ids: string[]) { return this.room }
   forgetSource(sourceId: string) { this.forgotten.push(sourceId) }
+  retireSource(sourceId: string) { this.retired.push(sourceId); return 0 }
+  finishSource(sourceId: string) { this.finished.push(sourceId); return 0 }
+  finishAgent(sessionId: string, agent: string) { this.finishedAgents.push([sessionId, agent]); return this.agentRunning }
+  moveSource(sourceId: string, projectId: string) { this.moved.push([sourceId, projectId]) }
   apply(sourceId: string, projectId: string, messages: CloudMessage[]) {
     this.applied.push({ sourceId, projectId, messages })
     for (const m of messages) {
@@ -516,7 +527,8 @@ describe('mirrors at start', () => {
       assert.ok(!fs.existsSync(path.join(remote, 'day-old-box')))
       assert.ok(fs.existsSync(path.join(remote, 'Not_A_Source')))
       assert.ok(fs.existsSync(path.join(outside, 'keep.txt')), 'a symlinked mirror is not followed')
-      assert.deepEqual(team.list(), [{ id: 'cloud-fresh-box', name: 'Proj fresh-box', hasState: false, origin: 'cloud', sourceId: 'fresh-box', stale: true }])
+      // Spec 0.9.8 item 1: the hub project is named after the reported project id ("p"), not the sourceId.
+      assert.deepEqual(team.list(), [{ id: 'cloud-p', name: 'Proj fresh-box', hasState: false, origin: 'cloud', sourceId: 'fresh-box', stale: true }])
       ingest.dispose()
       team.dispose()
     } finally { removeTmpDir(root) }
@@ -828,8 +840,8 @@ describe('capacity', () => {
       assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-a')))
       assert.ok(fs.existsSync(path.join(ctx.home, 'remote', 'box-c')))
       assert.deepEqual(ctx.relay.forgotten, ['box-b'])
-      const ids = (await projects(ctx)).map((p) => p.id)
-      assert.ok(ids.includes('cloud-box-d') && !ids.includes('cloud-box-b'))
+      // One hub project for the repo (spec 0.9.8 item 1), shown from the source that registered last.
+      assert.deepEqual((await projects(ctx)).filter((p) => p.origin === 'cloud').map((p) => [p.id, p.sourceId]), [[PID, 'box-d']])
     } finally { await teardown(ctx) }
   })
 
@@ -876,7 +888,7 @@ describe('capacity', () => {
       assert.equal(r.headers['retry-after'], '30')
       assert.deepEqual(ctx.ingest!.sourceStates().map((s) => s.sourceId), ['box-a'])
       assert.ok(!fs.existsSync(path.join(ctx.home, 'remote', 'box-b')))
-      assert.ok(!(await projects(ctx)).some((p) => p.id === 'cloud-box-b'))
+      assert.deepEqual((await projects(ctx)).filter((p) => p.origin === 'cloud').map((p) => [p.id, p.sourceId]), [[PID, 'box-a']])
       assert.equal(ctx.relay.applied.length, 0)
     } finally { await teardown(ctx) }
   })

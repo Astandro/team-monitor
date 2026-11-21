@@ -254,19 +254,28 @@ function sessionAgents(graph: GraphView | null, session: string): GraphAgent[] {
 /**
  * Offboard one finished sub-agent. 404 unknown session or agent, 400 the Orchestrator, 409 still running.
  * Offboarding an agent twice returns the first record and writes nothing.
+ *
+ * A sub-agent still running in a cloud session whose container no longer reports (GraphView.finishOrphaned, spec
+ * 0.9.8 AC4) is finished first instead of refused. `finishFirst` (the container itself offboarded it, spec 0.9.8 item
+ * 4) is called for an agent still running here; when it returns true the agent is read again.
  */
 export function offboardAgent(
   store: OffboardStore,
   graph: GraphView | null,
   input: OffboardOneInput,
   now: () => Date = () => new Date(),
+  finishFirst?: (session: string, agent: string) => boolean,
 ): { record: OffboardRecord; created: boolean } {
   const agents = sessionAgents(graph, input.session)
-  const agent = agents.find((a) => a.name === input.agent)
+  let agent = agents.find((a) => a.name === input.agent)
   if (!agent) throw new OffboardError(404, 'unknown agent')
   if (agent.isMain) throw new OffboardError(400, 'the Orchestrator cannot be offboarded')
   const existing = store.get(input.session, agent.name)
   if (existing) return { record: existing, created: false }
+  if (agent.status === 'running') {
+    const finished = (finishFirst ?? graph!.finishOrphaned?.bind(graph))?.(input.session, agent.name) === true
+    if (finished) agent = graph!.agents(input.session)?.find((a) => a.name === input.agent) ?? agent
+  }
   if (agent.status === 'running') throw new OffboardError(409, 'agent is still running')
   const record = recordFor(input.session, graph!.sessionProject(input.session), agent, now().toISOString())
   store.add([record])

@@ -33,6 +33,8 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void
 /**
  * One entry of `GET /api/team/projects`. Cloud projects (hub intake, `--ingest`) also carry `origin: "cloud"`,
  * their `sourceId` and `stale` (true while the source has sent nothing for 60 s); local projects omit all three.
+ * Since 0.9.8 one cloud project (`cloud-<project id>`) groups every source of the same repo: `sourceId` is the
+ * source whose mirror it shows (the newest live one), `stale` is true only when every source of it is stale.
  */
 export interface TeamProjectInfo {
   id: string
@@ -45,7 +47,8 @@ export interface TeamProjectInfo {
 
 export class TeamService {
   private watchers = new Map<string, TeamStateWatcher>()
-  private sseClients = new Set<http.ServerResponse>()
+  /** Open team streams and the project each one follows. */
+  private sseClients = new Map<http.ServerResponse, string | undefined>()
   private disposers: Array<() => void> = []
   /** Offboarded agents (set by setupTeam); null = offboarding endpoints answer 503. */
   offboard: OffboardStore | null = null
@@ -58,7 +61,8 @@ export class TeamService {
   messageLimiter = new MessageLimiter()
   /** Hub intake: source of each cloud project (project id -> sourceId). */
   private cloud = new Map<string, string>()
-  /** Hub intake: is a source stale (set by the IngestService). */
+  /** Hub intake: is the cloud project shown from this source stale (every source of it stale; set by the
+   *  IngestService). */
   cloudStale: (sourceId: string) => boolean = () => false
 
   constructor(
@@ -93,6 +97,36 @@ export class TeamService {
     this.projects.push({ ...entry })
     this.cloud.set(entry.id, sourceId)
     return w
+  }
+
+  /** The source whose mirror a cloud project shows now (its `sourceId` in the list), or undefined. */
+  cloudSourceOf(id: string): string | undefined {
+    return this.cloud.get(id)
+  }
+
+  /**
+   * Point a cloud project at another source's mirror (spec 0.9.8 item 1: one hub project per repo, one mirror per
+   * source). Its watcher is replaced; open `/api/team/events` streams of the project are closed, so viewers reconnect
+   * (EventSource does) and read the new mirror. Answers and chat messages go to that mirror from then on.
+   */
+  setCloudProjectSource(id: string, projectPath: string, sourceId: string): void {
+    if (!this.cloud.has(id)) return
+    this.cloud.set(id, sourceId)
+    const i = this.projects.findIndex((p) => p.id === id)
+    if (i < 0 || this.projects[i].path === projectPath) return
+    this.projects[i] = { ...this.projects[i], path: projectPath }
+    this.watchers.get(id)?.dispose()
+    const w = new TeamStateWatcher({
+      projectId: id, projectPath, ...this.watcherOpts,
+      heartbeat: { ...this.watcherOpts.heartbeat, pidAlive: () => true },
+    })
+    w.start()
+    this.watchers.set(id, w)
+    for (const [res, project] of this.sseClients) {
+      if (project !== id) continue
+      this.sseClients.delete(res)
+      try { res.end() } catch { /* closed */ }
+    }
   }
 
   /** Rename a cloud project (the source reported another name). */
@@ -134,8 +168,9 @@ export class TeamService {
     }))
   }
 
-  trackSSE(res: http.ServerResponse): () => void {
-    this.sseClients.add(res)
+  /** Track an open team stream (closed at dispose; `project`: also when that cloud project moves to another mirror). */
+  trackSSE(res: http.ServerResponse, project?: string): () => void {
+    this.sseClients.set(res, project)
     return () => { this.sseClients.delete(res) }
   }
 
@@ -146,7 +181,7 @@ export class TeamService {
   dispose(): void {
     for (const fn of this.disposers.splice(0)) { try { fn() } catch { /* keep going */ } }
     for (const w of this.watchers.values()) w.dispose()
-    for (const res of this.sseClients) { try { res.end() } catch { /* closed */ } }
+    for (const res of this.sseClients.keys()) { try { res.end() } catch { /* closed */ } }
     this.sseClients.clear()
   }
 }
@@ -569,7 +604,7 @@ function streamTeamEvents(req: http.IncomingMessage, res: http.ServerResponse, w
   }
   send(w.snapshot())
   const unsubscribe = w.onChange(send)
-  const untrack = team.trackSSE(res)
+  const untrack = team.trackSSE(res, w.projectId)
   const keepalive = setInterval(() => res.write(': keepalive\n\n'), SSE_KEEPALIVE_MS)
   keepalive.unref?.()
   const close = () => { clearInterval(keepalive); unsubscribe(); untrack() }
